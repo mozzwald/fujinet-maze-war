@@ -29,6 +29,15 @@ static void print_rx(const unsigned char *buf, ssize_t len) {
   fflush(stdout);
 }
 
+static void print_tx(const unsigned char *buf, size_t len) {
+  printf("TX(%zu):", len);
+  for (size_t i = 0; i < len; i++) {
+    printf(" %02X", buf[i]);
+  }
+  printf("\n");
+  fflush(stdout);
+}
+
 static int set_nonblocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags < 0) {
@@ -184,6 +193,7 @@ int main(void) {
       pkt[2] = stick;
       pkt[3] = trig;
       sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&peer, peerlen);
+      print_tx(pkt, sizeof(pkt));
       seq = (unsigned char)(seq + 1);
     }
   }
