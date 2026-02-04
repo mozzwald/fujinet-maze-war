@@ -1,6 +1,7 @@
 MADS := mads
 CC := gcc
 SERVER := build/udp_test_server
+RELAY := build/udp_relay_server
 SRC := maze-war.asm
 OUT := build/maze-war.xex
 HANDLER := NSENGINE.OBX
@@ -8,7 +9,7 @@ NET := build/maze-war-net.xex
 
 .PHONY: all clean
 
-all: $(NET) $(SERVER)
+all: $(NET) $(SERVER) $(RELAY)
 
 build:
 	mkdir -p $@
@@ -20,6 +21,9 @@ $(NET): $(HANDLER) $(OUT) | build
 	cat $(HANDLER) $(OUT) > $@
 
 $(SERVER): tests/udp_test_server.c | build
+	$(CC) -O2 -Wall -Wextra -o $@ $<
+
+$(RELAY): tests/udp_relay_server.c | build
 	$(CC) -O2 -Wall -Wextra -o $@ $<
 
 clean:

@@ -1,4 +1,4 @@
-// Dumb UDP test server for FujiNet Maze War (evdev input)
+// UDP relay client for FujiNet Maze War (evdev input)
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -23,6 +23,15 @@
 #define STICK_LEFT 0x0B
 #define STICK_RIGHT 0x07
 
+enum pkt_type {
+  PKT_HELLO = 0x10,
+  PKT_WELCOME = 0x11,
+  PKT_INPUT = 0x20,
+  PKT_INPUT_RELAY = 0x21,
+  PKT_HEARTBEAT = 0x30,
+  PKT_TIMEOUT = 0x31,
+};
+
 struct key_config {
   int up;
   int down;
@@ -42,6 +51,7 @@ struct input_state {
   unsigned int left_ts;
   unsigned int right_ts;
 };
+
 
 static void print_rx(const unsigned char *buf, ssize_t len) {
   printf("RX(%zd):", len);
@@ -128,11 +138,20 @@ static int pick_keyboard(char *path_buf, size_t path_len, char *name_buf,
       continue;
     }
     char path[256];
-    snprintf(path, sizeof(path), "/dev/input/%s", ent->d_name);
+    int plen = snprintf(path, sizeof(path), "/dev/input/%s", ent->d_name);
+    if (plen < 0 || (size_t)plen >= sizeof(path)) {
+      continue;
+    }
     int fd = open_evdev_device(path, name_buf, name_len);
     if (fd >= 0) {
-      strncpy(path_buf, path, path_len - 1);
-      path_buf[path_len - 1] = '\0';
+      if (path_len > 0) {
+        size_t copy_len = strlen(path);
+        if (copy_len >= path_len) {
+          copy_len = path_len - 1;
+        }
+        memcpy(path_buf, path, copy_len);
+        path_buf[copy_len] = '\0';
+      }
       closedir(dir);
       return fd;
     }
@@ -169,6 +188,7 @@ static unsigned char compute_stick(const struct input_state *st) {
   return stick;
 }
 
+
 int main(int argc, char **argv) {
   const struct key_config cfg = {
       .up = KEY_UP,
@@ -191,11 +211,19 @@ int main(int argc, char **argv) {
   }
 
   const char *input_path = NULL;
+  const char *server_host = "127.0.0.1";
   bool grab_device = false;
   bool debug_raw = false;
+  int client_id = 0;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--input") == 0 && i + 1 < argc) {
       input_path = argv[i + 1];
+      i++;
+    } else if (strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
+      server_host = argv[i + 1];
+      i++;
+    } else if (strcmp(argv[i], "--id") == 0 && i + 1 < argc) {
+      client_id = atoi(argv[i + 1]);
       i++;
     } else if (strcmp(argv[i], "--grab") == 0) {
       grab_device = true;
@@ -248,21 +276,6 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  int one = 1;
-  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons(PORT);
-  if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    perror("bind");
-    close(sock);
-    close(evfd);
-    return 1;
-  }
-
   if (set_nonblocking(sock) < 0) {
     perror("nonblocking");
     close(sock);
@@ -270,18 +283,36 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  printf("UDP test server listening on port %d\n", PORT);
+  struct sockaddr_in server;
+  memset(&server, 0, sizeof(server));
+  server.sin_family = AF_INET;
+  server.sin_port = htons(PORT);
+  if (inet_pton(AF_INET, server_host, &server.sin_addr) != 1) {
+    fprintf(stderr, "Invalid server address: %s\n", server_host);
+    close(sock);
+    close(evfd);
+    return 1;
+  }
+  if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
+    perror("connect");
+    close(sock);
+    close(evfd);
+    return 1;
+  }
 
-  unsigned char rxbuf[2048];
-  bool have_peer = false;
-  struct sockaddr_in peer;
-  socklen_t peerlen = sizeof(peer);
+  printf("UDP relay client to %s:%d\n", server_host, PORT);
+
   unsigned char seq = 0;
   unsigned char stick = STICK_NEUTRAL;
   unsigned char trig = 1; // STRIG0: 0 pressed, 1 released
   struct input_state st = {0};
   unsigned int press_clock = 1;
 
+  unsigned char hello[3] = {PKT_HELLO, (unsigned char)client_id, 1};
+  send(sock, hello, sizeof(hello), 0);
+  print_tx(hello, sizeof(hello));
+
+  unsigned char rxbuf[2048];
   for (;;) {
     struct pollfd fds[2];
     memset(fds, 0, sizeof(fds));
@@ -297,10 +328,8 @@ int main(int argc, char **argv) {
     }
 
     if (fds[0].revents & POLLIN) {
-      ssize_t n = recvfrom(sock, rxbuf, sizeof(rxbuf), 0,
-                           (struct sockaddr *)&peer, &peerlen);
+      ssize_t n = recv(sock, rxbuf, sizeof(rxbuf), 0);
       if (n > 0) {
-        have_peer = true;
         print_rx(rxbuf, n);
       }
     }
@@ -334,29 +363,29 @@ int main(int argc, char **argv) {
           if (pressed) {
             st.down_ts = press_clock++;
           }
-          printf("EVDEV %s: KEY_DOWN -> DOWN=%d\n", pressed ? "press" : "release",
-                 st.down ? 1 : 0);
+          printf("EVDEV %s: KEY_DOWN -> DOWN=%d\n",
+                 pressed ? "press" : "release", st.down ? 1 : 0);
           changed = true;
         } else if (ev.code == key_left) {
           st.left = pressed;
           if (pressed) {
             st.left_ts = press_clock++;
           }
-          printf("EVDEV %s: KEY_LEFT -> LEFT=%d\n", pressed ? "press" : "release",
-                 st.left ? 1 : 0);
+          printf("EVDEV %s: KEY_LEFT -> LEFT=%d\n",
+                 pressed ? "press" : "release", st.left ? 1 : 0);
           changed = true;
         } else if (ev.code == key_right) {
           st.right = pressed;
           if (pressed) {
             st.right_ts = press_clock++;
           }
-          printf("EVDEV %s: KEY_RIGHT -> RIGHT=%d\n", pressed ? "press" : "release",
-                 st.right ? 1 : 0);
+          printf("EVDEV %s: KEY_RIGHT -> RIGHT=%d\n",
+                 pressed ? "press" : "release", st.right ? 1 : 0);
           changed = true;
         } else if (ev.code == key_fire) {
           st.fire = pressed;
-          printf("EVDEV %s: KEY_SPACE -> FIRE=%d\n", pressed ? "press" : "release",
-                 st.fire ? 1 : 0);
+          printf("EVDEV %s: KEY_SPACE -> FIRE=%d\n",
+                 pressed ? "press" : "release", st.fire ? 1 : 0);
           changed = true;
         } else if (debug_raw) {
           printf("EVDEV unmapped: code=%u value=%d\n", ev.code, ev.value);
@@ -368,20 +397,23 @@ int main(int argc, char **argv) {
           if (new_stick != stick || new_trig != trig) {
             stick = new_stick;
             trig = new_trig;
-            if (have_peer) {
-              unsigned char pkt[4];
-              pkt[0] = 0xA5;
-              pkt[1] = seq;
-              pkt[2] = stick;
-              pkt[3] = trig;
-              sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&peer,
-                     peerlen);
-              print_tx(pkt, sizeof(pkt));
-              seq = (unsigned char)(seq + 1);
-            }
+            unsigned char pkt[4];
+            pkt[0] = PKT_INPUT;
+            pkt[1] = seq;
+            pkt[2] = stick;
+            pkt[3] = trig;
+            send(sock, pkt, sizeof(pkt), 0);
+            print_tx(pkt, sizeof(pkt));
+            seq = (unsigned char)(seq + 1);
           }
         }
       }
+    }
+
+    if ((press_clock & 0x1F) == 0) {
+      unsigned char hb[2] = {PKT_HEARTBEAT, (unsigned char)press_clock};
+      send(sock, hb, sizeof(hb), 0);
+      print_tx(hb, sizeof(hb));
     }
   }
 
