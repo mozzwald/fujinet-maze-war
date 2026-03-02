@@ -236,6 +236,43 @@ static void build_shot(uint8_t seq, uint8_t pid, uint8_t x, uint8_t y,
   out[5] = active;
 }
 
+static uint8_t shot_active_flags(const struct shot_state *s) {
+  uint8_t dir = 0;
+  if (s->dy > 0) {
+    dir = 1;
+  } else if (s->dx < 0) {
+    dir = 2;
+  } else if (s->dy < 0) {
+    dir = 3;
+  }
+  return (uint8_t)(1u | (uint8_t)(dir << 1));
+}
+
+static int stick_to_cardinal_delta(uint8_t stick, int *dx, int *dy) {
+  switch (stick & 0x0F) {
+    case 0x07:  // right
+      *dx = 1;
+      *dy = 0;
+      return 1;
+    case 0x0D:  // down
+      *dx = 0;
+      *dy = 1;
+      return 1;
+    case 0x0B:  // left
+      *dx = -1;
+      *dy = 0;
+      return 1;
+    case 0x0E:  // up
+      *dx = 0;
+      *dy = -1;
+      return 1;
+    default:
+      *dx = 0;
+      *dy = 0;
+      return 0;
+  }
+}
+
 static int is_player_at(const struct player_state *players, int x, int y,
                          int ignore_idx) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -412,6 +449,32 @@ static int dir_free(uint8_t dir, const struct player_state *players,
   return 1;
 }
 
+static int clear_row_shot(const uint8_t *bricks, int y, int x0, int x1) {
+  if (x0 == x1) {
+    return 1;
+  }
+  int step = (x1 > x0) ? 1 : -1;
+  for (int x = x0 + step; x != x1; x += step) {
+    if (is_brick(bricks, x, y)) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int clear_col_shot(const uint8_t *bricks, int x, int y0, int y1) {
+  if (y0 == y1) {
+    return 1;
+  }
+  int step = (y1 > y0) ? 1 : -1;
+  for (int y = y0 + step; y != y1; y += step) {
+    if (is_brick(bricks, x, y)) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static void zombie_ai(int idx, struct player_state *players,
                       const uint8_t *bricks, const uint8_t *human_mask) {
   uint8_t zx = players[idx].x;
@@ -422,7 +485,8 @@ static void zombie_ai(int idx, struct player_state *players,
     if (!human_mask[p] || p == idx || players[p].respawn_at_ms != 0) {
       continue;
     }
-    if (players[p].y == zy) {
+    if (players[p].y == zy &&
+        clear_row_shot(bricks, (int)zy, (int)zx, (int)players[p].x)) {
       uint8_t dir = (players[p].x > zx) ? 0 : 2;
       players[idx].joy = stick_from_dir(dir) | 0x10;
       return;
@@ -433,7 +497,8 @@ static void zombie_ai(int idx, struct player_state *players,
     if (!human_mask[p] || p == idx || players[p].respawn_at_ms != 0) {
       continue;
     }
-    if (players[p].x == zx) {
+    if (players[p].x == zx &&
+        clear_col_shot(bricks, (int)zx, (int)zy, (int)players[p].y)) {
       uint8_t dir = (players[p].y > zy) ? 1 : 3;
       players[idx].joy = stick_from_dir(dir) | 0x10;
       return;
@@ -498,25 +563,10 @@ static void apply_move_if_free(struct player_state *p,
                                const struct player_state *players,
                                int idx) {
   uint8_t stick = (uint8_t)(p->joy & 0x0F);
-  if (stick == 0x0F) {
-    return;
-  }
-  int up = ((stick & 0x01) == 0);
-  int down = ((stick & 0x02) == 0);
-  int left = ((stick & 0x04) == 0);
-  int right = ((stick & 0x08) == 0);
-
   int dx = 0;
   int dy = 0;
-  if (up && !down) {
-    dy = -1;
-  } else if (down && !up) {
-    dy = 1;
-  }
-  if (left && !right) {
-    dx = -1;
-  } else if (right && !left) {
-    dx = 1;
+  if (!stick_to_cardinal_delta(stick, &dx, &dy)) {
+    return;
   }
 
   int nx = (int)p->x + dx;
@@ -543,26 +593,9 @@ static void start_shot(int shooter, struct player_state *players,
   }
   uint8_t stick = (uint8_t)(players[shooter].joy & 0x0F);
   int trig = (players[shooter].joy & 0x10) != 0;
-  if (!trig || stick == 0x0F) {
-    return;
-  }
-  int up = ((stick & 0x01) == 0);
-  int down = ((stick & 0x02) == 0);
-  int left = ((stick & 0x04) == 0);
-  int right = ((stick & 0x08) == 0);
   int dx = 0;
   int dy = 0;
-  if (up && !down) {
-    dy = -1;
-  } else if (down && !up) {
-    dy = 1;
-  }
-  if (left && !right) {
-    dx = -1;
-  } else if (right && !left) {
-    dx = 1;
-  }
-  if (dx == 0 && dy == 0) {
+  if (!trig || !stick_to_cardinal_delta(stick, &dx, &dy)) {
     return;
   }
   int sx = (int)players[shooter].x + dx;
@@ -654,7 +687,8 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
     shots[i].y = (uint8_t)ny;
     {
       uint8_t spkt[6];
-      build_shot((*seq)++, (uint8_t)i, (uint8_t)nx, (uint8_t)ny, 1,
+      build_shot((*seq)++, (uint8_t)i, (uint8_t)nx, (uint8_t)ny,
+                 shot_active_flags(&shots[i]),
                  spkt, sizeof(spkt));
       broadcast_packet(sock, clients, spkt, sizeof(spkt));
     }
@@ -715,7 +749,7 @@ static void step_players(struct player_state *players, struct shot_state *shots,
     if (is_zombie_slot(i, zombies) && can_act) {
       if (now >= players[i].zombie_next_ms) {
         zombie_ai(i, players, bricks, human_mask);
-        players[i].zombie_next_ms = now + 900;
+        players[i].zombie_next_ms = now + 250;
       } else {
         can_act = 0;
       }
