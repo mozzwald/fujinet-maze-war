@@ -21,6 +21,7 @@ enum {
 };
 
 enum { MAX_PLAYERS = 4 };
+enum { CLIENT_TIMEOUT_MS = 10000 };
 
 struct player_state {
   uint8_t x;
@@ -37,6 +38,7 @@ struct shot_state {
   uint8_t y;
   int8_t dx;
   int8_t dy;
+  uint8_t clear_burst;
 };
 
 struct client_slot {
@@ -45,9 +47,14 @@ struct client_slot {
   socklen_t addr_len;
   uint64_t last_seen_ms;
   int sent_bricks;
+  uint8_t rx_need;
+  uint8_t rx_idx;
+  uint8_t rx_buf[8];
 };
 
 static volatile sig_atomic_t g_running = 1;
+
+static int is_zombie_slot(int slot, int zombies);
 
 static void on_sigint(int sig) {
   (void)sig;
@@ -60,9 +67,26 @@ static uint64_t now_ms(void) {
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
+static void log_client_event(const char *event, int slot,
+                             const struct sockaddr_in *addr) {
+  char ip[INET_ADDRSTRLEN];
+  const char *ip_s = inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
+  if (!ip_s) {
+    ip_s = "?.?.?.?";
+  }
+  printf("client %s slot=%d addr=%s:%u\n", event, slot, ip_s,
+         (unsigned)ntohs(addr->sin_port));
+}
+
 static int addr_equal(const struct sockaddr_in *a,
                       const struct sockaddr_in *b) {
   return a->sin_family == b->sin_family && a->sin_port == b->sin_port &&
+         a->sin_addr.s_addr == b->sin_addr.s_addr;
+}
+
+static int addr_ip_equal(const struct sockaddr_in *a,
+                         const struct sockaddr_in *b) {
+  return a->sin_family == b->sin_family &&
          a->sin_addr.s_addr == b->sin_addr.s_addr;
 }
 
@@ -73,6 +97,17 @@ static int find_or_add_client(struct client_slot *clients,
                               int *is_new) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (clients[i].in_use && addr_equal(&clients[i].addr, addr)) {
+      clients[i].last_seen_ms = now;
+      if (is_new) {
+        *is_new = 0;
+      }
+      return i;
+    }
+  }
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (clients[i].in_use && addr_ip_equal(&clients[i].addr, addr)) {
+      clients[i].addr = *addr;
+      clients[i].addr_len = addr_len;
       clients[i].last_seen_ms = now;
       if (is_new) {
         *is_new = 0;
@@ -97,6 +132,19 @@ static int find_or_add_client(struct client_slot *clients,
     *is_new = 0;
   }
   return -1;
+}
+
+static void reap_timed_out_clients(struct client_slot *clients, uint64_t now) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (!clients[i].in_use) {
+      continue;
+    }
+    if (now - clients[i].last_seen_ms < CLIENT_TIMEOUT_MS) {
+      continue;
+    }
+    log_client_event("disconnected", i, &clients[i].addr);
+    memset(&clients[i], 0, sizeof(clients[i]));
+  }
 }
 
 static void build_snapshot(uint8_t seq, const struct player_state *players,
@@ -131,6 +179,10 @@ static int is_brick(const uint8_t *bricks, int x, int y) {
   }
   int idx = y * 20 + x;
   return (bricks[idx / 8] >> (idx % 8)) & 1;
+}
+
+static int is_outer_wall_cell(int x, int y) {
+  return x == 0 || x == 19 || y == 0 || y == 18;
 }
 
 static void clear_brick(uint8_t *bricks, int x, int y) {
@@ -232,11 +284,102 @@ static void broadcast_packet(int sock, struct client_slot *clients,
   }
 }
 
+static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
+                                 struct player_state *players, uint8_t *brick_bits,
+                                 int sock, struct client_slot *clients,
+                                 uint8_t *seq, int debug, int zombies,
+                                 uint64_t now, uint64_t *last_input_ms) {
+  (void)slot;
+  if (len == 4 && pkt[0] == PKT_DELTA) {
+    uint8_t pid = pkt[2];
+    if (pid < MAX_PLAYERS && !is_zombie_slot(pid, zombies)) {
+      players[pid].joy = pkt[3];
+      last_input_ms[pid] = now;
+      if (debug) {
+        printf("DELTA pid=%u ", pid);
+        debug_joy(pkt[3]);
+      }
+    }
+    return;
+  }
+
+  if (len == 6 && pkt[0] == PKT_RESPAWN) {
+    uint8_t pid = pkt[2];
+    if (pid < MAX_PLAYERS) {
+      uint8_t sx = 0, sy = 0;
+      uint8_t out[6];
+      pick_spawn(brick_bits, players, &sx, &sy);
+      players[pid].x = sx;
+      players[pid].y = sy;
+      build_respawn((*seq)++, pid, sx, sy, 0x03, out, sizeof(out));
+      broadcast_packet(sock, clients, out, sizeof(out));
+      if (debug) {
+        printf("TX respawn pid=%u x=%u y=%u\n", pid, sx, sy);
+      }
+    }
+    return;
+  }
+
+  if (len == 4 && pkt[0] == PKT_BRICK_DELTA) {
+    uint8_t x = pkt[2];
+    uint8_t y = pkt[3];
+    if (x < 20 && y < 19 && !is_outer_wall_cell((int)x, (int)y)) {
+      uint8_t out[4];
+      clear_brick(brick_bits, x, y);
+      build_brick_delta((*seq)++, x, y, out, sizeof(out));
+      broadcast_packet(sock, clients, out, sizeof(out));
+      if (debug) {
+        printf("TX brick_delta x=%u y=%u\n", x, y);
+      }
+    }
+    return;
+  }
+}
+
+static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
+                                 struct player_state *players, uint8_t *brick_bits,
+                                 int sock, struct client_slot *clients,
+                                 uint8_t *seq, int debug, int zombies,
+                                 uint64_t now, uint64_t *last_input_ms) {
+  struct client_slot *c = &clients[slot];
+  for (size_t i = 0; i < n; i++) {
+    uint8_t b = buf[i];
+    if (c->rx_need == 0) {
+      if (b == PKT_DELTA || b == PKT_BRICK_DELTA) {
+        c->rx_need = 4;
+      } else if (b == PKT_RESPAWN) {
+        c->rx_need = 6;
+      } else {
+        continue;
+      }
+      c->rx_idx = 0;
+    }
+
+    if (c->rx_idx < sizeof(c->rx_buf)) {
+      c->rx_buf[c->rx_idx] = b;
+    }
+    c->rx_idx++;
+
+    if (c->rx_need != 0 && c->rx_idx >= c->rx_need) {
+      if (c->rx_need <= sizeof(c->rx_buf)) {
+        handle_client_packet(slot, c->rx_buf, c->rx_need, players, brick_bits,
+                             sock, clients, seq, debug, zombies, now,
+                             last_input_ms);
+      }
+      c->rx_need = 0;
+      c->rx_idx = 0;
+    }
+  }
+}
+
 static int is_zombie_slot(int slot, int zombies) {
   if (zombies <= 0) {
     return 0;
   }
-  return slot >= (MAX_PLAYERS - zombies);
+  if (slot <= 0) {
+    return 0;
+  }
+  return slot <= zombies;
 }
 
 static uint8_t stick_from_dir(uint8_t dir) {
@@ -270,13 +413,13 @@ static int dir_free(uint8_t dir, const struct player_state *players,
 }
 
 static void zombie_ai(int idx, struct player_state *players,
-                      const uint8_t *bricks, int human_players) {
+                      const uint8_t *bricks, const uint8_t *human_mask) {
   uint8_t zx = players[idx].x;
   uint8_t zy = players[idx].y;
 
   // Shoot if any player is in same row
-  for (int p = 0; p < human_players; p++) {
-    if (p == idx || players[p].respawn_at_ms != 0) {
+  for (int p = 0; p < MAX_PLAYERS; p++) {
+    if (!human_mask[p] || p == idx || players[p].respawn_at_ms != 0) {
       continue;
     }
     if (players[p].y == zy) {
@@ -286,8 +429,8 @@ static void zombie_ai(int idx, struct player_state *players,
     }
   }
   // Shoot if any player is in same column
-  for (int p = 0; p < human_players; p++) {
-    if (p == idx || players[p].respawn_at_ms != 0) {
+  for (int p = 0; p < MAX_PLAYERS; p++) {
+    if (!human_mask[p] || p == idx || players[p].respawn_at_ms != 0) {
       continue;
     }
     if (players[p].x == zx) {
@@ -302,8 +445,8 @@ static void zombie_ai(int idx, struct player_state *players,
   int best_dist = 0x7FFF;
   int best_dx = 0;
   int best_dy = 0;
-  for (int p = 0; p < human_players; p++) {
-    if (p == idx || players[p].respawn_at_ms != 0) {
+  for (int p = 0; p < MAX_PLAYERS; p++) {
+    if (!human_mask[p] || p == idx || players[p].respawn_at_ms != 0) {
       continue;
     }
     int dx = (int)zx - (int)players[p].x;
@@ -425,12 +568,14 @@ static void start_shot(int shooter, struct player_state *players,
   int sx = (int)players[shooter].x + dx;
   int sy = (int)players[shooter].y + dy;
   if (is_brick(bricks, sx, sy)) {
-    clear_brick(bricks, sx, sy);
-    uint8_t pkt[4];
-    build_brick_delta((*seq)++, (uint8_t)sx, (uint8_t)sy, pkt, sizeof(pkt));
-    broadcast_packet(sock, clients, pkt, sizeof(pkt));
-    if (debug) {
-      printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
+    if (!is_outer_wall_cell(sx, sy)) {
+      clear_brick(bricks, sx, sy);
+      uint8_t pkt[4];
+      build_brick_delta((*seq)++, (uint8_t)sx, (uint8_t)sy, pkt, sizeof(pkt));
+      broadcast_packet(sock, clients, pkt, sizeof(pkt));
+      if (debug) {
+        printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
+      }
     }
     return;
   }
@@ -445,6 +590,7 @@ static void start_shot(int shooter, struct player_state *players,
   shots[shooter].y = (uint8_t)sy;
   shots[shooter].dx = (int8_t)dx;
   shots[shooter].dy = (int8_t)dy;
+  shots[shooter].clear_burst = 0;
 }
 
 static void step_shots(struct player_state *players, struct shot_state *shots,
@@ -460,20 +606,24 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
     int ny = (int)shots[i].y + shots[i].dy;
     if (nx < 0 || nx > 19 || ny < 0 || ny > 18) {
       shots[i].active = 0;
+      shots[i].clear_burst = 3;
       uint8_t pkt[6];
       build_shot((*seq)++, (uint8_t)i, 0, 0, 0, pkt, sizeof(pkt));
       broadcast_packet(sock, clients, pkt, sizeof(pkt));
       continue;
     }
     if (is_brick(bricks, nx, ny)) {
-      clear_brick(bricks, nx, ny);
-      uint8_t pkt[4];
-      build_brick_delta((*seq)++, (uint8_t)nx, (uint8_t)ny, pkt, sizeof(pkt));
-      broadcast_packet(sock, clients, pkt, sizeof(pkt));
-      if (debug) {
-        printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
+      if (!is_outer_wall_cell(nx, ny)) {
+        clear_brick(bricks, nx, ny);
+        uint8_t pkt[4];
+        build_brick_delta((*seq)++, (uint8_t)nx, (uint8_t)ny, pkt, sizeof(pkt));
+        broadcast_packet(sock, clients, pkt, sizeof(pkt));
+        if (debug) {
+          printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
+        }
       }
       shots[i].active = 0;
+      shots[i].clear_burst = 3;
       uint8_t spkt[6];
       build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
       broadcast_packet(sock, clients, spkt, sizeof(spkt));
@@ -493,6 +643,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
           printf("TX respawn pending pid=%u\n", (unsigned)p);
         }
         shots[i].active = 0;
+        shots[i].clear_burst = 3;
         uint8_t spkt[6];
         build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
         broadcast_packet(sock, clients, spkt, sizeof(spkt));
@@ -510,14 +661,39 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
   next_shot:
     ;
   }
+  // Re-send shot clear a few ticks after a shot ends to heal over UDP loss
+  // without flooding the link with full shot state every frame.
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (shots[i].clear_burst == 0) {
+      continue;
+    }
+    shots[i].clear_burst--;
+    uint8_t spkt[6];
+    build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
+    broadcast_packet(sock, clients, spkt, sizeof(spkt));
+  }
 }
 
 static void step_players(struct player_state *players, struct shot_state *shots,
                          uint8_t *bricks, int sock,
                          struct client_slot *clients, uint8_t *seq,
-                         int debug, int zombies) {
+                         int debug, int zombies,
+                         const uint64_t *last_input_ms) {
   uint64_t now = now_ms();
-  int human_players = MAX_PLAYERS - zombies;
+  uint8_t human_mask[MAX_PLAYERS];
+  memset(human_mask, 0, sizeof(human_mask));
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (is_zombie_slot(i, zombies)) {
+      continue;
+    }
+    if (last_input_ms[i] == 0) {
+      continue;
+    }
+    if ((now - last_input_ms[i]) >= CLIENT_TIMEOUT_MS) {
+      continue;
+    }
+    human_mask[i] = 1;
+  }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (players[i].respawn_at_ms != 0 &&
         now >= players[i].respawn_at_ms) {
@@ -538,7 +714,7 @@ static void step_players(struct player_state *players, struct shot_state *shots,
     int can_act = (players[i].respawn_at_ms == 0);
     if (is_zombie_slot(i, zombies) && can_act) {
       if (now >= players[i].zombie_next_ms) {
-        zombie_ai(i, players, bricks, human_players);
+        zombie_ai(i, players, bricks, human_mask);
         players[i].zombie_next_ms = now + 900;
       } else {
         can_act = 0;
@@ -614,7 +790,7 @@ int main(int argc, char **argv) {
   int port = 9000;
   int tick_hz = 10;
   int debug = 0;
-  int zombies = 0;
+  int zombies = 1;
   const char *brick_path = "server/brick_layout.txt";
 
   for (int i = 1; i < argc; i++) {
@@ -644,8 +820,8 @@ int main(int argc, char **argv) {
   if (zombies < 0) {
     zombies = 0;
   }
-  if (zombies > MAX_PLAYERS) {
-    zombies = MAX_PLAYERS;
+  if (zombies > (MAX_PLAYERS - 1)) {
+    zombies = MAX_PLAYERS - 1;
   }
 
   signal(SIGINT, on_sigint);
@@ -675,9 +851,11 @@ int main(int argc, char **argv) {
   struct client_slot clients[MAX_PLAYERS];
   struct player_state players[MAX_PLAYERS];
   struct shot_state shots[MAX_PLAYERS];
+  uint64_t last_input_ms[MAX_PLAYERS];
   memset(clients, 0, sizeof(clients));
   memset(players, 0, sizeof(players));
   memset(shots, 0, sizeof(shots));
+  memset(last_input_ms, 0, sizeof(last_input_ms));
   uint8_t brick_bits[48];
   if (load_brick_layout(brick_path, brick_bits, sizeof(brick_bits)) != 0) {
     memset(brick_bits, 0, sizeof(brick_bits));
@@ -689,17 +867,16 @@ int main(int argc, char **argv) {
     pick_spawn(brick_bits, players, &sx, &sy);
     players[i].x = sx;
     players[i].y = sy;
+    players[i].joy = 0x0F;
   }
 
   uint8_t seq = 0;
   uint64_t next_tick = now_ms();
   const uint64_t tick_ms = 1000ULL / (uint64_t)tick_hz;
 
-  if (debug) {
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    printf("maze-war server listening on UDP port %d, %d Hz\n", port,
-           tick_hz);
-  }
+  setvbuf(stdout, NULL, _IOLBF, 0);
+  printf("maze-war server listening on UDP port %d, %d Hz, zombies=%d\n",
+         port, tick_hz, zombies);
 
   while (g_running) {
     struct pollfd pfd;
@@ -728,6 +905,7 @@ int main(int argc, char **argv) {
           printf("RX(%zd) from slot %d\n", n, slot);
         }
         if (slot >= 0 && is_new) {
+          log_client_event("connected", slot, &clients[slot].addr);
           uint8_t bfull[51];
           build_brick_full(seq++, brick_bits, bfull, sizeof(bfull));
           sendto(sock, bfull, sizeof(bfull), 0,
@@ -737,65 +915,20 @@ int main(int argc, char **argv) {
             printf("TX brick_full -> slot %d\n", slot);
           }
         }
-        if (slot >= 0 && (uint8_t)n >= 4) {
-          if (buf[0] == PKT_DELTA) {
-            uint8_t pid = buf[2];
-            if (pid < MAX_PLAYERS && !is_zombie_slot(pid, zombies)) {
-              players[pid].joy = buf[3];
-              if (debug) {
-                printf("DELTA pid=%u ", pid);
-                debug_joy(buf[3]);
-              }
-            }
-          } else if (buf[0] == PKT_RESPAWN) {
-            uint8_t pid = buf[2];
-            if (pid < MAX_PLAYERS) {
-              uint8_t sx = 0, sy = 0;
-              pick_spawn(brick_bits, players, &sx, &sy);
-              players[pid].x = sx;
-              players[pid].y = sy;
-              uint8_t pkt[6];
-              build_respawn(seq++, pid, sx, sy, 0x03, pkt, sizeof(pkt));
-              for (int i = 0; i < MAX_PLAYERS; i++) {
-                if (!clients[i].in_use) {
-                  continue;
-                }
-                sendto(sock, pkt, sizeof(pkt), 0,
-                       (struct sockaddr *)&clients[i].addr,
-                       clients[i].addr_len);
-              }
-              if (debug) {
-                printf("TX respawn pid=%u x=%u y=%u\n", pid, sx, sy);
-              }
-            }
-          } else if (buf[0] == PKT_BRICK_DELTA) {
-            uint8_t x = buf[2];
-            uint8_t y = buf[3];
-            if (x < 20 && y < 19) {
-              clear_brick(brick_bits, x, y);
-              uint8_t pkt[4];
-              build_brick_delta(seq++, x, y, pkt, sizeof(pkt));
-              for (int i = 0; i < MAX_PLAYERS; i++) {
-                if (!clients[i].in_use) {
-                  continue;
-                }
-                sendto(sock, pkt, sizeof(pkt), 0,
-                       (struct sockaddr *)&clients[i].addr,
-                       clients[i].addr_len);
-              }
-              if (debug) {
-                printf("TX brick_delta x=%u y=%u\n", x, y);
-              }
-            }
-          }
+        if (slot >= 0) {
+          process_client_bytes(slot, buf, (size_t)n, players, brick_bits, sock,
+                               clients, &seq, debug, zombies, now,
+                               last_input_ms);
         }
       }
     }
 
+    reap_timed_out_clients(clients, now_ms());
+
     now = now_ms();
     if (now >= next_tick) {
       step_players(players, shots, brick_bits, sock, clients, &seq, debug,
-                   zombies);
+                   zombies, last_input_ms);
       uint8_t pkt[19];
       build_snapshot(seq++, players, pkt, sizeof(pkt));
       for (int i = 0; i < MAX_PLAYERS; i++) {
