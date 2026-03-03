@@ -2257,10 +2257,10 @@ CKMVLP	JSR	NET_GUARD_LOC
 CKMVSKP	JMP	DONXTMN
 CKMVP0
 	LDA	NET_P_PENDING,X
-	BEQ	CKMVCK
+	BEQ	CKMVCKJ
 	LDA	ACTFLAG,X
 	AND	#$03	;allow reconcile while shot/backlash bits are set
-	BNE	CKMVCK
+	BNE	CKMVCKJ
 	; server-authoritative reconcile for all slots:
 	; - if already aligned, clear pending.
 	; - if mid-step and only 1 cell off, defer one VBI to finish animation.
@@ -2275,8 +2275,6 @@ CKMVP0
 	STA	NET_P_PENDING,X
 	JMP	CKMVCK
 CKMV_LNE
-	LDA	MOVEST,X
-	BEQ	CKMVAP
 	LDA	LOCX,X
 	SEC
 	SBC	NET_PX_X,X
@@ -2297,7 +2295,36 @@ CKMV_DYPOS
 	CLC
 	ADC	COUNT
 	CMP	#2
-	BCC	CKMVCK
+	BCS	CKMVAP
+	LDA	MOVEST,X
+	BNE	CKMVCKJ
+	CPX	NET_LOCAL_PID
+	BEQ	CKMVAP
+	; non-local one-cell reconcile: animate through normal move renderer.
+	LDA	NET_PX_X,X
+	CMP	LOCX,X
+	BEQ	CKMV_RY
+	BCC	CKMV_RL
+	LDA	#0
+	JMP	CKMV_RSET
+CKMV_RL
+	LDA	#2
+	JMP	CKMV_RSET
+CKMV_RY
+	LDA	NET_PX_Y,X
+	CMP	LOCY,X
+	BCC	CKMV_RU
+	LDA	#1
+	JMP	CKMV_RSET
+CKMV_RU
+	LDA	#3
+CKMV_RSET
+	STA	DIR,X
+	JSR	INITMVE
+	JSR	MOVEIM
+	JMP	CHKSHOT
+CKMVCKJ
+	JMP	CKMVCK
 CKMVAP	JSR	ERASMAN
 	LDA	NET_PX_X,X
 	STA	LOCX,X
