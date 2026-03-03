@@ -741,6 +741,34 @@ static void start_shot(int shooter, struct player_state *players,
     return;
   }
   if (is_player_at(players, sx, sy, shooter)) {
+    for (int p = 0; p < MAX_PLAYERS; p++) {
+      if (p == shooter) {
+        continue;
+      }
+      if (players[p].respawn_at_ms != 0) {
+        continue;
+      }
+      if (players[p].x == (uint8_t)sx && players[p].y == (uint8_t)sy) {
+        uint64_t now = now_ms();
+        players[shooter].score++;
+        players[p].respawn_at_ms = now + 2000;
+        {
+          uint8_t rpkt[6];
+          build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, rpkt, sizeof(rpkt));
+          broadcast_packet(sock, clients, rpkt, sizeof(rpkt));
+        }
+        /* Defensive clear: ensure any stale client-side shot sprite is removed. */
+        {
+          uint8_t spkt[6];
+          build_shot((*seq)++, (uint8_t)shooter, 0, 0, 0, spkt, sizeof(spkt));
+          broadcast_packet(sock, clients, spkt, sizeof(spkt));
+        }
+        if (debug) {
+          printf("TX immediate hit shooter=%d victim=%d\n", shooter, p);
+        }
+        return;
+      }
+    }
     return;
   }
   shots[shooter].active = 1;
