@@ -105,7 +105,7 @@ static void usage(const char *argv0) {
 int main(int argc, char **argv) {
   const char *host = "127.0.0.1";
   int port = 9000;
-  int pid = 0;
+  int local_pid = -1;
   const char *input_path = NULL;
   int debug = 0;
 
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
       port = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
-      pid = atoi(argv[++i]);
+      local_pid = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--input") == 0 && i + 1 < argc) {
       input_path = argv[++i];
     } else if (strcmp(argv[i], "--debug") == 0) {
@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (pid < 0 || pid >= MAX_PLAYERS) {
+  if (local_pid < -1 || local_pid >= MAX_PLAYERS) {
     fprintf(stderr, "Invalid pid (0..3)\\n");
     return 1;
   }
@@ -225,6 +225,13 @@ int main(int argc, char **argv) {
           shots[sp].active = buf[5] ? 1 : 0;
         }
       } else if (n >= 19 && buf[0] == PKT_SNAPSHOT) {
+        int snap_pid = (int)((buf[2] >> 1) & 0x03);
+        if (local_pid != snap_pid) {
+          local_pid = snap_pid;
+          if (debug) {
+            printf("local pid=%d (from snapshot flags)\n", local_pid);
+          }
+        }
         players[0].x = buf[3];
         players[0].y = buf[4];
         players[1].x = buf[5];
@@ -296,11 +303,13 @@ int main(int argc, char **argv) {
             break;
           case KEY_R:
             if (pressed) {
-              uint8_t pkt[4];
+              uint8_t pkt[6];
               pkt[0] = PKT_RESPAWN;
               pkt[1] = seq++;
-              pkt[2] = (uint8_t)pid;
+              pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
               pkt[3] = 0;
+              pkt[4] = 0;
+              pkt[5] = 0;
               sendto(sock, pkt, sizeof(pkt), 0,
                      (struct sockaddr *)&srv, sizeof(srv));
             }
@@ -319,7 +328,7 @@ int main(int argc, char **argv) {
       uint8_t pkt[4];
       pkt[0] = PKT_DELTA;
       pkt[1] = seq++;
-      pkt[2] = (uint8_t)pid;
+      pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
       pkt[3] = joy;
       sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&srv, sizeof(srv));
       last_joy = joy;
