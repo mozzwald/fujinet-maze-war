@@ -1,5 +1,7 @@
 # Maze War for Atari 8-Bit with FujiNet NETStream Support
 
+Original game Maze War, by Mark Price, from A.N.A.L.O.G. Magazine #36 (November 1985)
+
 Networked Maze War with:
 - an authoritative UDP server (`server/main.c`)
 - an Atari client (`clients/atari/maze-war.asm`)
