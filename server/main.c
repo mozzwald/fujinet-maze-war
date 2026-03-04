@@ -1130,14 +1130,23 @@ int main(int argc, char **argv) {
     if (now >= next_tick) {
       step_players(players, shots, brick_bits, sock, clients, &seq, debug,
                    zombies, last_input_ms);
+      uint8_t zombie_mask[MAX_PLAYERS];
+      uint8_t zombie_bits = 0;
+      compute_zombie_mask(clients, zombies, zombie_mask);
+      for (int z = 0; z < MAX_PLAYERS; z++) {
+        if (zombie_mask[z]) {
+          zombie_bits |= (uint8_t)(1u << z);
+        }
+      }
       uint8_t pkt[19];
       build_snapshot(seq++, players, pkt, sizeof(pkt));
       for (int i = 0; i < MAX_PLAYERS; i++) {
         if (!clients[i].in_use) {
           continue;
         }
-        // Encode recipient's authoritative local player id in snapshot flags.
-        pkt[2] = (uint8_t)(0x01u | ((uint8_t)i << 1));
+        // flags: bit0 valid, bits1..2 recipient pid, bits3..6 zombie-slot mask.
+        pkt[2] = (uint8_t)(0x01u | ((uint8_t)i << 1) |
+                           ((uint8_t)(zombie_bits & 0x0Fu) << 3));
         ssize_t wn = sendto(sock, pkt, sizeof(pkt), 0,
                             (struct sockaddr *)&clients[i].addr,
                             clients[i].addr_len);
