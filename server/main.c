@@ -23,6 +23,7 @@ enum {
 enum { MAX_PLAYERS = 4 };
 enum { CLIENT_TIMEOUT_MS = 60000 };
 enum { INPUT_STALE_MS = 500 };
+enum { ZOMBIE_ACTION_MS = 600 };
 
 struct player_state {
   uint8_t x;
@@ -916,7 +917,7 @@ static void step_players(struct player_state *players, struct shot_state *shots,
     if (zombie_mask[i] && can_act) {
       if (now >= players[i].zombie_next_ms) {
         zombie_ai(i, players, bricks, human_mask);
-        players[i].zombie_next_ms = now + 250;
+        players[i].zombie_next_ms = now + ZOMBIE_ACTION_MS;
       } else {
         can_act = 0;
       }
