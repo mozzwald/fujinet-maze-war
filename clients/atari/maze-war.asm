@@ -55,6 +55,10 @@ C_SP	=	$0082
 ;
 ;NETSTREAM HANDLER
 ;
+; Packet ids used on the wire:
+;   $40 SNAPSHOT (19 bytes), $42 SHOT (6), $50 BRICK_FULL (51),
+;   $51 BRICK_DELTA (4), $52 RESPAWN (6), and client TX $41 DELTA (4).
+; Client simulation is presentation-oriented: server state remains authoritative.
 NS_BASE	=	$2800
 NS_BEGN	=	NS_BASE+0
 NS_END	=	NS_BASE+3
@@ -896,7 +900,9 @@ NET_CLRMAP1
 	LDA	#$0F	;hide local actors until authoritative server positions arrive
 	STA	NET_DEAD_MASK
 	STA	NET_ERASE_MASK
-	LDA	#$A5	;one-time hello so server learns peer
+	; one-time probe frame so server allocates our slot and begins snapshots.
+	; parser ignores unknown type bytes, so this safely acts as "hello".
+	LDA	#$A5
 	STA	NET_TX_BUF
 	LDA	NET_SEQ
 	STA	NET_TX_BUF+1
@@ -922,6 +928,10 @@ NET_POLL	LDA	NET_ACTIVE
 	BNE	NET_POLL_CONT
 	JMP	NET_POLLX
 NET_POLL_CONT
+	; poll loop responsibilities:
+	; 1) debounce local input and queue DELTA packets
+	; 2) pace periodic DELTA sends (~10 Hz) even without input edges
+	; 3) drain RX bytes and feed byte-stream parser
 	JSR	NET_SAMPLE_INPUT
 	; guard against memory scribbles from legacy draw/effect paths
 	LDA	NET_TX_STATE
@@ -1067,6 +1077,7 @@ NET_TX_STEP	LDA	NET_TX_STATE
 	BEQ	NET_TX_DONE
 NET_TX_LOOP	LDA	NET_TX_STATE
 	BEQ	NET_TX_DONE
+	; NSENGINE TX fifo full: keep remaining bytes queued for next poll tick.
 	LDA	NS_TX_COUNT
 	CMP	#$20
 	BCS	NET_TX_DONE
@@ -1103,6 +1114,8 @@ NET_RX_PARSE	STA	NET_RX_TMP	;preserve received byte
 	BNE	NET_RX_ST
 	JMP	NET_RX_WAIT
 NET_RX_ST
+	; NET_RX_STATE dispatch:
+	;   1=snapshot, 2=shot, 3=brick_full, 4=brick_delta, 5=respawn
 	CMP	#1
 	BEQ	NET_RX_COL40
 	CMP	#2
@@ -1205,6 +1218,7 @@ NET_RX_52DONE
 	STA	NET_RESP_IDX
 	RTS
 NET_RX_DROP
+	; framing lost: drop partial packet and resync at next recognizable type byte.
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_SNAP_IDX
@@ -1213,6 +1227,8 @@ NET_RX_DROP
 	STA	NET_BRICK_IDX
 	RTS
 NET_RX_WAIT	LDA	NET_RX_TMP
+	; idle parser: wait for type marker, then switch to fixed-length collector.
+	; after first full map, ignore additional $50 packets.
 	CMP	#$40
 	BEQ	NET_RX_WSNAP
 	CMP	#$42
@@ -1290,6 +1306,7 @@ NSNAP_VOK
 	STA	NET_RX_SEQ
 	JMP	NSNAP_ACC
 NSNAP_CHKSEQ
+	; accept forward modulo-256 seq deltas in range 1..127, drop stale/dup.
 	LDA	NET_SNAP_BUF+1
 	SEC
 	SBC	NET_RX_SEQ
@@ -1412,6 +1429,7 @@ NSNAP_Z1TRS
 	STA	NET_Z1_PENDING
 	LDX	#0
 NSNAP_SCORE
+	; server scores are binary 0..255; HUD renders modulo-10 glyphs.
 	LDY	SCRINDX,X
 	LDA	NET_SNAP_BUF+15,X
 	JSR	NET_SCORECHR
@@ -1542,6 +1560,7 @@ NET_SHOT_QUEUE
 	LDA	NET_SHOT_PKT+2
 	CMP	#4
 	BCS	NSQ_X
+	; shot flags use only low 3 bits (active + direction); drop malformed flags.
 	LDA	NET_SHOT_PKT+5
 	AND	#$F8
 	BNE	NSQ_X
@@ -1577,6 +1596,7 @@ NET_RESP_APPLY
 	STA	NET_RX_TMP
 	AND	#$02	;final spawn?
 	BEQ	NRESP_PEND
+	; final spawn: latch position, request reconcile, and unhide actor.
 	LDA	NET_RESP_PKT+3	;x
 	CMP	#20
 	BCS	NRESP_X
@@ -1609,6 +1629,7 @@ NRESP_CLR
 	STA	NET_ERASE_MASK
 	RTS
 NRESP_PEND
+	; pending respawn: hide actor until final spawn packet arrives.
 	LDA	NET_RX_TMP
 	AND	#$01	;pending respawn?
 	BEQ	NRESP_X
@@ -1674,7 +1695,7 @@ NBF_PUT
 	STA	(SCRPTR),Y
 	INY
 	STA	(SCRPTR),Y
-	; store authoritative map cell (0 empty, 1 brick/wall)
+	; store authoritative collision map cell (0 empty, 1 blocked).
 	TYA
 	PHA
 	LDY	#0
@@ -1686,7 +1707,7 @@ NBF_PUT
 NBF_MPTR
 	PLA
 	TAY
-	; next bit in packed brick stream
+	; next bit in packed brick stream (LSB-first across 48 payload bytes).
 	LDA	COUNT
 	ASL
 	STA	COUNT
@@ -1792,6 +1813,7 @@ NSHOT_PIDOK
 	TAX
 	LDA	NET_SHOT_WRK+5
 	BEQ	NSHOT_CLR
+	; flags bit0=active, bits1..2=dir (0 right,1 down,2 left,3 up).
 	LSR
 	AND	#$03
 	STA	NET_RX_TMP
@@ -1853,6 +1875,7 @@ NSHOT_SET
 NSHOT_REDRAW
 	JSR	ERASHOT
 NSHOT_DRAW
+	; convert network shot state into legacy renderer state and draw.
 	LDA	SCRPTR
 	STA	SHOTLO,X
 	LDA	SCRPTR+1
@@ -2686,7 +2709,8 @@ RF_SYNCCHK
 RF_DONE
 	JMP	CHKSHOT
 
-; apply queued authoritative shot packets in VBI context to avoid draw races
+; apply queued authoritative shot packets in VBI context to avoid draw races.
+; queue stores "latest packet per slot", so intermediate packets may collapse.
 NET_SHOT_APPLY_PEND
 	LDA	NET_SHOT_PEND
 	AND	#$01
@@ -4268,45 +4292,45 @@ SCORE	.DS	69
 ;NETSTREAM STATE (non-ZP)
 ;
 	ORG	$7A00	;isolate net runtime state away from gameplay/HUD buffers
-NET_TICK	.DS	1
-NET_TX_STATE	.DS	1
-NET_TX_IDX	.DS	1
-NET_SEQ	.DS	1
-NET_RX_STATE	.DS	1
-NET_ACTIVE	.DS	1
-NET_INITST	.DS	1
-NET_SAVPTR	.DS	2
-NET_RX_TMP	.DS	1
-NET_TX_BUF	.DS	4
-NET_RX_SEQ	.DS	1
-NET_RX_STICK	.DS	1
-NET_RX_TRIG	.DS	1
-NET_RX_AVLO	.DS	1
-NET_RX_AVHI	.DS	1
-NET_TX_CLKLAST	.DS	1
-NET_TX_LAST_STICK	.DS	1
-NET_TX_LAST_TRIG	.DS	1
-NET_RX_DBG	.DS	1
-NET_IN_TMP	.DS	1
-NET_BOOT_HIDE	.DS	1
-NET_LOCAL_PID	.DS	1
-NET_ROLE_MASK	.DS	1
-NET_SCORE_PEND	.DS	1
-NET_SNAP_IDX	.DS	1
-NET_SNAP_BUF	.DS	19
-NET_SHOT_IDX	.DS	1
-NET_SHOT_PKT	.DS	6
-NET_RESP_IDX	.DS	1
-NET_RESP_PKT	.DS	6
-NET_BRICK_IDX	.DS	1
-NET_BRICK_BUF	.DS	51
-NET_BRICK_DONE	.DS	1
-NET_SHOT_PEND	.DS	1
-NET_SHOT_BUF	.DS	24
-NET_SHOT_WRK	.DS	6
-NET_DEAD_MASK	.DS	1
-NET_ERASE_MASK	.DS	1
-NET_GUARD_MASK	.DS	1
+NET_TICK	.DS	1	;frame divider for periodic DELTA TX
+NET_TX_STATE	.DS	1	;bytes remaining in NET_TX_BUF
+NET_TX_IDX	.DS	1	;next NET_TX_BUF index to send
+NET_SEQ	.DS	1	;client TX sequence counter
+NET_RX_STATE	.DS	1	;RX collector mode (0 idle, 1/2/3/4/5 by packet type)
+NET_ACTIVE	.DS	1	;netstream active flag
+NET_INITST	.DS	1	;NS_INIT status code
+NET_SAVPTR	.DS	2	;saved POINTER around NS_INIT fastcall setup
+NET_RX_TMP	.DS	1	;general RX scratch
+NET_TX_BUF	.DS	4	;outbound DELTA/hello packet bytes
+NET_RX_SEQ	.DS	1	;last accepted snapshot sequence
+NET_RX_STICK	.DS	1	;debounced local stick nibble
+NET_RX_TRIG	.DS	1	;debounced local trigger (0 pressed / 1 released)
+NET_RX_AVLO	.DS	1	;NS_AVAIL low byte
+NET_RX_AVHI	.DS	1	;NS_AVAIL high byte
+NET_TX_CLKLAST	.DS	1	;last RTCLOK used for pacing
+NET_TX_LAST_STICK	.DS	1	;last transmitted stick nibble
+NET_TX_LAST_TRIG	.DS	1	;last transmitted trigger bit
+NET_RX_DBG	.DS	1	;set after first valid snapshot (enables seq checks)
+NET_IN_TMP	.DS	1	;input debounce scratch
+NET_BOOT_HIDE	.DS	1	;hide actors until first authoritative sync
+NET_LOCAL_PID	.DS	1	;pid assigned by server in snapshot flags
+NET_ROLE_MASK	.DS	1	;server role/zombie mask from snapshot flags
+NET_SCORE_PEND	.DS	1	;request HUD role-label refresh
+NET_SNAP_IDX	.DS	1	;snapshot / brick-delta collector index
+NET_SNAP_BUF	.DS	19	;snapshot staging buffer
+NET_SHOT_IDX	.DS	1	;shot collector index
+NET_SHOT_PKT	.DS	6	;single incoming shot packet staging
+NET_RESP_IDX	.DS	1	;respawn collector index
+NET_RESP_PKT	.DS	6	;respawn staging buffer
+NET_BRICK_IDX	.DS	1	;brick-full collector index
+NET_BRICK_BUF	.DS	51	;brick-full staging buffer
+NET_BRICK_DONE	.DS	1	;set after first full-map sync
+NET_SHOT_PEND	.DS	1	;bitmask: slot has queued shot update
+NET_SHOT_BUF	.DS	24	;4 * 6-byte latest-shot cache
+NET_SHOT_WRK	.DS	6	;working copy passed to NET_SHOT_APPLY
+NET_DEAD_MASK	.DS	1	;slots hidden while respawn pending
+NET_ERASE_MASK	.DS	1	;slots requiring erase pass
+NET_GUARD_MASK	.DS	1	;slots requiring location-pointer guard pass
 ; --- NET snapshot position latch (authoritative) ---
 NET_PX_X	.DS	4
 NET_PX_Y	.DS	4
