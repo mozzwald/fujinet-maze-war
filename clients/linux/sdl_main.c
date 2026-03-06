@@ -408,38 +408,102 @@ static Uint32 fx_color(const struct theme *theme, uint8_t color_idx) {
   }
 }
 
+static uint8_t mirror_bits8(uint8_t v) {
+  v = (uint8_t)(((v & 0xF0u) >> 4) | ((v & 0x0Fu) << 4));
+  v = (uint8_t)(((v & 0xCCu) >> 2) | ((v & 0x33u) << 2));
+  v = (uint8_t)(((v & 0xAAu) >> 1) | ((v & 0x55u) << 1));
+  return v;
+}
+
+static void draw_bitmap8(SDL_Surface *screen, int x, int y, int pix,
+                         const uint8_t rows[8], Uint32 fg, Uint32 alt) {
+  int r;
+  if (pix < 1) {
+    pix = 1;
+  }
+  for (r = 0; r < 8; r++) {
+    int c;
+    uint8_t bits = rows[r];
+    for (c = 0; c < 8; c++) {
+      if ((bits >> (7 - c)) & 1u) {
+        Uint32 col = (r <= 1) ? alt : fg;
+        fill_rect(screen, x + (c * pix), y + (r * pix), pix, pix, col);
+      }
+    }
+  }
+}
+
+static void select_player_rows(uint8_t dir, uint8_t step, uint8_t out_rows[8]) {
+  static const uint8_t right_rows[2][8] = {
+    {0x10, 0x38, 0x10, 0x7C, 0x18, 0x18, 0x14, 0x00},
+    {0x10, 0x38, 0x10, 0x7E, 0x18, 0x14, 0x08, 0x10}
+  };
+  static const uint8_t down_rows[2][8] = {
+    {0x10, 0x38, 0x10, 0x3C, 0x18, 0x3C, 0x24, 0x00},
+    {0x10, 0x38, 0x10, 0x3C, 0x18, 0x24, 0x18, 0x24}
+  };
+  static const uint8_t up_rows[2][8] = {
+    {0x10, 0x10, 0x38, 0x3C, 0x18, 0x18, 0x24, 0x00},
+    {0x10, 0x10, 0x38, 0x3C, 0x18, 0x24, 0x18, 0x24}
+  };
+  const uint8_t *src;
+  int i;
+  int phase = (step & 1u) ? 1 : 0;
+
+  if ((dir & 0x03u) == 1u) {
+    src = down_rows[phase];
+  } else if ((dir & 0x03u) == 3u) {
+    src = up_rows[phase];
+  } else {
+    src = right_rows[phase];
+  }
+
+  for (i = 0; i < 8; i++) {
+    out_rows[i] = src[i];
+  }
+
+  if ((dir & 0x03u) == 2u) {
+    for (i = 0; i < 8; i++) {
+      out_rows[i] = mirror_bits8(out_rows[i]);
+    }
+  }
+}
+
 static void draw_player_sprite(SDL_Surface *screen, int px, int py, int cw, int ch,
                                uint8_t dir, uint8_t step, Uint32 body,
-                               const struct theme *theme) {
-  int u = ch / 8;
-  int cx;
-  int cy;
-  if (u < 1) {
-    u = 1;
-  }
-  cx = px + (cw / 2);
-  cy = py + (ch / 2);
-
-  fill_rect(screen, cx - (2 * u), cy - (2 * u), 4 * u, 3 * u, body);
-  fill_rect(screen, cx - u, cy - (4 * u), 2 * u, u, theme->text_brown);
-  fill_rect(screen, cx - u, cy - (3 * u), 2 * u, u, body);
-
-  if ((step & 1) == 0) {
-    fill_rect(screen, cx - (2 * u), cy + u, u, 2 * u, body);
-    fill_rect(screen, cx + u, cy + u, u, 2 * u, body);
-  } else {
-    fill_rect(screen, cx - u, cy + u, u, 2 * u, body);
-    fill_rect(screen, cx, cy + u, u, 2 * u, body);
+                               int blink, const struct theme *theme) {
+  int pix = ch / 10;
+  int sw;
+  int sh;
+  int ox;
+  int oy;
+  uint8_t rows[8];
+  Uint32 muzzle0 = blink ? theme->bullet_blue : theme->bullet_gold;
+  Uint32 muzzle1 = blink ? theme->bullet_gold : theme->bullet_blue;
+  if (pix < 1) {
+    pix = 1;
   }
 
-  if (dir == 0) {
-    fill_rect(screen, cx + (2 * u), cy - u, 2 * u, u, theme->bullet_blue);
-  } else if (dir == 2) {
-    fill_rect(screen, cx - (4 * u), cy - u, 2 * u, u, theme->bullet_blue);
-  } else if (dir == 1) {
-    fill_rect(screen, cx - u, cy + (2 * u), u, 2 * u, theme->bullet_blue);
+  sw = 8 * pix;
+  sh = 8 * pix;
+  ox = px + ((cw - sw) / 2);
+  oy = py + ((ch - sh) / 2);
+
+  select_player_rows(dir, step, rows);
+  draw_bitmap8(screen, ox, oy, pix, rows, body, theme->text_brown);
+
+  if ((dir & 0x03u) == 0u) {
+    fill_rect(screen, ox + sw, oy + (3 * pix), 2 * pix, pix, muzzle0);
+    fill_rect(screen, ox + sw + (2 * pix), oy + (3 * pix), pix, pix, muzzle1);
+  } else if ((dir & 0x03u) == 2u) {
+    fill_rect(screen, ox - (2 * pix), oy + (3 * pix), 2 * pix, pix, muzzle0);
+    fill_rect(screen, ox - (3 * pix), oy + (3 * pix), pix, pix, muzzle1);
+  } else if ((dir & 0x03u) == 1u) {
+    fill_rect(screen, ox + (3 * pix), oy + sh, pix, 2 * pix, muzzle0);
+    fill_rect(screen, ox + (3 * pix), oy + sh + (2 * pix), pix, pix, muzzle1);
   } else {
-    fill_rect(screen, cx - u, cy - (4 * u), u, 2 * u, theme->bullet_blue);
+    fill_rect(screen, ox + (3 * pix), oy - (2 * pix), pix, 2 * pix, muzzle0);
+    fill_rect(screen, ox + (3 * pix), oy - (3 * pix), pix, pix, muzzle1);
   }
 }
 
@@ -585,7 +649,7 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
     py = l->board_y + (int)(gy * (float)l->cell_h + 0.5f);
     draw_player_sprite(screen, px, py, l->cell_w, l->cell_h,
                        g->panim[i].dir, g->panim[i].step_phase,
-                       theme->player_colors[i], theme);
+                       theme->player_colors[i], blink, theme);
   }
 
   draw_fx(screen, l, theme, g, now);
