@@ -6,6 +6,7 @@ Networked Maze War with:
 - an authoritative UDP server (`server/main.c`)
 - an Atari client (`clients/atari/maze-war.asm`)
 - a Linux test client (`clients/linux/main.c`)
+- a Linux SDL1 graphics client (`clients/linux/sdl_main.c`)
 
 The packet format is documented in [doc/protocol.md](doc/protocol.md).
 
@@ -15,11 +16,13 @@ The packet format is documented in [doc/protocol.md](doc/protocol.md).
 - `mads` (Atari assembler) in `PATH`
 - `gcc`
 - `ncurses` development package (for Linux client link: `-lncurses`)
+- `SDL 1.2` development package (for SDL graphics client link: `-lSDL`)
 
 On Debian/Ubuntu, Linux build deps are typically:
 
 ```bash
 sudo apt install build-essential libncurses-dev
+sudo apt install libsdl1.2-dev
 ```
 
 `mads` is not part of standard distro toolchains; install it separately and
@@ -39,6 +42,7 @@ Or just:
 make build/maze-war-net.xex
 make build/maze-war-server
 make build/maze-war-client
+make build/maze-war-client-sdl
 ```
 
 Output artifacts:
@@ -46,6 +50,7 @@ Output artifacts:
 - `build/maze-war-net.xex`: `NSENGINE.OBX` + `maze-war.xex` concatenated
 - `build/maze-war-server`: Linux UDP authoritative server
 - `build/maze-war-client`: Linux ncurses/evdev client
+- `build/maze-war-client-sdl`: Linux SDL1 graphics client
 
 Clean:
 
@@ -102,6 +107,29 @@ Notes:
 - Client input uses evdev (`/dev/input/eventX`), not terminal keypress input.
 - You may need appropriate permissions for `/dev/input/eventX` (group membership
   or root).
+
+## Linux SDL Client Usage
+
+```text
+build/maze-war-client-sdl [--port PORT] [--host HOST] [--pid N] [--scale N] [--debug]
+```
+
+Defaults:
+- `--port 9000`
+- `--host 127.0.0.1` (used as pre-filled prompt text; client asks for hostname at startup)
+- `--pid` optional
+- `--scale 4`
+
+Example:
+
+```bash
+./build/maze-war-client-sdl --port 9000 --scale 4
+```
+
+Controls (Linux SDL client):
+- Movement: Arrow keys
+- Fire: `Space`
+- Quit: `Esc`
 
 ## Networking Overview
 
