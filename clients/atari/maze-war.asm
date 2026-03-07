@@ -75,7 +75,9 @@ NET_PORT_LO	=	$23	;swap16(9000) -> $2823
 NET_PORT_HI	=	$28
 NET_FRAME_DIV	=	6	;~10 Hz @ 60 FPS (matches server tick)
 NET_RECON_P0	=	3	;local player reconcile threshold (manhattan cells)
-NET_RECON_P1	=	10	;remote actor hard-snap threshold (manhattan cells)
+NET_RECON_P1	=	10	;remote catastrophic hard-snap guard
+NET_RECOVER_P1	=	3	;remote bounded-recovery snap threshold
+NET_DESYNC_MAX	=	3	;remote failed-recovery attempts before forced snap
 NET_HARD_P0	=	12	;local hard-snap guard (only on severe divergence)
 HOST_MAX	=	31	;max hostname length
 ;
@@ -563,7 +565,7 @@ SETALLP	LDA	#0	;TYPE = PLAYER
 	STA	SOUND,X
 	STA	MOVEST,X
 	STA	DIR,X
-	LDA	#3	;net-only move cadence ~= server 10 Hz
+	LDA	#2	;net-only cadence: immediate first frame + 2-frame phases ~= 10 Hz
 	STA	MOVRATE,X
 	STA	MOVCLOK,X
 	LDA	#5	;NEXT HIT SCORE=5
@@ -829,6 +831,8 @@ NET_INIT	LDA	#0
 	STA	NET_SNAP_IDX
 	STA	NET_BRICK_IDX
 	STA	NET_BRICK_DONE
+	STA	NET_STAGE_SEQ
+	STA	NET_STAGE_APPLYSEQ
 	STA	NET_TICK
 	STA	NET_SEQ
 	STA	NET_DEAD_MASK
@@ -852,6 +856,12 @@ NET_CLRPOS
 	STA	NET_P_PENDING,X
 	STA	NET_PX_X,X
 	STA	NET_PX_Y,X
+	STA	NET_PJOY,X
+	STA	NET_DESYNC_CNT,X
+	STA	NET_STAGE_PENDING,X
+	STA	NET_STAGE_PX_X,X
+	STA	NET_STAGE_PX_Y,X
+	STA	NET_STAGE_PJOY,X
 	DEX
 	BPL	NET_CLRPOS
 	; pessimistic init: block movement until first authoritative brick-full arrives
@@ -1040,6 +1050,22 @@ NET_SAN_STICKA
 	BEQ	NSSA_OK
 	LDA	#$0F
 NSSA_OK
+	RTS
+
+; convert authoritative snapshot joy byte in A to internal DIR 0..3.
+; returns A=$FF for neutral/invalid so playback does not invent movement.
+NET_JOYDIRA
+	JSR	NET_SAN_STICKA
+	CMP	#$0F
+	BEQ	NJD_NEUT
+	EOR	#$0F
+	TAY
+	LDA	CONVERT,Y
+	CMP	#4
+	BCC	NJD_OK
+NJD_NEUT
+	LDA	#$FF
+NJD_OK
 	RTS
 ;
 ; build DELTA packet from sampled input and arm TX state machine.
@@ -1292,11 +1318,6 @@ NSNAP_OK
 	BCC	NSNAP_VOK
 	RTS
 NSNAP_VOK
-	; flags bit1..2 = recipient local pid (0..3)
-	LDA	NET_SNAP_BUF+2
-	LSR
-	AND	#$03
-	STA	NET_LOCAL_PID
 	; ignore stale/duplicate/out-of-order snapshots to prevent snap-back.
 	LDA	NET_RX_DBG
 	BNE	NSNAP_CHKSEQ
@@ -1319,6 +1340,13 @@ NSNAP_CHKSEQ
 NSNAP_DROP
 	JMP	NSNAP_EXIT
 NSNAP_ACC
+	; latest-wins staged snapshot handoff:
+	; odd seq = mainline is writing staging
+	; even seq = latest full snapshot ready for VBI commit
+	LDA	NET_STAGE_SEQ
+	CLC
+	ADC	#1
+	STA	NET_STAGE_SEQ
 	; flags bit3..6 = authoritative zombie mask for slots 0..3
 	LDA	NET_SNAP_BUF+2
 	LSR
@@ -1340,14 +1368,16 @@ NSNAP_RMSK
 	LDA	#1
 	LDX	#3
 NSNAP_FPP
-	STA	NET_P_PENDING,X
+	STA	NET_STAGE_PENDING,X
 	DEX
 	BPL	NSNAP_FPP
-	LDA	#$0F
-	STA	NET_GUARD_MASK
 NSNAP_POS0
-	; latch authoritative positions for all 4 actors.
-	; apply in VBI to avoid concurrent mainline/VBI draw races.
+	; stage authoritative positions for VBI-owned live commit.
+	; mainline RX never touches NET_PX_* / NET_P_PENDING directly.
+	LDA	NET_SNAP_BUF+2
+	LSR
+	AND	#$03
+	STA	NET_STAGE_LOCAL_PID
 	LDX	#0
 NSNAP_POSLP
 	TXA
@@ -1356,46 +1386,56 @@ NSNAP_POSLP
 	ADC	#3
 	TAY
 	LDA	NET_SNAP_BUF,Y
-	CMP	#20
-	BCS	NSNAP_POSNX
-	BEQ	NSNAP_POSNX
-	CMP	#19
-	BEQ	NSNAP_POSNX
-	STA	NET_PX_X,X
+	STA	NET_STAGE_PX_X,X
 	INY
 	LDA	NET_SNAP_BUF,Y
-	CMP	#19
-	BCS	NSNAP_POSNX
-	BEQ	NSNAP_POSNX
-	CMP	#18
-	BEQ	NSNAP_POSNX
-	STA	NET_PX_Y,X
+	STA	NET_STAGE_PX_Y,X
+	LDA	NET_SNAP_BUF+11,X
+	STA	NET_STAGE_PJOY,X
+	LDA	#0
+	STA	NET_STAGE_PENDING,X
 	LDA	NET_DEAD_MASK
 	AND	PLRMSK,X
 	BNE	NSNAP_KEEPDEAD
-	CPX	NET_LOCAL_PID
+	CPX	NET_STAGE_LOCAL_PID
 	BNE	NSNAP_RCHK
-	; local slot is always server-authoritative: reconcile every snapshot.
-	LDA	#1
-	STA	NET_P_PENDING,X
-	JMP	NSNAP_PSETM
+	; local prediction only requests reconcile once drift is meaningful.
+	LDA	LOCX,X
+	SEC
+	SBC	NET_STAGE_PX_X,X
+	BCS	NSNAP_LDXP
+	EOR	#$FF
+	CLC
+	ADC	#1
+NSNAP_LDXP
+	STA	COUNT
+	LDA	LOCY,X
+	SEC
+	SBC	NET_STAGE_PX_Y,X
+	BCS	NSNAP_LDYP
+	EOR	#$FF
+	CLC
+	ADC	#1
+NSNAP_LDYP
+	CLC
+	ADC	COUNT
+	CMP	#NET_RECON_P0
+	BCC	NSNAP_PCLR
+	BNE	NSNAP_PSET
+	LDA	MOVEST,X
+	BNE	NSNAP_PCLR
+	JMP	NSNAP_PSET
 NSNAP_RCHK
 	LDA	LOCX,X
-	CMP	NET_PX_X,X
+	CMP	NET_STAGE_PX_X,X
 	BNE	NSNAP_PSET
 	LDA	LOCY,X
-	CMP	NET_PX_Y,X
+	CMP	NET_STAGE_PX_Y,X
 	BNE	NSNAP_PSET
 	JMP	NSNAP_PCLR
 NSNAP_PSET
 	LDA	#1
-	STA	NET_P_PENDING,X
-NSNAP_PSETM
-	TXA
-	TAY
-	LDA	NET_GUARD_MASK
-	ORA	PLRMSK,Y
-	STA	NET_GUARD_MASK
+	STA	NET_STAGE_PENDING,X
 NSNAP_PCLR
 	LDA	NET_DEAD_MASK
 	AND	PLRMSKINV,X
@@ -1409,24 +1449,14 @@ NSNAP_KEEPDEAD
 NSNAP_POSNX
 	INX
 	CPX	#4
-	BCC	NSNAP_POSLP
+	BCS	NSNAP_POSDN
+	JMP	NSNAP_POSLP
+NSNAP_POSDN
+	LDA	NET_STAGE_SEQ
+	CLC
+	ADC	#1
+	STA	NET_STAGE_SEQ
 NSNAP_Z1JOY
-	; latch server AI input for zombie slot 1.
-	; do not draw here: VBI handles movement/drawing to avoid races.
-	LDA	NET_SNAP_BUF+12
-	AND	#$0F
-	STA	NET_Z1_STICK
-	LDA	NET_SNAP_BUF+12
-	AND	#$10
-	BEQ	NSNAP_Z1TRH
-	LDA	#0	;pressed
-	BNE	NSNAP_Z1TRS
-NSNAP_Z1TRH
-	LDA	#1	;released
-NSNAP_Z1TRS
-	STA	NET_Z1_TRIG
-	LDA	#1
-	STA	NET_Z1_PENDING
 	LDX	#0
 NSNAP_SCORE
 	; server scores are binary 0..255; HUD renders modulo-10 glyphs.
@@ -1555,6 +1585,47 @@ NSLBN
 	BCC	NSLBLP
 	RTS
 
+; commit the latest fully staged snapshot from mainline RX into the live
+; target/joy arrays that VBI movement code consumes. Odd NET_STAGE_SEQ means
+; the parser is mid-write, so VBI skips until an even published snapshot exists.
+NET_STAGE_COMMIT
+	LDA	NET_STAGE_SEQ
+	STA	NET_RX_TMP
+	AND	#$01
+	BNE	NSC_X
+	LDA	NET_RX_TMP
+	CMP	NET_STAGE_APPLYSEQ
+	BEQ	NSC_X
+	LDA	NET_STAGE_LOCAL_PID
+	STA	NET_LOCAL_PID
+	LDX	#3
+NSC_LP
+	LDA	NET_STAGE_PX_X,X
+	STA	NET_PX_X,X
+	LDA	NET_STAGE_PX_Y,X
+	STA	NET_PX_Y,X
+	LDA	NET_STAGE_PJOY,X
+	STA	NET_PJOY,X
+	LDA	NET_STAGE_PENDING,X
+	STA	NET_P_PENDING,X
+	BNE	NSC_PN
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+	JMP	NSC_NG
+NSC_PN
+	TXA
+	TAY
+	LDA	NET_GUARD_MASK
+	ORA	PLRMSK,Y
+	STA	NET_GUARD_MASK
+NSC_NG
+	DEX
+	BPL	NSC_LP
+	LDA	NET_RX_TMP
+	STA	NET_STAGE_APPLYSEQ
+NSC_X
+	RTS
+
 ; queue latest authoritative shot packet per slot (0..3), apply in VBI
 NET_SHOT_QUEUE
 	LDA	NET_SHOT_PKT+2
@@ -1613,6 +1684,8 @@ NET_RESP_APPLY
 	STA	NET_PX_Y,X
 	LDA	#1
 	STA	NET_P_PENDING,X
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
 	TXA
 	TAY
 	LDA	NET_GUARD_MASK
@@ -1641,6 +1714,8 @@ NRESP_PEND
 	LDA	NET_ERASE_MASK
 	ORA	PLRMSK,Y
 	STA	NET_ERASE_MASK
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
 NRESP_X	RTS
 
 ; --- NET brick full apply (type 0x50, 51 bytes) ---
@@ -2336,7 +2411,8 @@ HOST_CL3	STA	HOSTSCR+768,Y
 ;--------------------
 ;(Includes shot initialization)
 ;
-VBI	LDA	NET_SCORE_PEND
+VBI	JSR	NET_STAGE_COMMIT
+	LDA	NET_SCORE_PEND
 	BEQ	VBI_SCR_OK
 	LDA	#0
 	STA	NET_SCORE_PEND
@@ -2361,6 +2437,8 @@ CKMV_NGU
 	LDA	NET_DEAD_MASK
 	AND	PLRMSK,Y
 	BEQ	CKMVP0
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
 	LDA	NET_ERASE_MASK
 	AND	PLRMSK,Y
 	BEQ	CKMVSKP
@@ -2379,10 +2457,11 @@ CKMV_POK
 	BEQ	CKMV_AOK
 	JMP	CKMVCK
 CKMV_AOK
-	; server-authoritative reconcile for all slots:
-	; - if already aligned, clear pending.
-	; - if mid-step and only 1 cell off, defer one VBI to finish animation.
-	; - otherwise snap to authoritative location now.
+	; server-authoritative reconcile:
+	; - if aligned, clear pending.
+	; - remote slots follow targets through STRTMOV/REMOTE_FOLLOW.
+	; - local slot only reconciles once drift is meaningful, using the normal
+	;   move renderer when possible and hard-snap only as a guard rail.
 	LDA	LOCX,X
 	CMP	NET_PX_X,X
 	BNE	CKMV_LNE
@@ -2412,67 +2491,22 @@ CKMV_DXPOS
 CKMV_DYPOS
 	CLC
 	ADC	COUNT
-	CMP	#2
-	BCS	CKMVAP
-	LDA	MOVEST,X
-	BEQ	CKMV_MV0
-	JMP	CKMVCK
-CKMV_MV0
-	CPX	NET_LOCAL_PID
-	BEQ	CKMVAP
-	; non-local one-cell reconcile: animate through normal move renderer.
-	LDA	NET_PX_X,X
-	CMP	LOCX,X
-	BEQ	CKMV_RY
-	BCC	CKMV_RL
-	LDA	#0
-	JMP	CKMV_RSET
-CKMV_RL
-	LDA	#2
-	JMP	CKMV_RSET
-CKMV_RY
-	LDA	NET_PX_Y,X
-	CMP	LOCY,X
-	BCC	CKMV_RU
-	LDA	#1
-	JMP	CKMV_RSET
-CKMV_RU
-	LDA	#3
-CKMV_RSET
-	STA	DIR,X
-	JSR	NET_AHEAD_FREE
-	BNE	CKMVAP
-	; verify this DIR advances exactly to server target by one cell.
-	LDA	LOCX,X
-	STA	COUNT
-	LDA	LOCY,X
 	STA	HOLDIT
-	LDA	DIR,X
-	BEQ	CKMV_VXP
-	CMP	#1
-	BEQ	CKMV_VYP
-	CMP	#2
-	BEQ	CKMV_VXM
-	DEC	HOLDIT		;dir=3 up
-	JMP	CKMV_VCHK
-CKMV_VXP
-	INC	COUNT
-	JMP	CKMV_VCHK
-CKMV_VYP
-	INC	HOLDIT
-	JMP	CKMV_VCHK
-CKMV_VXM
-	DEC	COUNT
-CKMV_VCHK
-	LDA	COUNT
-	CMP	NET_PX_X,X
-	BNE	CKMVAP
+	CPX	NET_LOCAL_PID
+	BEQ	CKMV_LOC
+	LDA	MOVEST,X
+	BNE	CKMVCK
 	LDA	HOLDIT
-	CMP	NET_PX_Y,X
-	BNE	CKMVAP
-	JSR	INITMVE
-	JSR	MOVEIM
-	JMP	CHKSHOT
+	CMP	NET_HARDSNAP_TBL,X
+	BCS	CKMVAP
+	JMP	CKMVCK
+CKMV_LOC
+	LDA	HOLDIT
+	CMP	#NET_RECON_P0
+	BCC	CKMVCK
+	LDA	MOVEST,X
+	BNE	CKMVCK
+	JMP	REMOTE_FOLLOW
 CKMVAP	JSR	ERASMAN
 	LDA	NET_PX_X,X
 	STA	LOCX,X
@@ -2521,7 +2555,7 @@ SETIME	LDA	MOVRATE,X	;RESET MOVE
 ; --- STRTMOV net-only dispatch ---
 STRTMOV	CPX	NET_LOCAL_PID
 	BEQ	PLRMVE		;local slot uses local prediction for responsive control
-	JMP	CHKSHOT		;non-local slots are server-authoritative via reconcile only
+	JMP	REMOTE_FOLLOW	;non-local slots follow authoritative targets via normal move animation
 ;
 ;READ STICK AND SET DIRECTION IF
 ;IT HAS BEEN MOVED. ALSO, DO ZIGZAG
@@ -2620,21 +2654,73 @@ RZ1_CHKSHOT
 	JMP	CHKSHOT
 
 ; --- REMOTE_FOLLOW ---
-; Move remote authoritative actors (slots 1..3) toward latest snapshot target
-; using original move routines for consistent rendering cadence.
+; Remote playback is driven by authoritative snapshot joy + position.
+; The client does not guess X/Y pathing from deltas alone:
+; - snapshot joy selects DIR
+; - snapshot position must match one legal cell advance in that DIR
+; - otherwise we hold or hard-snap only as recovery
 REMOTE_FOLLOW
-	LDA	NET_PX_X,X
+	LDA	LOCX,X
+	CMP	NET_PX_X,X
+	BNE	RF_NEEDS
+	LDA	LOCY,X
+	CMP	NET_PX_Y,X
+	BNE	RF_NEEDS
+	LDA	#0
+	STA	NET_P_PENDING,X
+	STA	NET_DESYNC_CNT,X
+	JMP	CHKSHOT
+RF_NEEDS
+	LDA	NET_PJOY,X
+	JSR	NET_JOYDIRA
+	CMP	#$FF
+	BEQ	RF_SYNCCHK
+	STA	DIR,X
+	JSR	NET_AHEAD_FREE
+	BNE	RF_SYNCCHK
+	LDA	LOCX,X
+	STA	COUNT
+	LDA	LOCY,X
+	STA	HOLDIT
+	LDA	DIR,X
+	BEQ	RF_VXP
+	CMP	#1
+	BEQ	RF_VYP
+	CMP	#2
+	BEQ	RF_VXM
+	DEC	HOLDIT
+	JMP	RF_VCHK
+RF_VXP
+	INC	COUNT
+	JMP	RF_VCHK
+RF_VYP
+	INC	HOLDIT
+	JMP	RF_VCHK
+RF_VXM
+	DEC	COUNT
+RF_VCHK
+	LDA	COUNT
+	CMP	NET_PX_X,X
+	BNE	RF_SYNCCHK
+	LDA	HOLDIT
+	CMP	NET_PX_Y,X
+	BNE	RF_SYNCCHK
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+	JMP	INITMOVE
+RF_SYNCCHK
+	LDA	LOCX,X
 	SEC
-	SBC	LOCX,X
+	SBC	NET_PX_X,X
 	BCS	RF_DXPOS
 	EOR	#$FF
 	CLC
 	ADC	#1
 RF_DXPOS
 	STA	COUNT		;abs dx
-	LDA	NET_PX_Y,X
+	LDA	LOCY,X
 	SEC
-	SBC	LOCY,X
+	SBC	NET_PX_Y,X
 	BCS	RF_DYPOS
 	EOR	#$FF
 	CLC
@@ -2642,50 +2728,44 @@ RF_DXPOS
 RF_DYPOS
 	STA	HOLDIT		;abs dy
 	LDA	COUNT
-	ORA	HOLDIT
-	BNE	RF_TRY
-	LDA	#0
-	STA	NET_P_PENDING,X
-	JMP	CHKSHOT
-RF_TRY
-	LDA	COUNT
-	CMP	HOLDIT
-	BCS	RF_TRYX
-	JMP	RF_TRYY
-RF_TRYX
-	LDA	NET_PX_X,X
-	CMP	LOCX,X
-	BEQ	RF_TRYY
-	BCC	RF_DIRL
-	LDA	#0
-	BNE	RF_SETX
-RF_DIRL
-	LDA	#2
-RF_SETX
-	STA	DIR,X
-	JSR	NET_AHEAD_FREE
-	BNE	RF_TRYY
-	JMP	INITMOVE
-RF_TRYY
-	LDA	NET_PX_Y,X
-	CMP	LOCY,X
-	BEQ	RF_SYNCCHK
-	BCC	RF_DIRU
-	LDA	#1
-	BNE	RF_SETY
-RF_DIRU
-	LDA	#3
-RF_SETY
-	STA	DIR,X
-	JSR	NET_AHEAD_FREE
-	BNE	RF_SYNCCHK
-	JMP	INITMOVE
-RF_SYNCCHK
-	LDA	COUNT
 	CLC
 	ADC	HOLDIT
-	CMP	NET_HARDSNAP_TBL,X
+	STA	NET_RX_TMP	;manhattan divergence
+	CMP	#1
+	BNE	RF_FAIL
+	LDA	NET_PX_X,X
+	CMP	LOCX,X
+	BEQ	RF_1Y
+	BCC	RF_1L
+	LDA	#0
+	BNE	RF_1SET
+RF_1L
+	LDA	#2
+	BNE	RF_1SET
+RF_1Y
+	LDA	NET_PX_Y,X
+	CMP	LOCY,X
+	BCC	RF_1U
+	LDA	#1
+	BNE	RF_1SET
+RF_1U
+	LDA	#3
+RF_1SET
+	STA	DIR,X
+	JSR	NET_AHEAD_FREE
+	BNE	RF_FAIL
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+	JMP	INITMOVE
+RF_FAIL
+	INC	NET_DESYNC_CNT,X
+	LDA	NET_RX_TMP
+	CMP	#NET_RECOVER_P1
+	BCS	RF_SNAP
+	LDA	NET_DESYNC_CNT,X
+	CMP	#NET_DESYNC_MAX
 	BCC	RF_DONE
+RF_SNAP
 	LDA	ACTFLAG,X
 	BNE	RF_DONE
 	LDA	MOVEST,X
@@ -2706,6 +2786,7 @@ RF_SYNCCHK
 	JSR	SETSTIL
 	LDA	#0
 	STA	NET_P_PENDING,X
+	STA	NET_DESYNC_CNT,X
 RF_DONE
 	JMP	CHKSHOT
 
@@ -2783,6 +2864,7 @@ INITMOVE	JSR	INITMVE	;DO LOC ADDS AND
 	LDY	#22
 STNXSC	TYA
 	STA	NXTSCR,X
+	JSR	MOVEIM	;net-only playback needs the first phase immediately
 	JMP	CHKSHOT	;DO SHOTS
 ;
 ;FIRE OFF A SHOT IF WE CAN
@@ -4331,10 +4413,19 @@ NET_SHOT_WRK	.DS	6	;working copy passed to NET_SHOT_APPLY
 NET_DEAD_MASK	.DS	1	;slots hidden while respawn pending
 NET_ERASE_MASK	.DS	1	;slots requiring erase pass
 NET_GUARD_MASK	.DS	1	;slots requiring location-pointer guard pass
+NET_STAGE_SEQ	.DS	1	;odd while staging write is in progress, even when published
+NET_STAGE_APPLYSEQ	.DS	1	;last published stage sequence committed by VBI
+NET_STAGE_LOCAL_PID	.DS	1	;recipient pid staged with snapshot target set
+NET_STAGE_PENDING	.DS	4	;staged reconcile/follow requests
+NET_STAGE_PX_X	.DS	4	;staged authoritative X tile targets
+NET_STAGE_PX_Y	.DS	4	;staged authoritative Y tile targets
+NET_STAGE_PJOY	.DS	4	;staged authoritative joy bytes for all slots
 ; --- NET snapshot position latch (authoritative) ---
 NET_PX_X	.DS	4
 NET_PX_Y	.DS	4
 NET_P_PENDING	.DS	4
+NET_PJOY	.DS	4
+NET_DESYNC_CNT	.DS	4
 ; --- NET remote zombie1 latch ---
 NET_Z1_STICK	.DS	1
 NET_Z1_TRIG	.DS	1
