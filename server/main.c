@@ -11,6 +11,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "transport_normalize.h"
+
 enum {
   PKT_SNAPSHOT = 0x40,
   PKT_DELTA = 0x41,
@@ -23,15 +25,21 @@ enum {
 enum { MAX_PLAYERS = 4 };
 enum { CLIENT_TIMEOUT_MS = 60000 };
 enum { INPUT_STALE_MS = 500 };
-enum { ZOMBIE_ACTION_MS = 600 };
+
+#define ZOMBIE_THINK_MS 575
+#define ZOMBIE_MOVE_MS 275
+#define ZOMBIE_FIRE_MS 900
 
 struct player_state {
   uint8_t x;
   uint8_t y;
   uint8_t joy;
   uint8_t score;
+  uint8_t zombie_fire_pending;
   uint64_t respawn_at_ms;
-  uint64_t zombie_next_ms;
+  uint64_t zombie_think_next_ms;
+  uint64_t zombie_move_next_ms;
+  uint64_t zombie_fire_next_ms;
 };
 
 struct shot_state {
@@ -49,9 +57,7 @@ struct client_slot {
   socklen_t addr_len;
   uint64_t last_seen_ms;
   int sent_bricks;
-  uint8_t rx_need;
-  uint8_t rx_idx;
-  uint8_t rx_buf[8];
+  struct transport_rx_state rx;
   uint8_t have_delta_seq;
   uint8_t last_delta_seq;
 };
@@ -281,29 +287,18 @@ static int stick_to_cardinal_delta(uint8_t stick, int *dx, int *dy) {
   }
 }
 
-static int is_valid_stick_nibble(uint8_t stick) {
-  switch (stick & 0x0F) {
-    case 0x07:
-    case 0x0D:
-    case 0x0B:
-    case 0x0E:
-    case 0x0F:
-      return 1;
+static const char *transport_delta_format_name(
+    enum transport_delta_format format) {
+  switch (format) {
+    case TRANSPORT_DELTA_PRIMARY:
+      return "primary";
+    case TRANSPORT_DELTA_SWAPPED:
+      return "swapped";
+    case TRANSPORT_DELTA_EXTRA_41:
+      return "extra-41";
     default:
-      return 0;
+      return "unknown";
   }
-}
-
-static int sanitize_client_joy(uint8_t raw, uint8_t *out) {
-  if ((raw & 0xE0) != 0) {
-    return 0;
-  }
-  uint8_t stick = (uint8_t)(raw & 0x0F);
-  if (!is_valid_stick_nibble(stick)) {
-    return 0;
-  }
-  *out = (uint8_t)((raw & 0x10) | stick);
-  return 1;
 }
 
 static int delta_seq_is_fresh(struct client_slot *c, uint8_t seq) {
@@ -373,45 +368,44 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
                                  int sock, struct client_slot *clients,
                                  uint8_t *seq, int debug,
                                  uint64_t now, uint64_t *last_input_ms) {
-  if (len == 4 && pkt[0] == PKT_DELTA) {
+  if (pkt[0] == PKT_DELTA) {
     uint8_t pid = (uint8_t)slot;
     if (pid < MAX_PLAYERS) {
-      uint8_t seq_in = 0;
-      uint8_t joy = 0;
-      int parsed = 0;
-      // Primary format: [0x41][seq][pid][joy]
-      if (pkt[2] == pid && sanitize_client_joy(pkt[3], &joy)) {
-        seq_in = pkt[1];
-        parsed = 1;
-      // Atari observed format under netstream framing: [0x41][pid][seq][joy]
-      } else if (pkt[1] == pid && sanitize_client_joy(pkt[3], &joy)) {
-        seq_in = pkt[2];
-        parsed = 1;
+      struct transport_delta_packet delta;
+      if (!transport_decode_delta_for_slot(pkt, len, pid, &delta)) {
         if (debug) {
-          printf("DELTA slot=%d using swapped seq/pid decode\n", slot);
-        }
-      }
-      if (!parsed) {
-        if (debug) {
-          printf("DROP DELTA slot=%d bad-bytes=[%02X %02X %02X %02X] expected-pid=%u\n",
-                 slot, (unsigned)pkt[0], (unsigned)pkt[1],
-                 (unsigned)pkt[2], (unsigned)pkt[3], (unsigned)pid);
+          printf("DROP DELTA slot=%d bad-len=%zu", slot, len);
+          for (size_t i = 0; i < len; i++) {
+            printf("%s%02X", (i == 0) ? " bytes=[" : " ",
+                   (unsigned)pkt[i]);
+          }
+          printf("%s expected-pid=%u\n", (len > 0) ? "]" : "",
+                 (unsigned)pid);
         }
         return;
       }
-      if (!delta_seq_is_fresh(&clients[slot], seq_in)) {
+      if (!delta_seq_is_fresh(&clients[slot], delta.seq)) {
         if (debug) {
-          printf("DROP DELTA slot=%d stale-seq=%u bytes=[%02X %02X %02X %02X]\n",
-                 slot, (unsigned)seq_in, (unsigned)pkt[0], (unsigned)pkt[1],
-                 (unsigned)pkt[2], (unsigned)pkt[3]);
+          printf("DROP DELTA slot=%d stale-seq=%u", slot,
+                 (unsigned)delta.seq);
+          for (size_t i = 0; i < len; i++) {
+            printf("%s%02X", (i == 0) ? " bytes=[" : " ",
+                   (unsigned)pkt[i]);
+          }
+          printf("%s\n", (len > 0) ? "]" : "");
         }
         return;
       }
-      players[pid].joy = joy;
+      if (debug) {
+        printf("transport accepted slot=%d format=%s seq=%u joy=%02X\n",
+               slot, transport_delta_format_name(delta.format),
+               (unsigned)delta.seq, (unsigned)delta.joy);
+      }
+      players[pid].joy = delta.joy;
       last_input_ms[pid] = now;
       if (debug) {
         printf("DELTA slot=%d pid=%u ", slot, pid);
-        debug_joy(joy);
+        debug_joy(delta.joy);
       }
     }
     return;
@@ -457,74 +451,14 @@ static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
                                  uint64_t now, uint64_t *last_input_ms) {
   struct client_slot *c = &clients[slot];
   for (size_t i = 0; i < n; i++) {
-    uint8_t b = buf[i];
-    if (c->rx_need == 0) {
-      if (b == PKT_DELTA || b == PKT_BRICK_DELTA) {
-        c->rx_need = 4;
-      } else if (b == PKT_RESPAWN) {
-        c->rx_need = 6;
-      } else {
-        continue;
-      }
-      c->rx_idx = 0;
-    }
-
-    if (c->rx_idx < sizeof(c->rx_buf)) {
-      c->rx_buf[c->rx_idx] = b;
-    }
-    c->rx_idx++;
-
-    // Some Atari netstream paths prepend an extra 0x41 byte before DELTA:
-    // [0x41][0x41][seq][pid][joy]. Detect and normalize it before dispatch.
-    if (c->rx_need == 4 && c->rx_idx == 4 && c->rx_buf[0] == PKT_DELTA &&
-        c->rx_buf[1] == PKT_DELTA && c->rx_buf[2] >= MAX_PLAYERS &&
-        c->rx_buf[3] < MAX_PLAYERS) {
-      c->rx_need = 5;
-      continue;
-    }
-
-    if (c->rx_need == 5 && c->rx_idx >= 5) {
-      uint8_t pkt4[4];
-      pkt4[0] = PKT_DELTA;
-      pkt4[1] = c->rx_buf[2];
-      pkt4[2] = c->rx_buf[3];
-      pkt4[3] = c->rx_buf[4];
-      if (debug) {
-        printf("DELTA normalize slot=%d raw=[%02X %02X %02X %02X %02X]\n",
-               slot,
-               (unsigned)c->rx_buf[0], (unsigned)c->rx_buf[1],
-               (unsigned)c->rx_buf[2], (unsigned)c->rx_buf[3],
-               (unsigned)c->rx_buf[4]);
-      }
-      handle_client_packet(slot, pkt4, sizeof(pkt4), players, brick_bits,
-                           sock, clients, seq, debug, now,
-                           last_input_ms);
-      c->rx_need = 0;
-      c->rx_idx = 0;
-      continue;
-    }
-
-    if (c->rx_need != 0 && c->rx_idx >= c->rx_need) {
-      if (c->rx_need == 4 && c->rx_buf[0] == PKT_DELTA &&
-          c->rx_buf[2] != (uint8_t)slot && c->rx_buf[1] != (uint8_t)slot) {
-        if (debug) {
-          printf("DELTA resync slot=%d raw=[%02X %02X %02X %02X]\n",
-                 slot,
-                 (unsigned)c->rx_buf[0], (unsigned)c->rx_buf[1],
-                 (unsigned)c->rx_buf[2], (unsigned)c->rx_buf[3]);
-        }
-        memmove(&c->rx_buf[0], &c->rx_buf[1], c->rx_idx - 1);
-        c->rx_idx--;
-        c->rx_need = 4;
-        continue;
-      }
-      if (c->rx_need <= sizeof(c->rx_buf)) {
-        handle_client_packet(slot, c->rx_buf, c->rx_need, players, brick_bits,
-                             sock, clients, seq, debug, now,
-                             last_input_ms);
-      }
-      c->rx_need = 0;
-      c->rx_idx = 0;
+    uint8_t pkt[8];
+    size_t pkt_len = 0;
+    enum transport_rx_result result =
+        transport_rx_push_byte(&c->rx, (uint8_t)slot, buf[i], pkt,
+                               sizeof(pkt), &pkt_len);
+    if (result == TRANSPORT_RX_PACKET && pkt_len > 0) {
+      handle_client_packet(slot, pkt, pkt_len, players, brick_bits, sock,
+                           clients, seq, debug, now, last_input_ms);
     }
   }
 }
@@ -605,6 +539,7 @@ static void zombie_ai(int idx, struct player_state *players,
                       const uint8_t *bricks, const uint8_t *human_mask) {
   uint8_t zx = players[idx].x;
   uint8_t zy = players[idx].y;
+  players[idx].zombie_fire_pending = 0;
 
   // Shoot if any player is in same row
   for (int p = 0; p < MAX_PLAYERS; p++) {
@@ -614,7 +549,8 @@ static void zombie_ai(int idx, struct player_state *players,
     if (players[p].y == zy &&
         clear_row_shot(bricks, (int)zy, (int)zx, (int)players[p].x)) {
       uint8_t dir = (players[p].x > zx) ? 0 : 2;
-      players[idx].joy = stick_from_dir(dir) | 0x10;
+      players[idx].joy = stick_from_dir(dir);
+      players[idx].zombie_fire_pending = 1;
       return;
     }
   }
@@ -626,7 +562,8 @@ static void zombie_ai(int idx, struct player_state *players,
     if (players[p].x == zx &&
         clear_col_shot(bricks, (int)zx, (int)zy, (int)players[p].y)) {
       uint8_t dir = (players[p].y > zy) ? 1 : 3;
-      players[idx].joy = stick_from_dir(dir) | 0x10;
+      players[idx].joy = stick_from_dir(dir);
+      players[idx].zombie_fire_pending = 1;
       return;
     }
   }
@@ -670,7 +607,8 @@ static void zombie_ai(int idx, struct player_state *players,
       players[idx].joy = stick_from_dir(dir_x);
       return;
     }
-    players[idx].joy = stick_from_dir(dir_y) | 0x10;
+    players[idx].joy = stick_from_dir(dir_y);
+    players[idx].zombie_fire_pending = 1;
     return;
   }
   if (dir_free(dir_x, players, bricks, idx)) {
@@ -681,7 +619,8 @@ static void zombie_ai(int idx, struct player_state *players,
     players[idx].joy = stick_from_dir(dir_y);
     return;
   }
-  players[idx].joy = stick_from_dir(dir_x) | 0x10;
+  players[idx].joy = stick_from_dir(dir_x);
+  players[idx].zombie_fire_pending = 1;
 }
 
 static void apply_move_if_free(struct player_state *p,
@@ -710,15 +649,15 @@ static void apply_move_if_free(struct player_state *p,
 static void start_shot(int shooter, struct player_state *players,
                        struct shot_state *shots, uint8_t *bricks,
                        int sock, struct client_slot *clients, uint8_t *seq,
-                       int debug) {
+                       uint8_t joy, int debug) {
   if (players[shooter].respawn_at_ms != 0) {
     return;
   }
   if (shots[shooter].active) {
     return;
   }
-  uint8_t stick = (uint8_t)(players[shooter].joy & 0x0F);
-  int trig = (players[shooter].joy & 0x10) != 0;
+  uint8_t stick = (uint8_t)(joy & 0x0F);
+  int trig = (joy & 0x10) != 0;
   int dx = 0;
   int dy = 0;
   if (!trig || !stick_to_cardinal_delta(stick, &dx, &dy)) {
@@ -899,6 +838,11 @@ static void step_players(struct player_state *players, struct shot_state *shots,
       players[i].x = sx;
       players[i].y = sy;
       players[i].respawn_at_ms = 0;
+      players[i].joy = 0x0F;
+      players[i].zombie_fire_pending = 0;
+      players[i].zombie_think_next_ms = now;
+      players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
+      players[i].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
       uint8_t pkt[6];
       build_respawn((*seq)++, (uint8_t)i, sx, sy, 0x03, pkt, sizeof(pkt));
       broadcast_packet(sock, clients, pkt, sizeof(pkt));
@@ -914,20 +858,34 @@ static void step_players(struct player_state *players, struct shot_state *shots,
       }
     }
     int can_act = (players[i].respawn_at_ms == 0);
+    uint8_t action_joy = players[i].joy;
+    int can_move = can_act;
     if (zombie_mask[i] && can_act) {
-      if (now >= players[i].zombie_next_ms) {
+      if (now >= players[i].zombie_think_next_ms) {
         zombie_ai(i, players, bricks, human_mask);
-        players[i].zombie_next_ms = now + ZOMBIE_ACTION_MS;
-      } else {
-        can_act = 0;
+        players[i].zombie_think_next_ms = now + ZOMBIE_THINK_MS;
+      }
+      action_joy = players[i].joy;
+      if (players[i].zombie_fire_pending &&
+          now >= players[i].zombie_fire_next_ms) {
+        action_joy |= 0x10;
+        players[i].zombie_fire_pending = 0;
+        players[i].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
+      }
+      if (now < players[i].zombie_move_next_ms) {
+        can_move = 0;
       }
     }
-    uint8_t stick = (uint8_t)(players[i].joy & 0x0F);
-    int trig = (players[i].joy & 0x10) != 0;
+    uint8_t stick = (uint8_t)(action_joy & 0x0F);
+    int trig = (action_joy & 0x10) != 0;
     if (can_act) {
-      start_shot(i, players, shots, bricks, sock, clients, seq, debug);
-      if (!(trig && stick != 0x0F)) {
+      start_shot(i, players, shots, bricks, sock, clients, seq, action_joy,
+                 debug);
+      if (can_move && !(trig && stick != 0x0F)) {
         apply_move_if_free(&players[i], bricks, players, i);
+        if (zombie_mask[i]) {
+          players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
+        }
       }
     }
   }
@@ -1064,12 +1022,17 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Warning: failed to load brick layout: %s\n", brick_path);
   }
   srand((unsigned int)time(NULL));
+  uint64_t init_now = now_ms();
   for (int i = 0; i < MAX_PLAYERS; i++) {
     uint8_t sx = 0, sy = 0;
     pick_spawn(brick_bits, players, &sx, &sy);
     players[i].x = sx;
     players[i].y = sy;
     players[i].joy = 0x0F;
+    players[i].zombie_fire_pending = 0;
+    players[i].zombie_think_next_ms = init_now;
+    players[i].zombie_move_next_ms = init_now + ZOMBIE_MOVE_MS;
+    players[i].zombie_fire_next_ms = init_now + ZOMBIE_FIRE_MS;
   }
 
   uint8_t seq = 0;
