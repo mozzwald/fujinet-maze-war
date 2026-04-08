@@ -44,6 +44,8 @@ created: 2026-04-08
 | 02-02-02 | 02 | 2 | RECN-02 | smoke/build | `bash tests/reconciliation_replay_smoke.sh && make build/maze-war-client` | ❌ Wave 0 | ⬜ pending |
 | 02-03-01 | 03 | 3 | RECN-04 | smoke/build | `bash tests/reconciliation_correction_bound_smoke.sh && make build/maze-war-client` | ❌ Wave 0 | ✅ green |
 | 02-03-02 | 03 | 3 | RECN-03 | smoke/manual Atari checkpoint | `bash tests/reconciliation_snapshot_ack_smoke.sh && bash tests/reconciliation_replay_smoke.sh && bash tests/reconciliation_correction_bound_smoke.sh && make all` | ❌ Wave 0 | ❌ red |
+| 02-04-01 | 04 | 4 | RECN-03 | smoke/build | `bash tests/reconciliation_correction_bound_smoke.sh && bash tests/reconciliation_replay_smoke.sh && make build/maze-war-client` | ❌ Wave 0 | ✅ green |
+| 02-04-02 | 04 | 4 | RECN-03 / RECN-04 | smoke/manual Atari checkpoint | `bash tests/reconciliation_snapshot_ack_smoke.sh && bash tests/reconciliation_replay_smoke.sh && bash tests/reconciliation_correction_bound_smoke.sh && make all` | ❌ Wave 0 | ❌ red |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -76,4 +78,4 @@ created: 2026-04-08
 - [ ] Feedback latency <= 30s on the focused task-level validation path
 - [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** failed on 2026-04-08 after real Atari/FujiNet verification. Automated smoke/build checks passed, but the Atari client left graphical glitches on screen during player movement; see `debug/debug.log` and `debug/Screenshot from 2026-04-08 17-33-54.png`.
+**Approval:** still failed on 2026-04-08 after the `02-04` retry. The stale sprite ghosting blocker was cleared, walls were respected, and visible correction stayed within about one cell, but RECN-04 was not approved because movement still feels too fast. The checkpoint also surfaced a follow-up gameplay regression: holding fire while steering toward the shot direction can make the local player jump into the next cell and then snap back while firing.
