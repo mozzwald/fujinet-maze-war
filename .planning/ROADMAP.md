@@ -41,11 +41,12 @@ Plans:
   2. When a correction is needed, the Atari wizard settles back to authoritative state without large teleports and with no more than about one maze cell of visible correction in normal play.
   3. Original Maze War movement and turning cadence remains recognizable on Atari while client prediction is active.
   4. Movement disagreements caused by stale local input are resolved by replaying only unacknowledged inputs instead of repeated snap-threshold retuning.
-**Plans**: 3/3 plans executed
+**Plans**: 4 plans
 Plans:
 - [x] `02-01-PLAN.md` — Extend SNAPSHOT with recipient-specific `ack_seq`, update Linux ack decoding, and add a real-server ack smoke harness.
 - [x] `02-02-PLAN.md` — Add the Atari pending-input ring, ack discard helpers, and replay wiring at the staged authoritative commit seam.
 - [x] `02-03-PLAN.md` — Replace threshold-only local correction with bounded ack-driven replay, then verify correction size and cadence on real Atari/FujiNet play. Real Atari verification failed due to player-movement screen artifacts.
+- [ ] `02-04-PLAN.md` — Fix Atari replay/correction stale-draw cleanup and repeat the blocked real-hardware movement approval for RECN-03 and RECN-04.
 
 ### Phase 3: Combat and World Authority
 **Goal**: Turn, move, fire, hit, death, respawn, and shared world checks follow one explicit authoritative contract across server, Atari, and Linux clients.
