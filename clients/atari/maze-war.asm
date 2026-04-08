@@ -838,6 +838,12 @@ NET_INIT	LDA	#0
 	STA	NET_DEAD_MASK
 	STA	NET_ERASE_MASK
 	STA	NET_GUARD_MASK
+	STA	NET_STAGE_ACK_VALID
+	STA	NET_STAGE_ACK_SEQ
+	STA	NET_ACK_VALID
+	STA	NET_ACK_SEQ
+	STA	NET_PEND_HEAD
+	STA	NET_PEND_COUNT
 	LDA	#$FF
 	STA	NET_TX_CLKLAST
 	LDA	#$0F
@@ -864,6 +870,12 @@ NET_CLRPOS
 	STA	NET_STAGE_PJOY,X
 	DEX
 	BPL	NET_CLRPOS
+	LDX	#7
+NET_CLRPEND
+	STA	NET_PEND_SEQ,X
+	STA	NET_PEND_JOY,X
+	DEX
+	BPL	NET_CLRPEND
 	; pessimistic init: block movement until first authoritative brick-full arrives
 	LDY	#0
 	LDA	#1
@@ -1093,10 +1105,33 @@ NTB_TRIGUP
 	INC	NET_SEQ
 	LDY	NET_LOCAL_PID
 	STY	NET_TX_BUF+2
+	JSR	NET_LOCAL_INPUT_PUSH
 	LDA	#4
 	STA	NET_TX_STATE
 	LDA	#0
 	STA	NET_TX_IDX
+	RTS
+;
+NET_LOCAL_INPUT_PUSH
+	LDA	NET_PEND_COUNT
+	CLC
+	ADC	NET_PEND_HEAD
+	AND	#$07
+	TAX
+	LDA	NET_TX_BUF+1
+	STA	NET_PEND_SEQ,X
+	LDA	NET_TX_BUF+3
+	STA	NET_PEND_JOY,X
+	LDA	NET_PEND_COUNT
+	CMP	#8
+	BCC	NLIP_GROW
+	INC	NET_PEND_HEAD
+	LDA	NET_PEND_HEAD
+	AND	#$07
+	STA	NET_PEND_HEAD
+	RTS
+NLIP_GROW
+	INC	NET_PEND_COUNT
 	RTS
 ;
 NET_TX_STEP	LDA	NET_TX_STATE
@@ -1162,7 +1197,7 @@ NET_RX_COL40
 	STA	NET_SNAP_BUF,Y
 	INY
 	STY	NET_SNAP_IDX
-	CPY	#19
+	CPY	#20
 	BCS	NET_RX_40DONE
 	RTS
 NET_RX_40DONE
@@ -1307,7 +1342,7 @@ NET_RX_WSNAP
 	STA	NET_RX_STATE
 NET_RX_EXIT	RTS
 
-; --- NET snapshot apply (type 0x40, 19 bytes) ---
+; --- NET snapshot apply (type 0x40, 20 bytes) ---
 NET_SNAP_APPLY
 	LDA	NET_SNAP_BUF+2	;flags must indicate valid snapshot
 	AND	#$01
@@ -1374,6 +1409,16 @@ NSNAP_FPP
 NSNAP_POS0
 	; stage authoritative positions for VBI-owned live commit.
 	; mainline RX never touches NET_PX_* / NET_P_PENDING directly.
+	LDA	#0
+	STA	NET_STAGE_ACK_VALID
+	LDA	NET_SNAP_BUF+2
+	AND	#$80
+	BEQ	NSNAP_NOACK
+	LDA	#1
+	STA	NET_STAGE_ACK_VALID
+	LDA	NET_SNAP_BUF+19
+	STA	NET_STAGE_ACK_SEQ
+NSNAP_NOACK
 	LDA	NET_SNAP_BUF+2
 	LSR
 	AND	#$03
@@ -4399,7 +4444,7 @@ NET_LOCAL_PID	.DS	1	;pid assigned by server in snapshot flags
 NET_ROLE_MASK	.DS	1	;server role/zombie mask from snapshot flags
 NET_SCORE_PEND	.DS	1	;request HUD role-label refresh
 NET_SNAP_IDX	.DS	1	;snapshot / brick-delta collector index
-NET_SNAP_BUF	.DS	19	;snapshot staging buffer
+NET_SNAP_BUF	.DS	20	;snapshot staging buffer
 NET_SHOT_IDX	.DS	1	;shot collector index
 NET_SHOT_PKT	.DS	6	;single incoming shot packet staging
 NET_RESP_IDX	.DS	1	;respawn collector index
@@ -4416,16 +4461,24 @@ NET_GUARD_MASK	.DS	1	;slots requiring location-pointer guard pass
 NET_STAGE_SEQ	.DS	1	;odd while staging write is in progress, even when published
 NET_STAGE_APPLYSEQ	.DS	1	;last published stage sequence committed by VBI
 NET_STAGE_LOCAL_PID	.DS	1	;recipient pid staged with snapshot target set
+NET_STAGE_ACK_VALID	.DS	1	;staged snapshot ack present flag
+NET_STAGE_ACK_SEQ	.DS	1	;staged authoritative ack sequence
 NET_STAGE_PENDING	.DS	4	;staged reconcile/follow requests
 NET_STAGE_PX_X	.DS	4	;staged authoritative X tile targets
 NET_STAGE_PX_Y	.DS	4	;staged authoritative Y tile targets
 NET_STAGE_PJOY	.DS	4	;staged authoritative joy bytes for all slots
+NET_ACK_VALID	.DS	1	;live snapshot ack present flag
+NET_ACK_SEQ	.DS	1	;last committed authoritative ack sequence
 ; --- NET snapshot position latch (authoritative) ---
 NET_PX_X	.DS	4
 NET_PX_Y	.DS	4
 NET_P_PENDING	.DS	4
 NET_PJOY	.DS	4
 NET_DESYNC_CNT	.DS	4
+NET_PEND_HEAD	.DS	1	;oldest pending local input ring index
+NET_PEND_COUNT	.DS	1	;number of pending local inputs retained
+NET_PEND_SEQ	.DS	8	;pending local delta sequence bytes
+NET_PEND_JOY	.DS	8	;pending local delta joy bytes
 ; --- NET remote zombie1 latch ---
 NET_Z1_STICK	.DS	1
 NET_Z1_TRIG	.DS	1
