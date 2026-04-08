@@ -11,7 +11,7 @@ This roadmap follows the dependency chain identified in research: normalize tran
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Transport Normalization and Observability** - Canonicalize packet ingress so transport bugs stop masquerading as gameplay bugs.
-- [ ] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded.
+- [ ] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded. Plan execution is complete, but real Atari verification is blocked by a player-movement screen-artifact regression.
 - [ ] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients.
 - [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors.
 - [ ] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects.
@@ -41,11 +41,11 @@ Plans:
   2. When a correction is needed, the Atari wizard settles back to authoritative state without large teleports and with no more than about one maze cell of visible correction in normal play.
   3. Original Maze War movement and turning cadence remains recognizable on Atari while client prediction is active.
   4. Movement disagreements caused by stale local input are resolved by replaying only unacknowledged inputs instead of repeated snap-threshold retuning.
-**Plans**: 3 plans
+**Plans**: 3/3 plans executed
 Plans:
 - [x] `02-01-PLAN.md` — Extend SNAPSHOT with recipient-specific `ack_seq`, update Linux ack decoding, and add a real-server ack smoke harness.
 - [x] `02-02-PLAN.md` — Add the Atari pending-input ring, ack discard helpers, and replay wiring at the staged authoritative commit seam.
-- [ ] `02-03-PLAN.md` — Replace threshold-only local correction with bounded ack-driven replay, then verify correction size and cadence on real Atari/FujiNet play.
+- [x] `02-03-PLAN.md` — Replace threshold-only local correction with bounded ack-driven replay, then verify correction size and cadence on real Atari/FujiNet play. Real Atari verification failed due to player-movement screen artifacts.
 
 ### Phase 3: Combat and World Authority
 **Goal**: Turn, move, fire, hit, death, respawn, and shared world checks follow one explicit authoritative contract across server, Atari, and Linux clients.
@@ -128,7 +128,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Transport Normalization and Observability | 2/2 | Complete | 2026-04-08 |
-| 2. Reconciliation Contract | 2/3 | In Progress | - |
+| 2. Reconciliation Contract | 3/3 | Blocked | - |
 | 3. Combat and World Authority | 0/TBD | Not started | - |
 | 4. Render-State Separation | 0/TBD | Not started | - |
 | 5. Slot Lifecycle and Zombie Handoff | 0/TBD | Not started | - |
