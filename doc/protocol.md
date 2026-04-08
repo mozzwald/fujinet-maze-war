@@ -88,11 +88,32 @@ Compatibility formats accepted by server:
 - `[0x41][pid][seq][joy]` (seq/pid swapped)
 - byte-stream form with extra leading `0x41`: `[0x41][0x41][seq][pid][joy]`
 
+Internal canonical DELTA form after normalization:
+
+```
+{type=0x41, seq, pid=slot, joy}
+```
+
 Server behavior:
 - Client identity is bound to UDP source address/port (slot), not trusted from payload.
 - Incoming DELTA is accepted only if payload `pid` (or swapped `pid`) matches that slot.
 - DELTA seq is filtered per slot: duplicate or too-old packets are dropped.
 - Invalid `joy` bytes (bits 5..7 set or invalid stick nibble) are dropped.
+- Wire compatibility is repaired before gameplay input mutation; later gameplay code only consumes the canonical DELTA form above.
+
+### Transport Debug Counters
+
+When the server runs with `--debug`, it logs `transport accepted slot=` for each accepted DELTA and `transport summary slot=` every 2000 ms plus on disconnect/shutdown. Summary lines expose these normalization counters:
+
+- `raw_datagrams`
+- `raw_bytes`
+- `delta_primary`
+- `delta_swapped`
+- `delta_extra_41`
+- `delta_resync`
+- `drop_bad_joy`
+- `drop_stale_seq`
+- `accepted_delta`
 
 ### 0x42 SHOT (6 bytes, S->C)
 

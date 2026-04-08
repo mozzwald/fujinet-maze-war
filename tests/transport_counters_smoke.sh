@@ -1,0 +1,65 @@
+#!/bin/sh
+
+set -eu
+
+PORT=9102
+ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+SERVER_BIN="$ROOT_DIR/build/maze-war-server"
+LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/transport-counters-smoke.XXXXXX.log")
+SERVER_PID=
+
+cleanup() {
+  status=$?
+  if [ -n "${SERVER_PID:-}" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+  if [ $status -ne 0 ]; then
+    printf 'transport counters smoke failed; log preserved at %s\n' "$LOG_FILE" >&2
+  else
+    rm -f "$LOG_FILE"
+  fi
+  exit $status
+}
+
+trap cleanup EXIT INT TERM
+
+make -C "$ROOT_DIR" build/maze-war-server >/dev/null
+
+"$SERVER_BIN" --port "$PORT" --zombies 0 --debug >"$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+sleep 1
+
+python3 - "$PORT" <<'PY'
+import socket
+import sys
+import time
+
+port = int(sys.argv[1])
+payloads = [
+    bytes([0x41, 0x01, 0x00, 0x0F]),
+    bytes([0x41, 0x00, 0x02, 0x0E]),
+    bytes([0x41, 0x41, 0x02, 0x00, 0x0D]),
+    bytes([0x41, 0x03, 0x00, 0x3F]),
+]
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+for payload in payloads:
+    sock.sendto(payload, ("127.0.0.1", port))
+    time.sleep(0.2)
+sock.close()
+time.sleep(2.5)
+PY
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=
+
+grep -F "transport accepted slot=0" "$LOG_FILE" >/dev/null
+grep -F "transport summary slot=0" "$LOG_FILE" >/dev/null
+grep -F "delta_swapped=1" "$LOG_FILE" >/dev/null
+grep -F "delta_extra_41=1" "$LOG_FILE" >/dev/null
+grep -F "delta_resync=" "$LOG_FILE" >/dev/null
+grep -F "drop_bad_joy=1" "$LOG_FILE" >/dev/null
+grep -F "drop_stale_seq=1" "$LOG_FILE" >/dev/null
+grep -F "accepted_delta=2" "$LOG_FILE" >/dev/null

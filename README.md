@@ -151,6 +151,17 @@ Core packet flow:
 
 See [doc/protocol.md](doc/protocol.md) for byte-level packet layout.
 
+## Transport Debug Workflow
+
+Run both transport smoke checks before manual Atari or FujiNet validation:
+
+```bash
+bash tests/transport_normalize_smoke.sh
+bash tests/transport_counters_smoke.sh
+```
+
+During mixed-session debugging, start the server with `--debug` and capture both `transport accepted slot=` and `transport summary slot=` lines so transport framing failures can be separated from later gameplay or reconciliation faults. See [tests/README-transport-validation.md](tests/README-transport-validation.md) for the capture flow.
+
 ## How Client/Server Work Together
 
 - The server is authoritative for movement, shots, bricks, collisions, and
