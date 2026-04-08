@@ -8,12 +8,12 @@
 ### Transport
 
 - [x] **TRAN-01**: Server accepts one canonical client input packet format and normalizes FujiNet NetStream framing before gameplay logic runs.
-- [ ] **TRAN-02**: Server exposes enough packet/debug counters or logs to distinguish transport-framing problems from gameplay reconciliation problems during mixed-session testing.
+- [x] **TRAN-02**: Server exposes enough packet/debug counters or logs to distinguish transport-framing problems from gameplay reconciliation problems during mixed-session testing.
 
 ### Reconciliation
 
-- [ ] **RECN-01**: Server snapshots tell each client which local input sequence has been authoritatively applied for that recipient.
-- [ ] **RECN-02**: Atari client stores pending local inputs and replays only unacknowledged inputs after applying an authoritative correction.
+- [x] **RECN-01**: Server snapshots tell each client which local input sequence has been authoritatively applied for that recipient.
+- [x] **RECN-02**: Atari client stores pending local inputs and replays only unacknowledged inputs after applying an authoritative correction.
 - [ ] **RECN-03**: Atari local wizard movement remains visually smooth under normal play and corrects by no more than one maze cell when reconciliation is required.
 - [ ] **RECN-04**: Atari client preserves original Maze War movement and turning animation cadence while using client prediction.
 
@@ -80,9 +80,9 @@
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | TRAN-01 | Phase 1 | Complete |
-| TRAN-02 | Phase 1 | Pending |
-| RECN-01 | Phase 2 | Pending |
-| RECN-02 | Phase 2 | Pending |
+| TRAN-02 | Phase 1 | Complete |
+| RECN-01 | Phase 2 | Complete |
+| RECN-02 | Phase 2 | Complete |
 | RECN-03 | Phase 2 | Pending |
 | RECN-04 | Phase 2 | Pending |
 | COMB-01 | Phase 3 | Pending |

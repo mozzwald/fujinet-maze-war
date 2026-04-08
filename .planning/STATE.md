@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in_progress
-stopped_at: Completed 01-transport-normalization-and-observability-01-PLAN.md
-last_updated: "2026-04-08T11:04:14.268Z"
+status: executing
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-04-08T22:14:11.171Z"
 progress:
   total_phases: 6
-  completed_phases: 0
-  total_plans: 2
-  completed_plans: 1
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 4
 ---
 
 # Project State
@@ -19,33 +19,37 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** Phase 01 — transport-normalization-and-observability
+**Current focus:** Phase 02 — reconciliation-contract
 
 ## Current Position
 
-Phase: 01 (transport-normalization-and-observability) — EXECUTING
-Plan: 2 of 2
+Phase: 02 (reconciliation-contract) — EXECUTING
+Plan: 3 of 3
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 1
-- Average duration: 9.0 min
-- Total execution time: 0.2 hours
+- Total plans completed: 4
+- Average duration: 6.0 min
+- Total execution time: 0.3 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 1 | 9.0 min | 9.0 min |
+| 01 | 2 | 15.0 min | 7.5 min |
+| 02 | 2 | 9.4 min | 4.7 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 9.0 min
-- Trend: Stable
+- Last 5 plans: 6.0 min
+- Trend: Improving
 
 | Phase 01-transport-normalization-and-observability P01 | 540 | 2 tasks | 6 files |
+| Phase 01-transport-normalization-and-observability P02 | 359 | 2 tasks | 10 files |
+| Phase 02 P01 | 186 | 2 tasks | 5 files |
+| Phase 02 P02 | 6.3 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -59,6 +63,12 @@ Recent decisions affecting current work:
 - Phase 3: Freeze same-tick combat ordering before presentation-level smoothing work.
 - [Phase 01-transport-normalization-and-observability]: Transport framing repair and DELTA compatibility decoding now live in a dedicated server module before gameplay input mutation.
 - [Phase 01-transport-normalization-and-observability]: Transport regression coverage is anchored on exact server debug acceptance markers for primary, swapped, and extra-41 DELTA variants.
+- [Phase 01-transport-normalization-and-observability]: Transport observability stays server-first: counters live beside the canonical ingress path and are emitted as stable summary lines instead of ad hoc event spam.
+- [Phase 01-transport-normalization-and-observability]: Counter verification is anchored on the real debug server binary, with the stale-sequence case intentionally exercising an extra-41 DELTA so accepted_delta stays distinct from format counters.
+- [Phase 02]: SNAPSHOT keeps one packet type and exposes reconciliation ack state via flags bit7 plus byte 19.
+- [Phase 02]: Server publishes ack_seq from authoritative applied-input progress after each tick instead of transport receipt state.
+- [Phase 02]: Replay runs from NET_STAGE_COMMIT after authoritative state commit instead of a parallel simulation path.
+- [Phase 02]: The Atari client retains an eight-entry pending DELTA ring and discards entries with modulo-256 seq <= ack_seq.
 
 ### Pending Todos
 
@@ -70,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-08T11:04:14.264Z
-Stopped at: Completed 01-transport-normalization-and-observability-01-PLAN.md
+Last session: 2026-04-08T22:14:11.167Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
