@@ -63,6 +63,8 @@ struct client_slot {
   struct transport_counters transport;
   uint8_t have_delta_seq;
   uint8_t last_delta_seq;
+  uint8_t have_applied_input_seq;
+  uint8_t applied_input_seq;
 };
 
 static volatile sig_atomic_t g_running = 1;
@@ -131,6 +133,8 @@ static int find_or_add_client(struct client_slot *clients,
       clients[i].sent_bricks = 0;
       clients[i].have_delta_seq = 0;
       clients[i].last_delta_seq = 0;
+      clients[i].have_applied_input_seq = 0;
+      clients[i].applied_input_seq = 0;
       if (is_new) {
         *is_new = 1;
       }
@@ -146,6 +150,8 @@ static int find_or_add_client(struct client_slot *clients,
       clients[i].sent_bricks = 0;
       clients[i].have_delta_seq = 0;
       clients[i].last_delta_seq = 0;
+      clients[i].have_applied_input_seq = 0;
+      clients[i].applied_input_seq = 0;
       if (is_new) {
         *is_new = 1;
       }
@@ -205,8 +211,8 @@ static void log_transport_summaries(const struct client_slot *clients,
 }
 
 static void build_snapshot(uint8_t seq, const struct player_state *players,
-                           uint8_t *out, size_t out_len) {
-  if (out_len < 19) {
+                           uint8_t ack_seq, uint8_t *out, size_t out_len) {
+  if (out_len < 20) {
     return;
   }
   out[0] = PKT_SNAPSHOT;
@@ -228,6 +234,7 @@ static void build_snapshot(uint8_t seq, const struct player_state *players,
   out[16] = players[1].score;
   out[17] = players[2].score;
   out[18] = players[3].score;
+  out[19] = ack_seq;
 }
 
 static int is_brick(const uint8_t *bricks, int x, int y) {
@@ -1201,23 +1208,35 @@ int main(int argc, char **argv) {
     if (now >= next_tick) {
       step_players(players, shots, brick_bits, sock, clients, &seq, debug,
                    zombies, last_input_ms);
+      for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (!clients[i].have_delta_seq) {
+          continue;
+        }
+        clients[i].applied_input_seq = clients[i].last_delta_seq;
+        clients[i].have_applied_input_seq = 1;
+      }
       uint8_t zombie_mask[MAX_PLAYERS];
       uint8_t zombie_bits = 0;
+      uint8_t snapshot_seq = seq++;
       compute_zombie_mask(clients, zombies, zombie_mask);
       for (int z = 0; z < MAX_PLAYERS; z++) {
         if (zombie_mask[z]) {
           zombie_bits |= (uint8_t)(1u << z);
         }
       }
-      uint8_t pkt[19];
-      build_snapshot(seq++, players, pkt, sizeof(pkt));
+      uint8_t pkt[20];
       for (int i = 0; i < MAX_PLAYERS; i++) {
         if (!clients[i].in_use) {
           continue;
         }
+        build_snapshot(snapshot_seq, players, clients[i].applied_input_seq, pkt,
+                       sizeof(pkt));
         // flags: bit0 valid, bits1..2 recipient pid, bits3..6 zombie-slot mask.
         pkt[2] = (uint8_t)(0x01u | ((uint8_t)i << 1) |
                            ((uint8_t)(zombie_bits & 0x0Fu) << 3));
+        if (clients[i].have_applied_input_seq) {
+          pkt[2] |= 0x80u;
+        }
         ssize_t wn = sendto(sock, pkt, sizeof(pkt), 0,
                             (struct sockaddr *)&clients[i].addr,
                             clients[i].addr_len);

@@ -45,7 +45,7 @@ Valid stick nibbles accepted by server:
 
 ## Packets
 
-### 0x40 SNAPSHOT (19 bytes, S->C)
+### 0x40 SNAPSHOT (20 bytes, S->C)
 
 Sent each server tick (default 10 Hz) to each connected client.
 
@@ -61,17 +61,21 @@ Sent each server tick (default 10 Hz) to each connected client.
 
 [11] p0_joy [12] p1_joy [13] p2_joy [14] p3_joy
 [15] p0_score [16] p1_score [17] p2_score [18] p3_score
+[19] ack_seq
 ```
 
 `flags` bit layout:
 - bit0: valid (always 1 in current server)
 - bits1..2: recipient `pid` (slot id assigned by server)
 - bits3..6: zombie slot bitmask (bit `n` corresponds to slot `n`)
-- bit7: reserved
+- bit7: `ack_valid`
 
 Notes:
 - Clients should treat position/joy/score in snapshots as authoritative.
 - Scores are raw 0..255 values.
+- `ack_seq` is the last local `DELTA` sequence authoritatively applied for the
+  recipient of this snapshot, not merely the latest received DELTA byte stream.
+- When `ack_valid` is clear, byte `[19]` must be ignored.
 
 ### 0x41 DELTA (4 bytes, C->S)
 

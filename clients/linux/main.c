@@ -226,6 +226,13 @@ int main(int argc, char **argv) {
         }
       } else if (n >= 19 && buf[0] == PKT_SNAPSHOT) {
         int snap_pid = (int)((buf[2] >> 1) & 0x03);
+        int ack_valid = (buf[2] & 0x80) != 0;
+        uint8_t ack_seq = 0;
+        if (n >= 20) {
+          ack_seq = buf[19];
+        } else {
+          ack_valid = 0;
+        }
         if (local_pid != snap_pid) {
           local_pid = snap_pid;
           if (debug) {
@@ -248,6 +255,10 @@ int main(int argc, char **argv) {
         players[1].score = buf[16];
         players[2].score = buf[17];
         players[3].score = buf[18];
+        if (debug) {
+          printf("snapshot ack pid=%d ack_valid=%d ack_seq=%u\n", snap_pid,
+                 ack_valid, (unsigned)ack_seq);
+        }
       }
     }
 

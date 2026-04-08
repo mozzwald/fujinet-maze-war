@@ -983,9 +983,17 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
 
   if (n >= 19 && buf[0] == PKT_SNAPSHOT) {
     int pid;
+    int ack_valid;
+    uint8_t ack_seq = 0;
     g->have_snapshot = 1;
     pid = (int)((buf[2] >> 1) & 0x03);
     g->zombie_mask = (uint8_t)((buf[2] >> 3) & 0x0F);
+    ack_valid = (buf[2] & 0x80) != 0;
+    if (n >= 20) {
+      ack_seq = buf[19];
+    } else {
+      ack_valid = 0;
+    }
     if (pid != g->local_pid) {
       g->local_pid = pid;
       if (debug) {
@@ -1011,6 +1019,10 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
     g->players[1].score = buf[16];
     g->players[2].score = buf[17];
     g->players[3].score = buf[18];
+    if (debug) {
+      fprintf(stderr, "snapshot ack pid=%d ack_valid=%d ack_seq=%u\n", pid,
+              ack_valid, (unsigned)ack_seq);
+    }
 
     for (pid = 0; pid < MAX_PLAYERS; pid++) {
       apply_player_snapshot(g, pid, g->players[pid].x, g->players[pid].y,
