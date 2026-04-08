@@ -70,6 +70,7 @@ enum transport_rx_result transport_rx_push_byte(struct transport_rx_state *state
       memmove(&state->buf[0], &state->buf[1], state->idx - 1);
       state->idx--;
       state->need = 4;
+      state->resync_count++;
       return TRANSPORT_RX_NONE;
     }
 
@@ -83,6 +84,18 @@ enum transport_rx_result transport_rx_push_byte(struct transport_rx_state *state
   }
 
   return TRANSPORT_RX_NONE;
+}
+
+uint32_t transport_rx_take_resync_count(struct transport_rx_state *state) {
+  uint32_t count = 0;
+
+  if (!state) {
+    return 0;
+  }
+
+  count = state->resync_count;
+  state->resync_count = 0;
+  return count;
 }
 
 int transport_decode_delta_for_slot(const uint8_t *pkt, size_t len,

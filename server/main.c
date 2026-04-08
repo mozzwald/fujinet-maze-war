@@ -11,6 +11,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "transport_stats.h"
 #include "transport_normalize.h"
 
 enum {
@@ -25,6 +26,7 @@ enum {
 enum { MAX_PLAYERS = 4 };
 enum { CLIENT_TIMEOUT_MS = 60000 };
 enum { INPUT_STALE_MS = 500 };
+enum { TRANSPORT_SUMMARY_MS = 2000 };
 
 #define ZOMBIE_THINK_MS 575
 #define ZOMBIE_MOVE_MS 275
@@ -58,6 +60,7 @@ struct client_slot {
   uint64_t last_seen_ms;
   int sent_bricks;
   struct transport_rx_state rx;
+  struct transport_counters transport;
   uint8_t have_delta_seq;
   uint8_t last_delta_seq;
 };
@@ -66,6 +69,13 @@ static volatile sig_atomic_t g_running = 1;
 
 static void compute_zombie_mask(const struct client_slot *clients, int zombies,
                                 uint8_t *out_mask);
+static void log_transport_summary_if_nonzero(int slot,
+                                             const struct transport_counters *c);
+static void log_transport_summaries(const struct client_slot *clients,
+                                    const struct transport_counters *global);
+static int packet_has_bad_joy_for_slot(const uint8_t *pkt, size_t len,
+                                       uint8_t slot);
+static void reset_client_slot(struct client_slot *client);
 
 static void on_sigint(int sig) {
   (void)sig;
@@ -148,7 +158,15 @@ static int find_or_add_client(struct client_slot *clients,
   return -1;
 }
 
-static void reap_timed_out_clients(struct client_slot *clients, uint64_t now) {
+static void reset_client_slot(struct client_slot *client) {
+  if (!client) {
+    return;
+  }
+  memset(client, 0, sizeof(*client));
+}
+
+static void reap_timed_out_clients(struct client_slot *clients, uint64_t now,
+                                   int debug) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use) {
       continue;
@@ -157,8 +175,33 @@ static void reap_timed_out_clients(struct client_slot *clients, uint64_t now) {
       continue;
     }
     log_client_event("disconnected", i, &clients[i].addr);
-    memset(&clients[i], 0, sizeof(clients[i]));
+    if (debug) {
+      log_transport_summary_if_nonzero(i, &clients[i].transport);
+    }
+    reset_client_slot(&clients[i]);
   }
+}
+
+static void log_transport_summary_if_nonzero(int slot,
+                                             const struct transport_counters *c) {
+  if (!c) {
+    return;
+  }
+  if (c->raw_datagrams == 0 && c->raw_bytes == 0 && c->delta_primary == 0 &&
+      c->delta_swapped == 0 && c->delta_extra_41 == 0 &&
+      c->delta_resync == 0 && c->drop_bad_joy == 0 &&
+      c->drop_stale_seq == 0 && c->accepted_delta == 0) {
+    return;
+  }
+  transport_stats_log_summary(stdout, slot, c);
+}
+
+static void log_transport_summaries(const struct client_slot *clients,
+                                    const struct transport_counters *global) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    log_transport_summary_if_nonzero(i, &clients[i].transport);
+  }
+  log_transport_summary_if_nonzero(-1, global);
 }
 
 static void build_snapshot(uint8_t seq, const struct player_state *players,
@@ -315,6 +358,43 @@ static int delta_seq_is_fresh(struct client_slot *c, uint8_t seq) {
   return 1;
 }
 
+static int sanitize_client_joy(uint8_t raw, uint8_t *out) {
+  uint8_t stick = (uint8_t)(raw & 0x0F);
+  if ((raw & 0xE0) != 0) {
+    return 0;
+  }
+  switch (stick) {
+    case 0x07:
+    case 0x0D:
+    case 0x0B:
+    case 0x0E:
+    case 0x0F:
+      *out = (uint8_t)(raw & 0x1F);
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+static int packet_has_bad_joy_for_slot(const uint8_t *pkt, size_t len,
+                                       uint8_t slot) {
+  uint8_t joy = 0;
+
+  if (!pkt || len < 4 || pkt[0] != PKT_DELTA) {
+    return 0;
+  }
+  if (len == 4 && pkt[2] == slot) {
+    return !sanitize_client_joy(pkt[3], &joy);
+  }
+  if (len == 4 && pkt[1] == slot) {
+    return !sanitize_client_joy(pkt[3], &joy);
+  }
+  if (len == 5 && pkt[1] == PKT_DELTA && pkt[3] == slot) {
+    return !sanitize_client_joy(pkt[4], &joy);
+  }
+  return 0;
+}
+
 static int is_player_at(const struct player_state *players, int x, int y,
                          int ignore_idx) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -367,12 +447,17 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
                                  struct player_state *players, uint8_t *brick_bits,
                                  int sock, struct client_slot *clients,
                                  uint8_t *seq, int debug,
-                                 uint64_t now, uint64_t *last_input_ms) {
+                                 uint64_t now, uint64_t *last_input_ms,
+                                 struct transport_counters *global_transport) {
   if (pkt[0] == PKT_DELTA) {
     uint8_t pid = (uint8_t)slot;
     if (pid < MAX_PLAYERS) {
       struct transport_delta_packet delta;
       if (!transport_decode_delta_for_slot(pkt, len, pid, &delta)) {
+        if (packet_has_bad_joy_for_slot(pkt, len, pid)) {
+          clients[slot].transport.drop_bad_joy++;
+          global_transport->drop_bad_joy++;
+        }
         if (debug) {
           printf("DROP DELTA slot=%d bad-len=%zu", slot, len);
           for (size_t i = 0; i < len; i++) {
@@ -384,7 +469,11 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
         }
         return;
       }
+      transport_stats_note_delta(&clients[slot].transport, delta.format);
+      transport_stats_note_delta(global_transport, delta.format);
       if (!delta_seq_is_fresh(&clients[slot], delta.seq)) {
+        clients[slot].transport.drop_stale_seq++;
+        global_transport->drop_stale_seq++;
         if (debug) {
           printf("DROP DELTA slot=%d stale-seq=%u", slot,
                  (unsigned)delta.seq);
@@ -403,6 +492,8 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
       }
       players[pid].joy = delta.joy;
       last_input_ms[pid] = now;
+      clients[slot].transport.accepted_delta++;
+      global_transport->accepted_delta++;
       if (debug) {
         printf("DELTA slot=%d pid=%u ", slot, pid);
         debug_joy(delta.joy);
@@ -448,7 +539,8 @@ static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
                                  struct player_state *players, uint8_t *brick_bits,
                                  int sock, struct client_slot *clients,
                                  uint8_t *seq, int debug,
-                                 uint64_t now, uint64_t *last_input_ms) {
+                                 uint64_t now, uint64_t *last_input_ms,
+                                 struct transport_counters *global_transport) {
   struct client_slot *c = &clients[slot];
   for (size_t i = 0; i < n; i++) {
     uint8_t pkt[8];
@@ -456,9 +548,15 @@ static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
     enum transport_rx_result result =
         transport_rx_push_byte(&c->rx, (uint8_t)slot, buf[i], pkt,
                                sizeof(pkt), &pkt_len);
+    uint32_t resyncs = transport_rx_take_resync_count(&c->rx);
+    if (resyncs > 0) {
+      c->transport.delta_resync += resyncs;
+      global_transport->delta_resync += resyncs;
+    }
     if (result == TRANSPORT_RX_PACKET && pkt_len > 0) {
       handle_client_packet(slot, pkt, pkt_len, players, brick_bits, sock,
-                           clients, seq, debug, now, last_input_ms);
+                           clients, seq, debug, now, last_input_ms,
+                           global_transport);
     }
   }
 }
@@ -1012,10 +1110,12 @@ int main(int argc, char **argv) {
   struct player_state players[MAX_PLAYERS];
   struct shot_state shots[MAX_PLAYERS];
   uint64_t last_input_ms[MAX_PLAYERS];
+  struct transport_counters global_transport;
   memset(clients, 0, sizeof(clients));
   memset(players, 0, sizeof(players));
   memset(shots, 0, sizeof(shots));
   memset(last_input_ms, 0, sizeof(last_input_ms));
+  memset(&global_transport, 0, sizeof(global_transport));
   uint8_t brick_bits[48];
   if (load_brick_layout(brick_path, brick_bits, sizeof(brick_bits)) != 0) {
     memset(brick_bits, 0, sizeof(brick_bits));
@@ -1037,6 +1137,7 @@ int main(int argc, char **argv) {
 
   uint8_t seq = 0;
   uint64_t next_tick = now_ms();
+  uint64_t last_transport_summary_ms = now_ms();
   const uint64_t tick_ms = 1000ULL / (uint64_t)tick_hz;
 
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1081,14 +1182,20 @@ int main(int argc, char **argv) {
           }
         }
         if (slot >= 0) {
+          transport_stats_note_raw_bytes(&clients[slot].transport, (size_t)n);
+          transport_stats_note_raw_bytes(&global_transport, (size_t)n);
           process_client_bytes(slot, buf, (size_t)n, players, brick_bits, sock,
                                clients, &seq, debug, now,
-                               last_input_ms);
+                               last_input_ms, &global_transport);
         }
       }
     }
 
-    reap_timed_out_clients(clients, now_ms());
+    reap_timed_out_clients(clients, now_ms(), debug);
+    if (debug && now_ms() - last_transport_summary_ms >= TRANSPORT_SUMMARY_MS) {
+      log_transport_summaries(clients, &global_transport);
+      last_transport_summary_ms = now_ms();
+    }
 
     now = now_ms();
     if (now >= next_tick) {
@@ -1122,6 +1229,9 @@ int main(int argc, char **argv) {
     }
   }
 
+  if (debug) {
+    log_transport_summaries(clients, &global_transport);
+  }
   close(sock);
   if (debug) {
     puts("server stopped");

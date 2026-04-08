@@ -21,8 +21,8 @@ $(OUT): $(SRC) | build
 $(NET): $(HANDLER) $(OUT) | build
 	cat $(HANDLER) $(OUT) > $@
 
-$(SERVER): server/main.c server/transport_normalize.c server/transport_normalize.h | build
-	$(CC) -O2 -Wall -Wextra -o $@ server/main.c server/transport_normalize.c
+$(SERVER): server/main.c server/transport_normalize.c server/transport_normalize.h server/transport_stats.c server/transport_stats.h | build
+	$(CC) -O2 -Wall -Wextra -o $@ server/main.c server/transport_normalize.c server/transport_stats.c
 
 $(CLIENT): clients/linux/main.c | build
 	$(CC) -O2 -Wall -Wextra -o $@ $< -lncurses
