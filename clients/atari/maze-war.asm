@@ -1730,16 +1730,22 @@ NLRP_FACE
 	LDY	NET_PEND_HEAD
 	LDA	NET_PEND_COUNT
 	STA	NET_REPLAY_LEFT
+	LDA	#0
+	STA	NET_REPLAY_MOVE
 	BEQ	NLRP_X
 NLRP_LP
 	LDA	NET_PEND_JOY,Y
 	JSR	NET_LOCAL_REPLAY_STEP
+	STA	NET_REPLAY_MOVE
 	INY
 	TYA
 	AND	#$07
 	TAY
 	DEC	NET_REPLAY_LEFT
 	BNE	NLRP_LP
+	LDA	NET_REPLAY_MOVE
+	BEQ	NLRP_X
+	JSR	INITMOVE_STEP
 NLRP_X
 	RTS
 
@@ -1769,17 +1775,26 @@ NET_AUTH_REPOS
 	RTS
 
 NET_LOCAL_REPLAY_STEP
+	STA	NET_RX_TMP
 	JSR	NET_JOYDIRA
 	CMP	#$FF
-	BEQ	NLRS_X
+	BEQ	NLRS_IDLE
 	STA	DIR,X
+	LDA	NET_RX_TMP
+	AND	#$10
+	BNE	NLRS_FACE
 	JSR	NET_AHEAD_FREE
-	BNE	NLRS_BLK
-	JSR	INITMOVE_STEP
+	BNE	NLRS_FACE
+	LDA	#1
 	RTS
-NLRS_BLK
+NLRS_IDLE
+	LDA	NET_RX_TMP
+	AND	#$10
+	BEQ	NLRS_X
+NLRS_FACE
 	JSR	SETSTIL
 NLRS_X
+	LDA	#0
 	RTS
 
 ; commit latest staged respawn packets in VBI context so mainline RX never
@@ -4805,6 +4820,7 @@ NET_DESYNC_CNT	.DS	4
 NET_PEND_HEAD	.DS	1	;oldest pending local input ring index
 NET_PEND_COUNT	.DS	1	;number of pending local inputs retained
 NET_REPLAY_LEFT	.DS	1	;remaining pending inputs to replay
+NET_REPLAY_MOVE	.DS	1	;final replayed local move intent for current commit
 NET_PEND_SEQ	.DS	8	;pending local delta sequence bytes
 NET_PEND_JOY	.DS	8	;pending local delta joy bytes
 ; --- NET remote zombie1 latch ---

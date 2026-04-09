@@ -24,6 +24,7 @@ grep -Eq 'NET_GUARD_MASK' "$asm"
 grep -Eq 'NET_ERASE_MASK' "$asm"
 
 grep -Eq 'NET_LOCAL_REPLAY_PENDING[\$[:space:][:alnum:]_]*' "$asm"
+grep -Eq 'NET_REPLAY_MOVE' "$asm"
 
 if ! sed -n '/^NET_LOCAL_REPLAY_PENDING$/,/^NET_AUTH_REPOS/p' "$asm" | grep -Eq 'JSR[[:space:]]+NET_AUTH_REPOS'; then
   echo "local replay does not use shared authoritative reposition helper" >&2
@@ -62,7 +63,7 @@ if sed -n '/^CKMV_LOC$/,/^CKMVAP/p' "$asm" | grep -Eq 'JMP[[:space:]]+REMOTE_FOL
   exit 1
 fi
 
-if sed -n '/^NET_LOCAL_REPLAY_STEP$/,/^NLRS_BLK/p' "$asm" | grep -Eq 'STA[[:space:]]+LOC[XY],X'; then
+if sed -n '/^NET_LOCAL_REPLAY_STEP$/,/^NET_RESP_COMMIT/p' "$asm" | grep -Eq 'STA[[:space:]]+LOC[XY],X'; then
   echo "replay step writes LOCX/LOCY directly instead of using movement seams" >&2
   exit 1
 fi
