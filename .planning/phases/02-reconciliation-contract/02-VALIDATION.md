@@ -1,9 +1,9 @@
 ---
 phase: 2
 slug: reconciliation-contract
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: complete
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-04-08
 ---
 
@@ -46,6 +46,8 @@ created: 2026-04-08
 | 02-03-02 | 03 | 3 | RECN-03 | smoke/manual Atari checkpoint | `bash tests/reconciliation_snapshot_ack_smoke.sh && bash tests/reconciliation_replay_smoke.sh && bash tests/reconciliation_correction_bound_smoke.sh && make all` | ❌ Wave 0 | ❌ red |
 | 02-04-01 | 04 | 4 | RECN-03 | smoke/build | `bash tests/reconciliation_correction_bound_smoke.sh && bash tests/reconciliation_replay_smoke.sh && make build/maze-war-client` | ❌ Wave 0 | ✅ green |
 | 02-04-02 | 04 | 4 | RECN-03 / RECN-04 | smoke/manual Atari checkpoint | `bash tests/reconciliation_snapshot_ack_smoke.sh && bash tests/reconciliation_replay_smoke.sh && bash tests/reconciliation_correction_bound_smoke.sh && make all` | ❌ Wave 0 | ❌ red |
+| 02-05-01 | 05 | 5 | RECN-04 | smoke/build | `bash tests/reconciliation_fire_input_smoke.sh && bash tests/reconciliation_correction_bound_smoke.sh && bash tests/reconciliation_replay_smoke.sh && make build/maze-war-client` | ❌ Wave 0 | ✅ green |
+| 02-05-02 | 05 | 5 | RECN-03 / RECN-04 | smoke/manual Atari checkpoint | `bash tests/reconciliation_snapshot_ack_smoke.sh && bash tests/reconciliation_replay_smoke.sh && bash tests/reconciliation_correction_bound_smoke.sh && bash tests/reconciliation_fire_input_smoke.sh && make all` | ❌ Wave 0 | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -53,10 +55,10 @@ created: 2026-04-08
 
 ## Wave 0 Requirements
 
-- [ ] `tests/reconciliation_snapshot_ack_smoke.sh` — launches the real server, injects canonical DELTAs, and asserts per-recipient `ack_seq`
-- [ ] `tests/reconciliation_replay_smoke.sh` — drives deterministic local input sequences through Linux client or scripted UDP sender and checks ack discard behavior
-- [ ] `tests/reconciliation_correction_bound_smoke.sh` — exercises stale input and correction paths and enforces bounded divergence markers plus preserved collision hooks for wall/corner replay
-- [ ] Linux debug output for ack state in `clients/linux/main.c` and optionally `clients/linux/sdl_main.c`
+- [x] `tests/reconciliation_snapshot_ack_smoke.sh` — launches the real server, injects canonical DELTAs, and asserts per-recipient `ack_seq`
+- [x] `tests/reconciliation_replay_smoke.sh` — drives deterministic local input sequences through Linux client or scripted UDP sender and checks ack discard behavior
+- [x] `tests/reconciliation_correction_bound_smoke.sh` — exercises stale input and correction paths and enforces bounded divergence markers plus preserved collision hooks for wall/corner replay
+- [x] Linux debug output for ack state in `clients/linux/main.c` and optionally `clients/linux/sdl_main.c`
 
 ---
 
@@ -71,11 +73,11 @@ created: 2026-04-08
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency <= 30s on the focused task-level validation path
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency <= 30s on the focused task-level validation path
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** still failed on 2026-04-08 after the `02-04` retry. The stale sprite ghosting blocker was cleared, walls were respected, and visible correction stayed within about one cell, but RECN-04 was not approved because movement still feels too fast. The checkpoint also surfaced a follow-up gameplay regression: holding fire while steering toward the shot direction can make the local player jump into the next cell and then snap back while firing.
+**Approval:** approved on 2026-04-08 during the `02-05` real Atari/FujiNet rerun after commit `fd98daf`. The automated gate (`bash tests/reconciliation_snapshot_ack_smoke.sh`, `bash tests/reconciliation_replay_smoke.sh`, `bash tests/reconciliation_correction_bound_smoke.sh`, `bash tests/reconciliation_fire_input_smoke.sh`, `make all`) passed, movement and turn cadence were accepted as original-feeling again, holding fire while steering no longer produced the transient one-cell jump/snap-back, and bounded correction/wall respect remained intact.

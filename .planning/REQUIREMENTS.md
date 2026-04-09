@@ -14,8 +14,8 @@
 
 - [x] **RECN-01**: Server snapshots tell each client which local input sequence has been authoritatively applied for that recipient.
 - [x] **RECN-02**: Atari client stores pending local inputs and replays only unacknowledged inputs after applying an authoritative correction.
-- [ ] **RECN-03**: Atari local wizard movement remains visually smooth under normal play and corrects by no more than one maze cell when reconciliation is required.
-- [ ] **RECN-04**: Atari client preserves original Maze War movement and turning animation cadence while using client prediction.
+- [x] **RECN-03**: Atari local wizard movement remains visually smooth under normal play and corrects by no more than one maze cell when reconciliation is required.
+- [x] **RECN-04**: Atari client preserves original Maze War movement and turning animation cadence while using client prediction.
 
 ### Combat
 
@@ -83,8 +83,8 @@
 | TRAN-02 | Phase 1 | Complete |
 | RECN-01 | Phase 2 | Complete |
 | RECN-02 | Phase 2 | Complete |
-| RECN-03 | Phase 2 | Pending |
-| RECN-04 | Phase 2 | Pending |
+| RECN-03 | Phase 2 | Complete |
+| RECN-04 | Phase 2 | Complete |
 | COMB-01 | Phase 3 | Pending |
 | COMB-02 | Phase 3 | Pending |
 | COMB-03 | Phase 3 | Pending |
