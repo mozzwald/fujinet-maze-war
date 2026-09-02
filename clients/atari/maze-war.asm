@@ -1592,8 +1592,9 @@ NET_RX_WAIT	LDA	NET_PARSE_BYTE
 	STA	NET_RX_STATE
 	RTS
 NET_RX_WBRD51
-	LDA	NET_BRICK_DONE
-	BEQ	NET_RX_EXIT
+	; always collect, even before the first full map: NET_RX_51DONE decides
+	; whether to apply. Bailing out here would leave 3 payload bytes to be
+	; misparsed as packet markers.
 	LDA	#$51
 	STA	NET_SNAP_BUF
 	LDA	#1
@@ -1602,8 +1603,9 @@ NET_RX_WBRD51
 	STA	NET_RX_STATE
 	RTS
 NET_RX_WFULL50
-	LDA	NET_BRICK_DONE
-	BNE	NET_RX_EXIT
+	; later BRICK_FULLs are a re-sync, not a duplicate: they repair a map that
+	; drifted from the server because a BRICK_DELTA was lost, and consuming
+	; them keeps 50 bitmap bytes out of the packet-marker scanner.
 	LDA	#$50
 	STA	NET_BRICK_BUF
 	LDA	#1
@@ -2515,6 +2517,8 @@ NBFV_BITOK
 
 ; --- NET brick full apply (type 0x50, 51 bytes) ---
 NET_BRICK_FULL_APPLY
+	LDA	NET_BRICK_DONE	;0 = first sync (write everything),
+	STA	NET_BRICK_RESYNC	;1 = repair (touch only what changed)
 	LDA	# <[NET_BRICK_BUF+3]
 	STA	NET_RX_PTR
 	LDA	# >[NET_BRICK_BUF+3]
@@ -2562,6 +2566,17 @@ NBF_WALL
 	STA	NET_RX_TMP0
 	LDA	#$A0
 NBF_PUT
+	STA	NET_BRICK_GLYPH
+	STY	NET_RX_YSAVE
+	LDA	NET_BRICK_RESYNC
+	BEQ	NBF_WRITE
+	LDY	#0		;repair pass: a cell that already agrees is left
+	JSR	NET_RX_LDA_PTR0	;untouched, so shots drawn over the maze survive
+	CMP	NET_RX_TMP0
+	BEQ	NBF_SKIP
+NBF_WRITE
+	LDY	NET_RX_YSAVE
+	LDA	NET_BRICK_GLYPH
 	JSR	NET_RX_STA_SCRPTR
 	INY
 	JSR	NET_RX_STA_SCRPTR
@@ -2570,6 +2585,10 @@ NBF_PUT
 	LDY	#0
 	LDA	NET_RX_TMP0
 	JSR	NET_RX_STA_PTR0
+	JMP	NBF_MADV
+NBF_SKIP
+	INC	NET_RX_YSAVE	;still step over this cell's two screen bytes
+NBF_MADV
 	INC	NET_RX_PTR0
 	BNE	NBF_MPTR
 	INC	NET_RX_PTR0+1
@@ -2596,7 +2615,9 @@ NBF_BITOK
 	INC	NET_MAP_COL
 	LDA	NET_MAP_COL
 	CMP	#20
-	BCC	NBF_COL
+	BCS	NBF_ROWEND	;cell loop grew past branch range
+	JMP	NBF_COL
+NBF_ROWEND
 	LDA	NET_RX_SCRPTR
 	CLC
 	ADC	#40
@@ -2613,19 +2634,15 @@ NBF_DONE
 
 ; --- NET brick delta apply (type 0x51, 4 bytes) ---
 NET_BRICK_DELTA_APPLY
-	LDA	NET_SNAP_BUF+2	;x
-	CMP	#20
-	BCS	NBRK_X
+	LDA	NET_SNAP_BUF+2	;x: interior only, 1..18
 	BEQ	NBRK_X		;outer wall immutable
 	CMP	#19
-	BEQ	NBRK_X
-	STA	NET_RX_COUNT
-	LDA	NET_SNAP_BUF+3	;y
-	CMP	#19
 	BCS	NBRK_X
+	STA	NET_RX_COUNT
+	LDA	NET_SNAP_BUF+3	;y: interior only, 1..17
 	BEQ	NBRK_X		;outer wall immutable
 	CMP	#18
-	BEQ	NBRK_X
+	BCS	NBRK_X
 	STA	NET_RX_HOLD
 	JSR	NET_RX_MAP_CLRXY
 	JSR	NET_RX_SCREEN_PTR
@@ -5226,6 +5243,8 @@ NET_RESP_WRK	.DS	6	;working copy passed to NET_RESP_APPLY_WRK
 NET_BRICK_IDX	.DS	1	;brick-full collector index
 NET_BRICK_BUF	.DS	51	;brick-full staging buffer
 NET_BRICK_DONE	.DS	1	;set after first full-map sync
+NET_BRICK_RESYNC	.DS	1	;this BRICK_FULL is a repair, not the first sync
+NET_BRICK_GLYPH	.DS	1	;screen glyph staged for the cell being applied
 NET_SHOT_PEND	.DS	1	;bitmask: slot has queued shot update
 NET_SHOT_BUF	.DS	24	;4 * 6-byte latest-shot cache
 NET_SHOT_WRK	.DS	6	;working copy passed to NET_SHOT_APPLY

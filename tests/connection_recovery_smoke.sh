@@ -87,4 +87,32 @@ fi
 grep -A8 -E "^NET_LOCAL_PID_RESET" "$ATARI_SRC" | grep -E "STA[$TAB ]+NET_PEND_COUNT" >/dev/null
 grep -A8 -E "^NET_LOCAL_PID_RESET" "$ATARI_SRC" | grep -E "STA[$TAB ]+NET_PRED_TTL" >/dev/null
 
+# Map self-healing. BRICK_DELTA is sent once and never acknowledged, so a lost
+# one used to desync the client maze permanently: a square drawn blank that
+# still blocks, or drawn solid that is walkable. The server re-broadcasts the
+# full map periodically and the client applies it as a repair.
+grep -E "BRICK_RESYNC_MS" "$SERVER_SRC" >/dev/null
+grep -F "TX brick_full resync" "$SERVER_SRC" >/dev/null
+
+# The client must accept later BRICK_FULLs, not discard them.
+if grep -A3 -E "^NET_RX_WFULL50" "$ATARI_SRC" | grep -E "BNE[$TAB ]+NET_RX_EXIT"; then
+    echo "FAIL: client still ignores BRICK_FULL after the first sync" >&2
+    exit 1
+fi
+# ...and must consume a BRICK_DELTA it will not apply, or its payload bytes get
+# rescanned as packet markers (a stray \$51 clears an arbitrary map cell).
+if grep -A3 -E "^NET_RX_WBRD51" "$ATARI_SRC" | grep -E "BEQ[$TAB ]+NET_RX_EXIT"; then
+    echo "FAIL: client abandons a BRICK_DELTA mid-packet" >&2
+    exit 1
+fi
+
+# A repair must not repaint cells that already agree, or it would flicker the
+# playfield and erase drawn shots every resync.
+grep -E "NET_BRICK_RESYNC" "$ATARI_SRC" >/dev/null
+grep -A8 -E "^NBF_PUT" "$ATARI_SRC" | grep -E "CMP[$TAB ]+NET_RX_TMP0" >/dev/null
+
+# The outer wall is immutable; the old guards compared against 20/19 after a
+# BCS that already excluded those values, so x=0 and y=0 were never rejected.
+grep -A4 -E "^NET_BRICK_DELTA_APPLY" "$ATARI_SRC" | grep -E "BEQ[$TAB ]+NBRK_X" >/dev/null
+
 echo "connection recovery smoke passed"

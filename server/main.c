@@ -35,6 +35,13 @@ enum { MAX_PLAYERS = 4 };
 enum { CLIENT_TIMEOUT_MS = 15000 };
 enum { INPUT_STALE_MS = 500 };
 enum { TRANSPORT_SUMMARY_MS = 2000 };
+/* BRICK_DELTA is sent once and never acknowledged, so a single lost packet
+   used to desync a client's maze from the server for the rest of the match
+   -- visible as a square that is drawn blank but still blocks movement, or
+   drawn solid but is walkable. Re-broadcasting the full map on this period
+   bounds that divergence. Clients treat a later BRICK_FULL as a repair and
+   only redraw cells that actually changed, so this is not a visible redraw. */
+enum { BRICK_RESYNC_MS = 3000 };
 
 #define ZOMBIE_THINK_MS 575
 #define ZOMBIE_MOVE_MS 275
@@ -1311,6 +1318,7 @@ int main(int argc, char **argv) {
   uint8_t seq = 0;
   uint64_t next_tick = now_ms();
   uint64_t last_transport_summary_ms = now_ms();
+  uint64_t last_brick_resync_ms = now_ms();
   const uint64_t tick_ms = 1000ULL / (uint64_t)tick_hz;
 
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1365,6 +1373,16 @@ int main(int argc, char **argv) {
                                clients, &seq, debug, now,
                                last_input_ms, &global_transport);
         }
+      }
+    }
+
+    if (now_ms() - last_brick_resync_ms >= BRICK_RESYNC_MS) {
+      last_brick_resync_ms = now_ms();
+      uint8_t bfull[51];
+      build_brick_full(seq++, brick_bits, bfull, sizeof(bfull));
+      broadcast_packet(sock, clients, bfull, sizeof(bfull));
+      if (debug) {
+        printf("TX brick_full resync -> all clients\n");
       }
     }
 
