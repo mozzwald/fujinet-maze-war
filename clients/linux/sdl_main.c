@@ -5,6 +5,9 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <SDL/SDL.h>
+#ifdef __APPLE__
+#undef main
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -2,7 +2,9 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <fcntl.h>
+#ifdef __linux__
 #include <linux/input.h>
+#endif
 #include <ncurses.h>
 #include <poll.h>
 #include <stdint.h>
@@ -23,6 +25,12 @@ enum {
 };
 
 enum { MAX_PLAYERS = 4 };
+
+#ifdef __linux__
+#define HAVE_EVDEV_INPUT 1
+#else
+#define HAVE_EVDEV_INPUT 0
+#endif
 
 struct player_state {
   uint8_t x;
@@ -98,8 +106,60 @@ static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
 
 static void usage(const char *argv0) {
   fprintf(stderr,
-          "Usage: %s [--host IP] [--port PORT] [--pid N] --input /dev/input/eventX [--debug]\n",
+          "Usage: %s [--host IP] [--port PORT] [--pid N] [--input /dev/input/eventX] [--debug]\n",
           argv0);
+}
+
+static void send_respawn(int sock, const struct sockaddr_in *srv,
+                         uint8_t *seq, int local_pid) {
+  uint8_t pkt[6];
+  pkt[0] = PKT_RESPAWN;
+  pkt[1] = (*seq)++;
+  pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
+  pkt[3] = 0;
+  pkt[4] = 0;
+  pkt[5] = 0;
+  sendto(sock, pkt, sizeof(pkt), 0, (const struct sockaddr *)srv, sizeof(*srv));
+}
+
+static void handle_curses_key(int ch, int *up, int *down, int *left,
+                              int *right, int *fire, int *running,
+                              int sock, const struct sockaddr_in *srv,
+                              uint8_t *seq, int local_pid) {
+  switch (ch) {
+    case KEY_UP:
+    case 'w':
+    case 'W':
+      *up = 1;
+      break;
+    case KEY_DOWN:
+    case 's':
+    case 'S':
+      *down = 1;
+      break;
+    case KEY_LEFT:
+    case 'a':
+    case 'A':
+      *left = 1;
+      break;
+    case KEY_RIGHT:
+    case 'd':
+    case 'D':
+      *right = 1;
+      break;
+    case ' ':
+      *fire = 1;
+      break;
+    case 'r':
+    case 'R':
+      send_respawn(sock, srv, seq, local_pid);
+      break;
+    case 27:
+      *running = 0;
+      break;
+    default:
+      break;
+  }
 }
 
 int main(int argc, char **argv) {
@@ -133,11 +193,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Invalid pid (0..3)\\n");
     return 1;
   }
-  if (!input_path) {
-    fprintf(stderr, "Missing --input /dev/input/eventX\n");
-    return 1;
-  }
-
   int sock = socket(AF_INET, SOCK_DGRAM, 0);
   if (sock < 0) {
     perror("socket");
@@ -154,17 +209,23 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  int evfd = open(input_path, O_RDONLY | O_NONBLOCK);
-  if (evfd < 0) {
-    perror("open evdev");
-    close(sock);
-    return 1;
+  int evfd = -1;
+#if HAVE_EVDEV_INPUT
+  if (input_path) {
+    evfd = open(input_path, O_RDONLY | O_NONBLOCK);
+    if (evfd < 0) {
+      perror("open evdev");
+      close(sock);
+      return 1;
+    }
   }
+#endif
 
   initscr();
   cbreak();
   noecho();
   nodelay(stdscr, TRUE);
+  keypad(stdscr, TRUE);
   curs_set(0);
 
   uint8_t bricks[48];
@@ -181,18 +242,27 @@ int main(int argc, char **argv) {
   uint64_t next_redraw = now_ms();
 
   if (debug) {
-    printf("evdev input: %s\n", input_path);
+    if (evfd >= 0) {
+      printf("evdev input: %s\n", input_path);
+    } else {
+      printf("terminal input\n");
+    }
   }
 
-  while (1) {
+  int running = 1;
+  while (running) {
     struct pollfd pfds[2];
+    nfds_t nfds = 1;
     pfds[0].fd = sock;
     pfds[0].events = POLLIN;
     pfds[0].revents = 0;
-    pfds[1].fd = evfd;
-    pfds[1].events = POLLIN;
-    pfds[1].revents = 0;
-    poll(pfds, 2, 10);
+    if (evfd >= 0) {
+      pfds[1].fd = evfd;
+      pfds[1].events = POLLIN;
+      pfds[1].revents = 0;
+      nfds = 2;
+    }
+    poll(pfds, nfds, 10);
 
     if (pfds[0].revents & POLLIN) {
       uint8_t buf[256];
@@ -262,7 +332,8 @@ int main(int argc, char **argv) {
       }
     }
 
-    if (pfds[1].revents & POLLIN) {
+    if (evfd >= 0 && (pfds[1].revents & POLLIN)) {
+#if HAVE_EVDEV_INPUT
       struct input_event ev;
       ssize_t rd;
       while ((rd = read(evfd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
@@ -306,32 +377,34 @@ int main(int argc, char **argv) {
             break;
           case KEY_ESC:
             if (pressed) {
-              endwin();
-              close(evfd);
-              close(sock);
-              return 0;
+              running = 0;
             }
             break;
           case KEY_R:
             if (pressed) {
-              uint8_t pkt[6];
-              pkt[0] = PKT_RESPAWN;
-              pkt[1] = seq++;
-              pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
-              pkt[3] = 0;
-              pkt[4] = 0;
-              pkt[5] = 0;
-              sendto(sock, pkt, sizeof(pkt), 0,
-                     (struct sockaddr *)&srv, sizeof(srv));
+              send_respawn(sock, &srv, &seq, local_pid);
             }
             break;
           default:
             break;
         }
       }
+#endif
     }
 
     uint64_t now = now_ms();
+
+    if (evfd < 0) {
+      up = down = left = right = fire = 0;
+      while (1) {
+        int ch = getch();
+        if (ch == ERR) {
+          break;
+        }
+        handle_curses_key(ch, &up, &down, &left, &right, &fire, &running,
+                          sock, &srv, &seq, local_pid);
+      }
+    }
 
     uint8_t stick = compute_stick(up, down, left, right);
     uint8_t joy = pack_joy(stick, (uint8_t)fire);
@@ -351,4 +424,11 @@ int main(int argc, char **argv) {
       next_redraw = now + 33;
     }
   }
+
+  endwin();
+  if (evfd >= 0) {
+    close(evfd);
+  }
+  close(sock);
+  return 0;
 }

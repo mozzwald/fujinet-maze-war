@@ -5,8 +5,8 @@ Original game Maze War, by Mark Price, from A.N.A.L.O.G. Magazine #36 (November 
 Networked Maze War with:
 - an authoritative UDP server (`server/main.c`)
 - an Atari client (`clients/atari/maze-war.asm`)
-- a Linux test client (`clients/linux/main.c`)
-- a Linux SDL1 graphics client (`clients/linux/sdl_main.c`)
+- a Linux/macOS terminal test client (`clients/linux/main.c`)
+- a Linux/macOS SDL1 graphics client (`clients/linux/sdl_main.c`)
 
 The packet format is documented in [doc/protocol.md](doc/protocol.md).
 
@@ -15,14 +15,20 @@ The packet format is documented in [doc/protocol.md](doc/protocol.md).
 - `make`
 - `mads` (Atari assembler) in `PATH`
 - `gcc`
-- `ncurses` development package (for Linux client link: `-lncurses`)
-- `SDL 1.2` development package (for SDL graphics client link: `-lSDL`)
+- `ncurses` development package (for terminal client link: `-lncurses`)
+- `SDL 1.2` development package (for SDL graphics client; discovered with `sdl-config` when available)
 
 On Debian/Ubuntu, Linux build deps are typically:
 
 ```bash
 sudo apt install build-essential libncurses-dev
 sudo apt install libsdl1.2-dev
+```
+
+On macOS with Homebrew, the host test clients can be built with:
+
+```bash
+brew install sdl12-compat ncurses
 ```
 
 `mads` is not part of standard distro toolchains; install it separately and
@@ -48,9 +54,9 @@ make build/maze-war-client-sdl
 Output artifacts:
 - `build/maze-war.xex`: raw Atari client program assembled from `maze-war.asm`
 - `build/maze-war-net.xex`: `NSENGINE.OBX` + `maze-war.xex` concatenated
-- `build/maze-war-server`: Linux UDP authoritative server
-- `build/maze-war-client`: Linux ncurses/evdev client
-- `build/maze-war-client-sdl`: Linux SDL1 graphics client
+- `build/maze-war-server`: UDP authoritative server
+- `build/maze-war-client`: terminal client with optional Linux evdev input
+- `build/maze-war-client-sdl`: SDL1 graphics client
 
 Clean:
 
@@ -58,7 +64,7 @@ Clean:
 make clean
 ```
 
-## Linux Server Usage
+## Server Usage
 
 ```text
 build/maze-war-server [--port PORT] [--tick-hz N] [--zombies N] [--brick PATH] [--debug]
@@ -80,35 +86,40 @@ Examples:
 ./build/maze-war-server --port 9000 --tick-hz 15 --zombies 0 --debug
 ```
 
-## Linux Client Usage
+## Terminal Client Usage
 
 ```text
-build/maze-war-client [--host IP] [--port PORT] [--pid N] --input /dev/input/eventX [--debug]
+build/maze-war-client [--host IP] [--port PORT] [--pid N] [--input /dev/input/eventX] [--debug]
 ```
 
 Defaults:
 - `--host 127.0.0.1`
 - `--port 9000`
 - `--pid` optional (server also communicates player id in snapshots)
+- `--input` optional Linux evdev path; when omitted, keyboard input is read from the terminal
 
 Example:
 
 ```bash
+./build/maze-war-client --host 127.0.0.1 --port 9000
+
+# Linux evdev input is still available
 ./build/maze-war-client --host 127.0.0.1 --port 9000 --input /dev/input/event3
 ```
 
-Controls (Linux client):
+Controls (terminal client):
 - Movement: arrow keys, `WASD`, or keypad arrows
 - Fire: `Space`
 - Respawn request: `R`
 - Quit: `Esc`
 
 Notes:
-- Client input uses evdev (`/dev/input/eventX`), not terminal keypress input.
+- On Linux, `--input` uses evdev (`/dev/input/eventX`) for key press/release events.
+- Without `--input`, terminal input is portable but less precise for simultaneous held keys.
 - You may need appropriate permissions for `/dev/input/eventX` (group membership
   or root).
 
-## Linux SDL Client Usage
+## SDL Client Usage
 
 ```text
 build/maze-war-client-sdl [--port PORT] [--host HOST] [--pid N] [--scale N] [--debug]
@@ -126,7 +137,7 @@ Example:
 ./build/maze-war-client-sdl --port 9000 --scale 4
 ```
 
-Controls (Linux SDL client):
+Controls (SDL client):
 - Movement: Arrow keys
 - Fire: `Space`
 - Quit: `Esc`

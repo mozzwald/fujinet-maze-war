@@ -1,5 +1,10 @@
-MADS := mads
-CC := gcc
+MADS ?= mads
+CC ?= gcc
+CFLAGS ?= -O2 -Wall -Wextra
+NCURSES_LIBS ?= -lncurses
+SDL_CONFIG ?= sdl-config
+SDL_CFLAGS ?= $(shell $(SDL_CONFIG) --cflags 2>/dev/null)
+SDL_LIBS ?= $(shell $(SDL_CONFIG) --libs 2>/dev/null || echo -lSDL)
 SRC := clients/atari/maze-war.asm
 OUT := build/maze-war.xex
 HANDLER := NSENGINE.OBX
@@ -34,13 +39,13 @@ $(NET): $(HANDLER) $(OUT) | build
 	cat $(HANDLER) $(OUT) > $@
 
 $(SERVER): server/main.c server/transport_normalize.c server/transport_normalize.h server/transport_stats.c server/transport_stats.h | build
-	$(CC) -O2 -Wall -Wextra -o $@ server/main.c server/transport_normalize.c server/transport_stats.c
+	$(CC) $(CFLAGS) -o $@ server/main.c server/transport_normalize.c server/transport_stats.c
 
 $(CLIENT): clients/linux/main.c | build
-	$(CC) -O2 -Wall -Wextra -o $@ $< -lncurses
+	$(CC) $(CFLAGS) -o $@ $< $(NCURSES_LIBS)
 
 $(CLIENT_SDL): clients/linux/sdl_main.c | build
-	$(CC) -O2 -Wall -Wextra -o $@ $< -lSDL
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $< $(SDL_LIBS)
 
 # Smoke suite. Depends on `all` because several tests exercise the real
 # server binary rather than just grepping sources.
