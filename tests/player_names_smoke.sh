@@ -137,4 +137,29 @@ grep -E "^NET_TX_BUILD_NAME" "$ATARI_SRC" >/dev/null
 # zombie slots keep their ZOMBIE label whatever name is stored
 grep -A5 -E "^NSLBLP" "$ATARI_SRC" | grep -F "ZOMTXT" >/dev/null
 
+# Both Linux clients speak the same NAME contract as the Atari.
+for c in "$ROOT_DIR/clients/linux/main.c" "$ROOT_DIR/clients/linux/sdl_main.c"; do
+    grep -E "PKT_NAME = 0x43" "$c" >/dev/null || {
+        echo "FAIL: $c does not know PKT_NAME" >&2; exit 1; }
+    grep -E "NAME_LEN = 8" "$c" >/dev/null || {
+        echo "FAIL: $c name length disagrees with the HUD field" >&2; exit 1; }
+    # renders the name, falling back to the role label
+    grep -F "name_is_set" "$c" >/dev/null || {
+        echo "FAIL: $c does not fall back to the role label" >&2; exit 1; }
+    grep -F "ZOMBIE" "$c" >/dev/null || {
+        echo "FAIL: $c lost the ZOMBIE label" >&2; exit 1; }
+    # re-sends until the server echoes the name back
+    grep -F "NAME_RESEND_MS" "$c" >/dev/null || {
+        echo "FAIL: $c does not retry its name" >&2; exit 1; }
+done
+
+# Atari: the text fields show where typing lands.
+grep -E "^TXT_CURSOR" "$ATARI_SRC" >/dev/null || {
+    echo "FAIL: no text cursor on the Atari prompts" >&2; exit 1; }
+grep -A2 -E "^HI_LOOP" "$ATARI_SRC" | grep -E "JSR[$TAB ]+TXT_CURSOR" >/dev/null || {
+    echo "FAIL: cursor is not driven from the key wait loop" >&2; exit 1; }
+# leaving a field must not strand a block on it
+grep -A2 -E "^HI_DONE" "$ATARI_SRC" | grep -E "JSR[$TAB ]+TXT_CUROFF" >/dev/null || {
+    echo "FAIL: cursor is left behind when the field loses focus" >&2; exit 1; }
+
 echo "player names smoke passed"

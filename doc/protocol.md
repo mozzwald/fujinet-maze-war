@@ -163,6 +163,8 @@ Behavior:
 - An all-zero or all-space name means unnamed; clients fall back to their
   `WIZARD` label. A slot handoff clears the name with the rest of the slot's
   transient state, so an incoming player never inherits one.
+- Both Linux clients speak the same contract: `--name NAME` on either, and the
+  SDL client also prompts for it alongside the hostname.
 - 8 characters is what the Atari HUD can show: each slot owns columns 4..11 of
   its 20-column line before the score digit at column 15. Zombie slots always
   render `ZOMBIE` regardless of any stored name.

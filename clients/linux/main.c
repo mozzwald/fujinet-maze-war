@@ -19,12 +19,16 @@ enum {
   PKT_SNAPSHOT = 0x40,
   PKT_DELTA = 0x41,
   PKT_SHOT = 0x42,
+  PKT_NAME = 0x43,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52
 };
 
 enum { MAX_PLAYERS = 4 };
+/* Matches the Atari HUD field; the server sanitizes and space-pads. */
+enum { NAME_LEN = 8 };
+enum { NAME_RESEND_MS = 2000 };
 
 #ifdef __linux__
 #define HAVE_EVDEV_INPUT 1
@@ -76,8 +80,21 @@ static uint8_t compute_stick(int up, int down, int left, int right) {
   return stick;
 }
 
+/* A slot the server has no name for shows the role label instead, exactly as
+   the Atari client does. */
+static int name_is_set(const uint8_t *name) {
+  for (int i = 0; i < NAME_LEN; i++) {
+    if (name[i] != 0 && name[i] != ' ') {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
-                        const struct shot_state *shots) {
+                        const struct shot_state *shots,
+                        const uint8_t names[MAX_PLAYERS][NAME_LEN],
+                        uint8_t role_mask, int local_pid) {
   for (int y = 0; y < 19; y++) {
     for (int x = 0; x < 20; x++) {
       int idx = y * 20 + x;
@@ -99,14 +116,31 @@ static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
       mvaddch(y, x, ch);
     }
   }
-  mvprintw(20, 0, "Scores: %u %u %u %u",
-           ps[0].score, ps[1].score, ps[2].score, ps[3].score);
+  for (int p = 0; p < MAX_PLAYERS; p++) {
+    char label[NAME_LEN + 1];
+    if (role_mask & (1u << p)) {
+      snprintf(label, sizeof(label), "ZOMBIE");
+    } else if (name_is_set(names[p])) {
+      memcpy(label, names[p], NAME_LEN);
+      label[NAME_LEN] = '\0';
+      for (int i = NAME_LEN - 1; i >= 0 && label[i] == ' '; i--) {
+        label[i] = '\0';
+      }
+    } else {
+      snprintf(label, sizeof(label), "WIZARD");
+    }
+    mvprintw(20 + p, 0, "%c%d %-*s %3u   ", (p == local_pid) ? '>' : ' ', p,
+             NAME_LEN, label, ps[p].score);
+  }
   refresh();
 }
 
 static void usage(const char *argv0) {
   fprintf(stderr,
-          "Usage: %s [--host IP] [--port PORT] [--pid N] [--input /dev/input/eventX] [--debug]\n",
+          "Usage: %s [--host IP] [--port PORT] [--pid N] [--name NAME] "
+          "[--input /dev/input/eventX] [--debug]\n"
+          "  --name NAME  display name, up to 8 chars. The server folds it to\n"
+          "               A-Z 0-9 space - . and pads it out.\n",
           argv0);
 }
 
@@ -167,6 +201,7 @@ int main(int argc, char **argv) {
   int port = 9000;
   int local_pid = -1;
   const char *input_path = NULL;
+  const char *name = NULL;
   int debug = 0;
 
   for (int i = 1; i < argc; i++) {
@@ -178,6 +213,8 @@ int main(int argc, char **argv) {
       local_pid = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--input") == 0 && i + 1 < argc) {
       input_path = argv[++i];
+    } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
+      name = argv[++i];
     } else if (strcmp(argv[i], "--debug") == 0) {
       debug = 1;
     } else if (strcmp(argv[i], "--help") == 0) {
@@ -234,6 +271,19 @@ int main(int argc, char **argv) {
   memset(players, 0, sizeof(players));
   struct shot_state shots[MAX_PLAYERS];
   memset(shots, 0, sizeof(shots));
+  uint8_t names[MAX_PLAYERS][NAME_LEN];
+  memset(names, 0, sizeof(names));
+  uint8_t role_mask = 0;
+
+  /* Our own name, space-padded the way the wire format wants it. */
+  uint8_t my_name[NAME_LEN];
+  memset(my_name, ' ', sizeof(my_name));
+  if (name) {
+    for (size_t i = 0; i < NAME_LEN && name[i]; i++) {
+      my_name[i] = (uint8_t)name[i];
+    }
+  }
+  uint64_t last_name_send_ms = 0;
 
   uint8_t last_joy = 0xFF;
   int up = 0, down = 0, left = 0, right = 0, fire = 0;
@@ -287,6 +337,11 @@ int main(int argc, char **argv) {
             players[rp].y = buf[4];
           }
         }
+      } else if (n >= 3 + NAME_LEN && buf[0] == PKT_NAME) {
+        uint8_t np = buf[2];
+        if (np < MAX_PLAYERS) {
+          memcpy(names[np], &buf[3], NAME_LEN);
+        }
       } else if (n >= 6 && buf[0] == PKT_SHOT) {
         uint8_t sp = buf[2];
         if (sp < MAX_PLAYERS) {
@@ -296,6 +351,7 @@ int main(int argc, char **argv) {
         }
       } else if (n >= 19 && buf[0] == PKT_SNAPSHOT) {
         int snap_pid = (int)((buf[2] >> 1) & 0x03);
+        role_mask = (uint8_t)((buf[2] >> 3) & 0x0F);
         int ack_valid = (buf[2] & 0x80) != 0;
         uint8_t ack_seq = 0;
         if (n >= 20) {
@@ -406,6 +462,21 @@ int main(int argc, char **argv) {
       }
     }
 
+    /* The server repeats names it knows, but it cannot repeat one it never
+       received, so keep sending until our own slot comes back named. */
+    if (name && now - last_name_send_ms >= NAME_RESEND_MS) {
+      int known = (local_pid >= 0) && name_is_set(names[local_pid]);
+      if (!known) {
+        uint8_t pkt[3 + NAME_LEN];
+        pkt[0] = PKT_NAME;
+        pkt[1] = seq++;
+        pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
+        memcpy(&pkt[3], my_name, NAME_LEN);
+        sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&srv, sizeof(srv));
+      }
+      last_name_send_ms = now;
+    }
+
     uint8_t stick = compute_stick(up, down, left, right);
     uint8_t joy = pack_joy(stick, (uint8_t)fire);
     if (joy != last_joy || (joy != 0x0F && now - last_send_ms > 100)) {
@@ -420,7 +491,7 @@ int main(int argc, char **argv) {
     }
 
     if (now >= next_redraw) {
-      draw_screen(bricks, players, shots);
+      draw_screen(bricks, players, shots, names, role_mask, local_pid);
       next_redraw = now + 33;
     }
   }

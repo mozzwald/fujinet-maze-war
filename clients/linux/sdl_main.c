@@ -20,6 +20,7 @@ enum {
   PKT_SNAPSHOT = 0x40,
   PKT_DELTA = 0x41,
   PKT_SHOT = 0x42,
+  PKT_NAME = 0x43,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52
@@ -28,6 +29,9 @@ enum {
 enum { MAX_PLAYERS = 4 };
 enum { MAZE_W = 20, MAZE_H = 19 };
 enum { HOST_MAX = 63 };
+/* Matches the Atari HUD field; the server sanitizes and space-pads. */
+enum { NAME_LEN = 8 };
+enum { NAME_RESEND_MS = 2000 };
 enum { FX_MAX = 96 };
 
 enum {
@@ -84,6 +88,7 @@ struct game_state {
   struct fx_state fx[FX_MAX];
   int fx_cursor;
   uint8_t zombie_mask;
+  uint8_t names[MAX_PLAYERS][NAME_LEN];
   int local_pid;
   int have_snapshot;
 };
@@ -237,6 +242,17 @@ static void fill_rect(SDL_Surface *screen, int x, int y, int w, int h, Uint32 co
   r.w = (Uint16)w;
   r.h = (Uint16)h;
   SDL_FillRect(screen, &r, color);
+}
+
+/* A slot the server has no name for shows the role label instead. */
+static int name_is_set(const uint8_t *name) {
+  int i;
+  for (i = 0; i < NAME_LEN; i++) {
+    if (name[i] != 0 && name[i] != ' ') {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 static int glyph_for_char(char ch, uint8_t out[7]) {
@@ -661,8 +677,24 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
     int row_y = l->hud_y + (i * l->line_h);
     int role_x = l->board_x + (4 * l->text_scale);
     int score_x = l->board_x + (l->board_w - (20 * l->text_scale));
-    const char *role = (g->zombie_mask & (1u << i)) ? "ZOMBIE" : "WIZARD";
+    char label[NAME_LEN + 1];
+    const char *role;
     Uint32 color = theme->player_colors[i];
+    if (g->zombie_mask & (1u << i)) {
+      role = "ZOMBIE";
+    } else if (name_is_set(g->names[i])) {
+      memcpy(label, g->names[i], NAME_LEN);
+      label[NAME_LEN] = '\0';
+      {
+        int t;
+        for (t = NAME_LEN - 1; t >= 0 && label[t] == ' '; t--) {
+          label[t] = '\0';
+        }
+      }
+      role = label;
+    } else {
+      role = "WIZARD";
+    }
     draw_text(screen, role_x, row_y, role, l->text_scale, color);
     snprintf(line, sizeof(line), "%3u", g->players[i].score);
     draw_text(screen, score_x, row_y, line, l->text_scale, color);
@@ -684,13 +716,15 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
 
 static void render_prompt(SDL_Surface *screen, const struct layout *l,
                           const struct theme *theme, const char *host,
-                          const char *msg, uint64_t now) {
+                          const char *name, int field, const char *msg,
+                          uint64_t now) {
   int box_w = l->board_w - (8 * l->scale);
   int box_h = l->board_h / 3;
   int box_x = l->board_x + (4 * l->scale);
   int box_y = l->board_y + (l->board_h / 3);
   int blink = ((now / 450ULL) & 1ULL) ? 1 : 0;
-  char host_line[HOST_MAX + 4];
+  char host_line[HOST_MAX + 8];
+  char name_line[NAME_LEN + 10];
 
   clear_screen(screen, theme);
   draw_checker_tile(screen, l->board_x, l->board_y, l->board_w, l->board_h,
@@ -705,13 +739,22 @@ static void render_prompt(SDL_Surface *screen, const struct layout *l,
   draw_text(screen, box_x + (6 * l->scale), box_y + (14 * l->scale),
             "ENTER HOSTNAME", l->text_scale, theme->text_green);
 
-  snprintf(host_line, sizeof(host_line), "HOST: %s%s", host, blink ? "_" : " ");
+  snprintf(host_line, sizeof(host_line), "HOST: %s%s", host,
+           (field == 0 && blink) ? "_" : " ");
   draw_text(screen, box_x + (6 * l->scale), box_y + (24 * l->scale),
-            host_line, l->text_scale, theme->white);
+            host_line, l->text_scale,
+            (field == 0) ? theme->white : theme->text_blue);
 
-  draw_text(screen, box_x + (6 * l->scale), box_y + (33 * l->scale),
-            "ENTER TO CONNECT", l->text_scale - 1, theme->text_blue);
+  snprintf(name_line, sizeof(name_line), "NAME: %s%s", name,
+           (field == 1 && blink) ? "_" : " ");
+  draw_text(screen, box_x + (6 * l->scale), box_y + (31 * l->scale),
+            name_line, l->text_scale,
+            (field == 1) ? theme->white : theme->text_blue);
+
   draw_text(screen, box_x + (6 * l->scale), box_y + (39 * l->scale),
+            (field == 0) ? "ENTER FOR NAME" : "ENTER TO CONNECT",
+            l->text_scale - 1, theme->text_blue);
+  draw_text(screen, box_x + (6 * l->scale), box_y + (45 * l->scale),
             "ESC TO QUIT", l->text_scale - 1, theme->text_blue);
 
   if (msg && msg[0]) {
@@ -722,9 +765,11 @@ static void render_prompt(SDL_Surface *screen, const struct layout *l,
 
 static int host_prompt_loop(SDL_Surface *screen, const struct layout *l,
                             const struct theme *theme, char *host,
-                            size_t host_len, const char *msg) {
+                            size_t host_len, char *name, size_t name_len,
+                            const char *msg) {
   int done = 0;
   int accepted = 0;
+  int field = 0; /* 0 = host, 1 = name */
   uint64_t next_frame = now_ms();
   while (!done) {
     SDL_Event ev;
@@ -739,26 +784,38 @@ static int host_prompt_loop(SDL_Surface *screen, const struct layout *l,
           return 0;
         }
         if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-          if (host[0] != '\0') {
+          if (field == 0) {
+            if (host[0] != '\0') {
+              field = 1; /* the name may be left empty */
+            }
+          } else {
             accepted = 1;
             done = 1;
           }
           continue;
         }
-        if (key == SDLK_BACKSPACE) {
-          size_t n = strlen(host);
-          if (n > 0) {
-            host[n - 1] = '\0';
-          }
+        if (key == SDLK_TAB) {
+          field = field ? 0 : 1;
           continue;
         }
-        if (uni >= 32 && uni < 127) {
-          char ch = (char)uni;
-          size_t n = strlen(host);
-          if (isalnum((unsigned char)ch) || ch == '.' || ch == '-') {
-            if (n + 1 < host_len) {
-              host[n] = ch;
-              host[n + 1] = '\0';
+        {
+          char *buf = (field == 0) ? host : name;
+          size_t cap = (field == 0) ? host_len : name_len;
+          if (key == SDLK_BACKSPACE) {
+            size_t n = strlen(buf);
+            if (n > 0) {
+              buf[n - 1] = '\0';
+            }
+            continue;
+          }
+          if (uni >= 32 && uni < 127) {
+            char ch = (char)uni;
+            size_t n = strlen(buf);
+            if (isalnum((unsigned char)ch) || ch == '.' || ch == '-') {
+              if (n + 1 < cap) {
+                buf[n] = ch;
+                buf[n + 1] = '\0';
+              }
             }
           }
         }
@@ -766,7 +823,7 @@ static int host_prompt_loop(SDL_Surface *screen, const struct layout *l,
     }
 
     if (now_ms() >= next_frame) {
-      render_prompt(screen, l, theme, host, msg, now_ms());
+      render_prompt(screen, l, theme, host, name, field, msg, now_ms());
       SDL_Flip(screen);
       next_frame = now_ms() + 16;
     }
@@ -930,6 +987,14 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
     return;
   }
 
+  if (n >= 3 + NAME_LEN && buf[0] == PKT_NAME) {
+    uint8_t np = buf[2];
+    if (np < MAX_PLAYERS) {
+      memcpy(g->names[np], &buf[3], NAME_LEN);
+    }
+    return;
+  }
+
   if (n >= 6 && buf[0] == PKT_SHOT) {
     int pid = buf[2];
     if (pid >= 0 && pid < MAX_PLAYERS) {
@@ -1076,7 +1141,9 @@ static uint8_t compute_stick(const struct input_state *in) {
 
 static void usage(const char *argv0) {
   fprintf(stderr,
-          "Usage: %s [--port PORT] [--host HOST] [--pid N] [--scale N] [--debug]\n",
+          "Usage: %s [--port PORT] [--host HOST] [--pid N] [--name NAME] "
+          "[--scale N] [--debug]\n"
+          "  --name NAME  display name, up to 8 chars; also promptable at start\n",
           argv0);
 }
 
@@ -1086,6 +1153,9 @@ int main(int argc, char **argv) {
   int opt_pid = -1;
   int scale = 4;
   char host[HOST_MAX + 1] = "127.0.0.1";
+  char name[NAME_LEN + 1] = "";
+  uint8_t my_name[NAME_LEN];
+  uint64_t last_name_send_ms = 0;
   char prompt_msg[128] = "";
   int sock = -1;
   struct sockaddr_in server_addr;
@@ -1112,6 +1182,9 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
       strncpy(host, argv[++i], HOST_MAX);
       host[HOST_MAX] = '\0';
+    } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
+      strncpy(name, argv[++i], NAME_LEN);
+      name[NAME_LEN] = '\0';
     } else if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
       opt_pid = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--scale") == 0 && i + 1 < argc) {
@@ -1156,7 +1229,8 @@ int main(int argc, char **argv) {
   theme_init(screen, &theme);
 
   while (1) {
-    if (!host_prompt_loop(screen, &layout, &theme, host, sizeof(host), prompt_msg)) {
+    if (!host_prompt_loop(screen, &layout, &theme, host, sizeof(host), name,
+                          sizeof(name), prompt_msg)) {
       return 0;
     }
     if (resolve_host(host, port, &server_addr) == 0) {
@@ -1173,6 +1247,14 @@ int main(int argc, char **argv) {
 
   game.local_pid = opt_pid;
   game.zombie_mask = 0;
+  memset(game.names, 0, sizeof(game.names));
+  memset(my_name, ' ', sizeof(my_name));
+  {
+    size_t i;
+    for (i = 0; i < NAME_LEN && name[i]; i++) {
+      my_name[i] = (uint8_t)name[i];
+    }
+  }
 
   if (debug) {
     char ip[INET_ADDRSTRLEN] = "";
@@ -1232,6 +1314,21 @@ int main(int argc, char **argv) {
         break;
       }
       handle_packet(&game, buf, n, now, debug);
+    }
+
+    /* The server repeats names it knows, but it cannot repeat one it never
+       received, so keep sending until our own slot comes back named. */
+    if (name[0] && (now - last_name_send_ms) >= NAME_RESEND_MS) {
+      int known = (game.local_pid >= 0) && name_is_set(game.names[game.local_pid]);
+      if (!known) {
+        uint8_t pkt[3 + NAME_LEN];
+        pkt[0] = PKT_NAME;
+        pkt[1] = seq++;
+        pkt[2] = (uint8_t)((game.local_pid >= 0) ? game.local_pid : 0);
+        memcpy(&pkt[3], my_name, NAME_LEN);
+        sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+      }
+      last_name_send_ms = now;
     }
 
     {
