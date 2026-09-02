@@ -24,7 +24,15 @@ enum {
 };
 
 enum { MAX_PLAYERS = 4 };
-enum { CLIENT_TIMEOUT_MS = 60000 };
+/* A slot must be released fast enough that a reconnecting player does not
+   sit beside their own ghost -- FujiNet picks a fresh UDP source port every
+   time it reopens the stream, so a reconnect always lands in a new slot and
+   the old one lingers until it times out. It must also survive the longest
+   legitimate quiet stretch: clients are not required to send continuously,
+   and only speak when they act. 15s is ~150 missed packets from the 10Hz
+   Atari client, and sits just past the client's own ~13s give-up watchdog,
+   so the slot frees shortly after the client has stopped sending. */
+enum { CLIENT_TIMEOUT_MS = 15000 };
 enum { INPUT_STALE_MS = 500 };
 enum { TRANSPORT_SUMMARY_MS = 2000 };
 
@@ -78,6 +86,9 @@ static void log_transport_summaries(const struct client_slot *clients,
 static int packet_has_bad_joy_for_slot(const uint8_t *pkt, size_t len,
                                        uint8_t slot);
 static void reset_client_slot(struct client_slot *client);
+static void reset_slot_gameplay(int slot, struct player_state *players,
+                                struct shot_state *shots,
+                                uint64_t *last_input_ms, uint64_t now);
 
 static void on_sigint(int sig) {
   (void)sig;
@@ -172,7 +183,9 @@ static void reset_client_slot(struct client_slot *client) {
 }
 
 static void reap_timed_out_clients(struct client_slot *clients, uint64_t now,
-                                   int debug) {
+                                   int debug, struct player_state *players,
+                                   struct shot_state *shots,
+                                   uint64_t *last_input_ms) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use) {
       continue;
@@ -185,6 +198,9 @@ static void reap_timed_out_clients(struct client_slot *clients, uint64_t now,
       log_transport_summary_if_nonzero(i, &clients[i].transport);
     }
     reset_client_slot(&clients[i]);
+    /* The slot falls back to AI control on the next tick, so hand the zombie a
+       clean actor rather than the departed human's leftover state. */
+    reset_slot_gameplay(i, players, shots, last_input_ms, now);
   }
 }
 
@@ -298,6 +314,22 @@ static void build_shot(uint8_t seq, uint8_t pid, uint8_t x, uint8_t y,
   out[3] = x;
   out[4] = y;
   out[5] = active;
+}
+
+static void debug_combat_order(int debug, const char *phase, int slot,
+                               const char *detail) {
+  if (!debug) {
+    return;
+  }
+  printf("combat order phase=%s slot=%d %s\n", phase, slot, detail);
+}
+
+static void debug_combat_event(int debug, const char *kind, int slot,
+                               const char *detail) {
+  if (!debug) {
+    return;
+  }
+  printf("combat event kind=%s slot=%d %s\n", kind, slot, detail);
 }
 
 static uint8_t shot_active_flags(const struct shot_state *s) {
@@ -437,6 +469,42 @@ static void pick_spawn(const uint8_t *bricks, const struct player_state *players
   }
   *out_x = 0;
   *out_y = 0;
+}
+
+/* Give a slot a clean actor when it changes hands in either direction: human
+   takes over a zombie, or a human drops and the zombie backfills. Without this
+   the new owner inherits the old one's facing, score and in-flight shot -- the
+   ghost-shot / stale-facing class of bug.
+
+   The actor is deliberately NOT moved. Its position is the slot's current
+   physical location, not stale state: the wizard becomes a zombie (or vice
+   versa) where it stands, exactly as the original game does. Teleporting on
+   handoff would also make every other client see an unexplained jump.
+   respawn_at_ms is likewise left alone, so a handoff that lands mid-death lets
+   the normal respawn finalizer complete and re-show the actor on clients. */
+static void reset_slot_gameplay(int slot, struct player_state *players,
+                                struct shot_state *shots,
+                                uint64_t *last_input_ms, uint64_t now) {
+  if (slot < 0 || slot >= MAX_PLAYERS) {
+    return;
+  }
+  /* A shot in flight belongs to whoever fired it. Retire it with the same
+     clear burst a normal shot end uses, so clients erase it instead of leaving
+     it painted and crediting it to the slot's new owner. */
+  if (shots[slot].active) {
+    shots[slot].active = 0;
+    shots[slot].clear_burst = 3;
+  }
+  players[slot].joy = 0x0F; /* neutral: no inherited facing or movement */
+  players[slot].score = 0;
+  players[slot].zombie_fire_pending = 0;
+  /* Zombie schedules are absolute timestamps. A stale one is already in the
+     past, which would make the backfilled zombie think, move and fire on its
+     very first tick instead of settling into its normal cadence. */
+  players[slot].zombie_think_next_ms = now;
+  players[slot].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
+  players[slot].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
+  last_input_ms[slot] = 0;
 }
 
 static void broadcast_packet(int sock, struct client_slot *clients,
@@ -768,6 +836,13 @@ static void start_shot(int shooter, struct player_state *players,
   if (!trig || !stick_to_cardinal_delta(stick, &dx, &dy)) {
     return;
   }
+  if (debug) {
+    char detail[96];
+    snprintf(detail, sizeof(detail), "pos=%u,%u joy=%02X dir=%d,%d",
+             (unsigned)players[shooter].x, (unsigned)players[shooter].y,
+             (unsigned)joy, dx, dy);
+    debug_combat_order(debug, "fire-eval", shooter, detail);
+  }
   int sx = (int)players[shooter].x + dx;
   int sy = (int)players[shooter].y + dy;
   if (is_brick(bricks, sx, sy)) {
@@ -778,6 +853,11 @@ static void start_shot(int shooter, struct player_state *players,
       broadcast_packet(sock, clients, pkt, sizeof(pkt));
       if (debug) {
         printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
+        {
+          char detail[96];
+          snprintf(detail, sizeof(detail), "phase=fire-eval x=%d y=%d", sx, sy);
+          debug_combat_event(debug, "brick-break", shooter, detail);
+        }
       }
     }
     return;
@@ -810,6 +890,11 @@ static void start_shot(int shooter, struct player_state *players,
         }
         if (debug) {
           printf("TX immediate hit shooter=%d victim=%d\n", shooter, p);
+          {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "victim=%d x=%d y=%d", p, sx, sy);
+            debug_combat_event(debug, "immediate-hit", shooter, detail);
+          }
         }
         return;
       }
@@ -822,6 +907,11 @@ static void start_shot(int shooter, struct player_state *players,
   shots[shooter].dx = (int8_t)dx;
   shots[shooter].dy = (int8_t)dy;
   shots[shooter].clear_burst = 0;
+  if (debug) {
+    char detail[96];
+    snprintf(detail, sizeof(detail), "x=%d y=%d dir=%d,%d", sx, sy, dx, dy);
+    debug_combat_event(debug, "shot-spawn", shooter, detail);
+  }
 }
 
 static void step_shots(struct player_state *players, struct shot_state *shots,
@@ -851,6 +941,11 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
         broadcast_packet(sock, clients, pkt, sizeof(pkt));
         if (debug) {
           printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
+          {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "phase=shot-step x=%d y=%d", nx, ny);
+            debug_combat_event(debug, "brick-break", i, detail);
+          }
         }
       }
       shots[i].active = 0;
@@ -875,6 +970,11 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
         broadcast_packet(sock, clients, pkt, sizeof(pkt));
         if (debug) {
           printf("TX respawn pending pid=%u\n", (unsigned)p);
+          {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "victim=%d x=%d y=%d", p, nx, ny);
+            debug_combat_event(debug, "moving-hit", i, detail);
+          }
         }
         shots[i].active = 0;
         shots[i].clear_burst = 3;
@@ -892,6 +992,12 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
                  shot_active_flags(&shots[i]),
                  spkt, sizeof(spkt));
       broadcast_packet(sock, clients, spkt, sizeof(spkt));
+      if (debug) {
+        char detail[96];
+        snprintf(detail, sizeof(detail), "x=%d y=%d dir=%d,%d",
+                 nx, ny, (int)shots[i].dx, (int)shots[i].dy);
+        debug_combat_order(debug, "shot-step", i, detail);
+      }
     }
   next_shot:
     ;
@@ -914,6 +1020,14 @@ static void step_players(struct player_state *players, struct shot_state *shots,
                          struct client_slot *clients, uint8_t *seq,
                          int debug, int zombies,
                          const uint64_t *last_input_ms) {
+  /* Same-tick authoritative combat/world order:
+   * 1. Finalize expired respawns.
+   * 2. Select authoritative joy/facing for this tick.
+   * 3. Evaluate fire from the current authoritative actor position.
+   * 4. If trigger+directional fire is present, suppress same-tick movement.
+   * 5. Otherwise apply one authoritative movement step.
+   * 6. Step active shots and publish any hit/brick/clear outcomes.
+   */
   uint64_t now = now_ms();
   uint8_t zombie_mask[MAX_PLAYERS];
   uint8_t human_mask[MAX_PLAYERS];
@@ -953,6 +1067,12 @@ static void step_players(struct player_state *players, struct shot_state *shots,
       broadcast_packet(sock, clients, pkt, sizeof(pkt));
       if (debug) {
         printf("TX respawn pid=%u x=%u y=%u\n", (unsigned)i, sx, sy);
+        {
+          char detail[96];
+          snprintf(detail, sizeof(detail), "x=%u y=%u",
+                   (unsigned)sx, (unsigned)sy);
+          debug_combat_order(debug, "respawn-finalize", i, detail);
+        }
       }
     }
   }
@@ -987,10 +1107,30 @@ static void step_players(struct player_state *players, struct shot_state *shots,
       start_shot(i, players, shots, bricks, sock, clients, seq, action_joy,
                  debug);
       if (can_move && !(trig && stick != 0x0F)) {
+        uint8_t before_x = players[i].x;
+        uint8_t before_y = players[i].y;
         apply_move_if_free(&players[i], bricks, players, i);
+        if (debug) {
+          char detail[96];
+          if (players[i].x != before_x || players[i].y != before_y) {
+            snprintf(detail, sizeof(detail), "to=%u,%u",
+                     (unsigned)players[i].x, (unsigned)players[i].y);
+            debug_combat_order(debug, "move-apply", i, detail);
+          } else {
+            snprintf(detail, sizeof(detail), "at=%u,%u",
+                     (unsigned)before_x, (unsigned)before_y);
+            debug_combat_order(debug, "move-blocked", i, detail);
+          }
+        }
         if (zombie_mask[i]) {
           players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
         }
+      } else if (debug && can_move && trig && stick != 0x0F) {
+        char detail[96];
+        snprintf(detail, sizeof(detail), "reason=directional-fire pos=%u,%u joy=%02X",
+                 (unsigned)players[i].x, (unsigned)players[i].y,
+                 (unsigned)action_joy);
+        debug_combat_order(debug, "move-gate", i, detail);
       }
     }
   }
@@ -1047,7 +1187,12 @@ static int load_brick_layout(const char *path, uint8_t *bits, size_t bits_len) {
 
 static void usage(const char *argv0) {
   fprintf(stderr,
-          "Usage: %s [--port PORT] [--tick-hz N] [--zombies N] [--brick PATH] [--debug]\n",
+          "Usage: %s [--port PORT] [--bind ADDR] [--tick-hz N] [--zombies N] [--brick PATH] [--debug]\n"
+          "  --bind ADDR  bind a specific address instead of all interfaces.\n"
+          "               When FujiNet-PC runs on this host it wants the same\n"
+          "               netstream port. Start this server first and it keeps\n"
+          "               the port; otherwise bind a loopback alias the client\n"
+          "               targets directly, e.g. --bind 127.0.0.2\n",
           argv0);
 }
 
@@ -1057,10 +1202,13 @@ int main(int argc, char **argv) {
   int debug = 0;
   int zombies = 1;
   const char *brick_path = "server/brick_layout.txt";
+  const char *bind_addr = NULL;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
       port = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--bind") == 0 && i + 1 < argc) {
+      bind_addr = argv[++i];
     } else if (strcmp(argv[i], "--tick-hz") == 0 && i + 1 < argc) {
       tick_hz = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--zombies") == 0 && i + 1 < argc) {
@@ -1098,17 +1246,35 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  int one = 1;
-  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  /* Deliberately no SO_REUSEADDR: UDP has no TIME_WAIT to work around, and
+     without it the kernel refuses a second bind to this address/port. That
+     matters because FujiNet-PC's netstream also binds the destination port
+     locally, and when both sockets are allowed to share it the client's
+     datagrams are silently swallowed instead of reaching the game. Failing
+     the bind is what turns that into a visible error. */
 
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   addr.sin_port = htons((uint16_t)port);
+  if (bind_addr != NULL) {
+    if (inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) {
+      fprintf(stderr, "Invalid --bind address: %s\n", bind_addr);
+      close(sock);
+      return 1;
+    }
+  }
 
   if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     perror("bind");
+    fprintf(stderr,
+            "Could not bind %s:%d. Another process already holds that port -- "
+            "on a host also running FujiNet-PC this is usually its netstream "
+            "socket. Start the server before the client opens a stream, or "
+            "bind a loopback alias the client targets directly "
+            "(--bind 127.0.0.2).\n",
+            bind_addr ? bind_addr : "0.0.0.0", port);
     close(sock);
     return 1;
   }
@@ -1179,6 +1345,10 @@ int main(int argc, char **argv) {
         }
         if (slot >= 0 && is_new) {
           log_client_event("connected", slot, &clients[slot].addr);
+          /* Clear the slot before the newcomer is told about the world, so the
+             brick/snapshot state it receives already describes its own actor
+             and not the zombie it just displaced. */
+          reset_slot_gameplay(slot, players, shots, last_input_ms, now);
           uint8_t bfull[51];
           build_brick_full(seq++, brick_bits, bfull, sizeof(bfull));
           sendto(sock, bfull, sizeof(bfull), 0,
@@ -1198,7 +1368,8 @@ int main(int argc, char **argv) {
       }
     }
 
-    reap_timed_out_clients(clients, now_ms(), debug);
+    reap_timed_out_clients(clients, now_ms(), debug, players, shots,
+                           last_input_ms);
     if (debug && now_ms() - last_transport_summary_ms >= TRANSPORT_SUMMARY_MS) {
       log_transport_summaries(clients, &global_transport);
       last_transport_summary_ms = now_ms();

@@ -12,10 +12,11 @@ This roadmap follows the dependency chain identified in research: normalize tran
 
 - [x] **Phase 1: Transport Normalization and Observability** - Canonicalize packet ingress so transport bugs stop masquerading as gameplay bugs.
 - [x] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded. Final real-Atari verification approved the cadence/fire-direction replay fix and closed RECN-01 through RECN-04.
-- [ ] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients.
-- [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors.
-- [ ] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects.
-- [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow.
+- [ ] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients. All three plans are code-complete with green smokes; only the human mixed-session checkpoint remains, and Phase 3.1 closing has unblocked it.
+- [x] **Phase 3.1: Netstream Handler Refresh and POKEY Channel Isolation (INSERTED)** - Update to the latest netstream handler (built from source) and remap all sound to POKEY channels 1+2 so the game can never corrupt the handler's channel 3+4 baud timer. See `ref/net-fix-plan.md` for full analysis. Completed 2026-09-02; all four criteria verified (see STATE.md).
+- [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors. Reordered after Phase 5: presentation polish, needed for release but not for reliable play.
+- [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff still wanted.
+- [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow. A minimal validation pass (scripted emulator sessions including join/leave handoff) runs after Phase 5; full hardening runs after Phase 4.
 
 ## Phase Details
 
@@ -58,11 +59,30 @@ Plans:
   2. Repeating the same move-then-fire or turn-then-fire input sequence on Atari and Linux produces the same visible shot behavior and gameplay outcome.
   3. Hits, deaths, respawns, and score changes visible on clients match the server-authoritative outcome rather than diverging by client.
   4. Wall and brick interactions used for movement and line-of-fire checks stay consistent across Atari, Linux, and server simulation.
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [x] `03-01-PLAN.md` — Freeze the authoritative same-tick combat/world contract on the server, document it in the protocol, and add server smoke coverage for ordering plus world outcomes.
+- [x] `03-02-PLAN.md` — Align Atari shot/respawn/score consumption to the visible authoritative actor state so bullet origin and death/respawn presentation stay server-true.
+- [x] `03-03-PLAN.md` — Align Linux combat/world packet interpretation, extend parity coverage, and finish with the mixed Atari/Linux approval checkpoint. Code complete, smokes green; the human mixed-session approval checkpoint is still pending and is deferred until Phase 3.1 lands, since the channel 3/4 baud-timer corruption fixed there may explain earlier hardware symptoms.
+
+### Phase 3.1: Netstream Handler Refresh and POKEY Channel Isolation (INSERTED)
+**Goal**: The game runs the latest netstream handler built from source, and no game code can disturb the handler's POKEY serial configuration (channels 3+4 joined baud timer, AUDCTL, SKCTL) after netstream init.
+**Depends on**: Phase 3 code (inserted before the Phase 3 human checkpoint)
+**Requirements**: Supports COMB-01..04 and VALD-03 indirectly (transport integrity under sound activity)
+**Reference**: `ref/net-fix-plan.md` (full exploration findings, site-by-site remap list, memory-map analysis)
+**Success Criteria** (what must be TRUE):
+  1. `build/maze-war-net.xex` embeds a handler built from `../fujinet-atari-netstream` source (path overridable via `NETSTREAM_DIR`), including the `NS_InitNetstream` c_sp-leak fix and the RX IRQ overrun/error-latch fix; the checked-in `NSENGINE.OBX` fallback is refreshed to match.
+  2. Netstream clock config remains TX external / RX internal (`NET_FLAGS = $04` — verified already correct).
+  3. After `NS_INIT`, the game never writes AUDF3/AUDF4/AUDC3/AUDC4/AUDCTL/SKCTL. In particular `MOVSND` (the live bug: walk sound for slots 2/3 writes the handler's AUDF3/AUDF4 baud divisor every frame) routes through a channel 1+2 allocator: local player owns channel 1, remotes share channel 2 last-writer-wins with owner-checked silencing.
+  4. During a soak with zombies walking in slots 2/3, POKEY shows AUDCTL=$28 and handler-programmed AUDF3/AUDF4 throughout, and the new sticky `NS_GetStatus` error byte stays clear.
+**Plans**: 2 plans
+Plans:
+- [x] `03.1-01` — Build the handler from the netstream source repo in the game Makefile (with checked-in OBX fallback), refresh `NSENGINE.OBX`, and add minimal `NS_GetStatus` error-latch observability to `NET_POLL`. Implemented 2026-07-19. Verified 2026-09-02: the from-source rule reproduces the checked-in OBX byte for byte.
+- [x] `03.1-02` — Remap all sound sites to a channel 1+2 priority allocator (`SND_SEL`/`SND_OFF`), guard the cold-start AUDCTL/SKCTL writes and restart-path AUDC3/AUDC4 clears, and add `sound_channel_guard_smoke.sh`. Implemented 2026-07-19. Verified 2026-09-02 in an emulator session covering movement, firing and a full role handoff: AUDCTL=$28, AUDF3/AUDF4 handler-programmed throughout, NET_NS_ERRS=$00.
 
 ### Phase 4: Render-State Separation
 **Goal**: Authoritative state, predicted local state, and render-facing state are cleanly separated so smoothing improves presentation without mutating simulation truth.
-**Depends on**: Phase 3
+**Depends on**: Phase 5 (reordered — presentation polish for release, after correctness work)
 **Requirements**: RNDR-01, RNDR-02
 **Success Criteria** (what must be TRUE):
   1. Remote wizards and AI zombies move smoothly on the Atari display without being treated as locally predicted actors.
@@ -72,18 +92,22 @@ Plans:
 
 ### Phase 5: Slot Lifecycle and Zombie Handoff
 **Goal**: The match always maintains four valid wizard slots, with clean zombie backfill and clean human takeover or disconnect recovery.
-**Depends on**: Phase 4
+**Depends on**: Phase 3 (including the 3.1 insertion and the Phase 3 human checkpoint; reordered ahead of Phase 4 as correctness work)
 **Requirements**: LIFE-01, LIFE-02, LIFE-03, LIFE-04
 **Success Criteria** (what must be TRUE):
   1. A running match always shows exactly four active slots, with unused slots controlled by server AI zombies.
   2. When a human joins a zombie-filled slot, control transfers cleanly without ghost shots, stale movement, stale facing, or inherited transient state.
   3. When a human disconnects or times out, the slot returns to AI zombie control without breaking the match for remaining players.
   4. Clients can visibly track who owns each slot and remain in sync through zombie-to-human and human-to-zombie role changes.
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [x] `05-01` — Reset per-slot gameplay state on both handoff directions server-side, shorten the client timeout so a reconnecting player is not stranded beside their own ghost, clear the matching per-slot latches on the Atari client when a role or local pid changes, document the slot contract, and cover it with `slot_lifecycle_smoke.sh`. Implemented 2026-09-02.
+
+**Status note**: LIFE-02/03/04 are addressed. LIFE-01 is satisfied at `--zombies 3`; lower values intentionally leave seats open for more humans, and an empty seat still renders as a motionless wizard. That is documented in `doc/protocol.md` rather than changed, since it is a decision about what `--zombies` means.
 
 ### Phase 6: Mixed-Session Validation and Hardening
 **Goal**: The target live session is repeatably validated in the supported Atari/FujiNet workflow with deterministic checks for the known failure cases.
-**Depends on**: Phase 5
+**Depends on**: Phase 5 (minimal validation pass); Phase 4 (full hardening for release)
 **Requirements**: VALD-01, VALD-02, VALD-03
 **Success Criteria** (what must be TRUE):
   1. A live session with 1 Atari client, 1 Linux client, and 2 AI zombies runs without movement-desync bugs that block normal play.
@@ -125,13 +149,22 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
+1 -> 2 -> 3 (code) -> 3.1 (INSERTED) -> 5 -> 3 human checkpoint -> 6 (minimal validation) -> 4 -> 6 (full hardening)
+
+Phase 5 was brought forward ahead of the Phase 3 human checkpoint: both need the same
+mixed session to verify, and running the checkpoint before the slot work would have
+meant running it twice.
+
+"Reliably playable" is reached after the minimal Phase 6 validation pass; Phase 4 and full
+Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) make it
+"Lobby-releasable".
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Transport Normalization and Observability | 2/2 | Complete | 2026-04-08 |
 | 2. Reconciliation Contract | 5/5 | Complete | 2026-04-08 |
-| 3. Combat and World Authority | 0/TBD | Not started | - |
+| 3. Combat and World Authority | 3/3 | Code complete; human mixed-session checkpoint pending (now unblocked) | - |
+| 3.1 Netstream Handler Refresh and POKEY Channel Isolation | 2/2 | Complete | 2026-09-02 |
+| 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
 | 4. Render-State Separation | 0/TBD | Not started | - |
-| 5. Slot Lifecycle and Zombie Handoff | 0/TBD | Not started | - |
 | 6. Mixed-Session Validation and Hardening | 0/TBD | Not started | - |

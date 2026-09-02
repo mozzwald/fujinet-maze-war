@@ -14,7 +14,7 @@ This document matches current server behavior in `server/main.c`.
 
 | Type | Name        | Dir   | Size | Description |
 |------|-------------|-------|------|-------------|
-| 0x40 | SNAPSHOT    | S->C  | 19   | Authoritative world/player state |
+| 0x40 | SNAPSHOT    | S->C  | 20   | Authoritative world/player state |
 | 0x41 | DELTA       | C->S  | 4    | Client input update |
 | 0x42 | SHOT        | S->C  | 6    | Shot state update |
 | 0x50 | BRICK_FULL  | S->C  | 51   | Full brick bitset |
@@ -137,6 +137,8 @@ When the server runs with `--debug`, it logs `transport accepted slot=` for each
 
 Notes:
 - On clear, server sends `flags=0` and may send repeated clear bursts for reliability.
+- Clients must treat `SHOT` as server-authored projectile state. Fire remains
+  intent-only `DELTA joy` input; clients do not derive projectile origin locally.
 
 ### 0x50 BRICK_FULL (51 bytes, S->C)
 
@@ -167,6 +169,9 @@ Behavior:
 - Server broadcasts this when a non-outer-wall brick is destroyed.
 - Client may request brick removal with this packet; server validates bounds and
   rejects outer border cells.
+- During authoritative combat resolution, a shot that would spawn directly into
+  an interior brick destroys that brick immediately and emits `BRICK_DELTA`
+  without first emitting an active `SHOT`.
 
 ### 0x52 RESPAWN (6 bytes, S<->C)
 
@@ -190,13 +195,45 @@ Current server behavior:
 - Client respawn request is accepted as packet type/length; server respawns the
   sender's slot and broadcasts final respawn (`flags=0x03`).
 - For client requests, payload `pid/x/y/flags` is currently ignored by server.
+- Score, death, and respawn transitions remain authoritative server outcomes.
 
 ## Connection and Slot Semantics
 
 - Server tracks clients by UDP source address+port.
 - On first packet from a new endpoint, server assigns a slot (`pid`).
 - New clients immediately receive a `BRICK_FULL`.
-- Client timeout is 60 seconds without packets.
+- Client timeout is 15 seconds without packets.
+
+### Slot allocation order
+
+- Slot 0 is never zombie-filled; it is the seat the first human takes.
+  `--zombies N` fills up to `N` of slots 1..3 that no client currently holds,
+  so `--zombies 3` is the configuration in which every slot is always occupied
+  by a human or a zombie.
+- With a lower `--zombies`, slots beyond that count stay empty until a human
+  claims them. An empty slot still renders as a motionless wizard on clients.
+- Humans displace zombies: each new client takes the lowest free slot, and the
+  zombie mask is recomputed from the slots clients actually hold.
+
+### Slot handoff
+
+A slot changes hands when a human takes over a zombie seat, or when a human
+times out and the zombie backfills it. On both transitions the server resets
+the slot's transient state so the new occupant does not inherit the old one's:
+
+- an in-flight shot is retired with the usual three-tick clear burst,
+- `joy` returns to neutral (`0x0F`), so no inherited facing or movement,
+- `score` returns to 0,
+- zombie think/move/fire schedules are re-based to the current time.
+
+The actor is **not** moved. Its position is the slot's physical location rather
+than stale state, so the wizard becomes a zombie (or vice versa) where it
+stands, and other clients see no unexplained jump. A pending respawn is left to
+finish through the normal `RESPAWN` path.
+
+Because slot identity is address+port, and FujiNet chooses a fresh source port
+each time it reopens a stream, a reconnecting player lands in a **new** slot;
+their previous slot persists until the timeout above expires.
 
 ## Gameplay and Timing Semantics
 
@@ -204,6 +241,32 @@ Current server behavior:
 - Tick rate is configurable (`--tick-hz`, default 10).
 - If a human client's input is stale for >500 ms, server forces neutral input.
 - Zombie AI can control unoccupied slots (`--zombies`).
+
+## Combat And World Authority Semantics
+
+The server resolves combat and shared-world state in one same-tick order:
+
+1. Finalize any expired respawns and publish final `RESPAWN` packets first.
+2. Select each slot's authoritative input/facing state for the tick.
+3. Evaluate fire from the actor's current authoritative position and current
+   authoritative facing.
+4. If the input is directional fire (`trigger=1` with a cardinal stick
+   direction), suppress same-tick movement for that slot.
+5. Otherwise allow one movement step if authoritative world and occupancy
+   checks permit it.
+6. Step already-active shots, then publish any resulting `SHOT`,
+   `BRICK_DELTA`, score, and `RESPAWN` outcomes.
+
+Additional rules:
+- Fire is intent-only on clients. Projectile origin, direct adjacent hits,
+  moving-shot hits, score changes, and brick destruction are all derived from
+  server-authoritative state.
+- Direct adjacent hits may resolve as pending `RESPAWN` plus clearing `SHOT`
+  without requiring a visible intermediate projectile packet.
+- `SNAPSHOT` score bytes are authoritative scoreboard output from the server's
+  combat resolution.
+- `BRICK_FULL` and `BRICK_DELTA` define the shared wall/brick truth used for
+  both movement legality and line-of-fire legality.
 
 ## Client Guidance
 
