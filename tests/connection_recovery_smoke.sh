@@ -54,7 +54,7 @@ grep -E "JSR[$TAB ]+HOST_MSGDRAW" "$ATARI_SRC" >/dev/null
 
 # strings are $FF-terminated because screen code $00 is a space
 grep -E "^HOSTPROMPT[$TAB ]+\.BYTE.*\\\$FF" "$ATARI_SRC" >/dev/null
-grep -A2 -F "HD_PR${TAB}LDA${TAB}HOSTPROMPT,Y" "$ATARI_SRC" | grep -E "CMP[$TAB ]+#\\\$FF" >/dev/null
+grep -A2 -F "HD_PR${TAB}LDA${TAB}(INPROM),Y" "$ATARI_SRC" | grep -E "CMP[$TAB ]+#\\\$FF" >/dev/null
 
 # the server must fail loudly instead of silently sharing the port with
 # FujiNet-PC's netstream socket, which swallowed the client's datagrams

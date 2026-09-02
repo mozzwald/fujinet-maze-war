@@ -80,6 +80,8 @@ NET_RECOVER_P1	=	3	;remote bounded-recovery snap threshold
 NET_DESYNC_MAX	=	3	;remote failed-recovery attempts before forced snap
 NET_HARD_P0	=	12	;local hard-snap guard (only on severe divergence)
 HOST_MAX	=	31	;max hostname length
+NAME_LEN	=	8	;HUD gives each slot columns 4..11 before the score digit
+NAME_PKT_LEN	=	3+NAME_LEN	;$43, seq, pid, then the name
 NET_WAIT_MAX	=	3	;~13s (3*256 frames) with no server data before giving up
 NET_INIT_TRIES	=	3	;NS_INIT attempts before falling back to the host prompt
 ;
@@ -160,6 +162,10 @@ HOSTLEN	.DS	1
 HOST_DONE	.DS	1
 HOST_CHSAV	.DS	1
 HOST_MPTR	.DS	2	;HOST_MSGDRAW SOURCE POINTER (NEEDS TO BE ZERO PAGE)
+INBUF	.DS	2	;TEXT FIELD: EDIT BUFFER
+INPROM	.DS	2	;TEXT FIELD: PROMPT STRING
+INROW	.DS	2	;TEXT FIELD: SCREEN ROW
+INMAX	.DS	1	;TEXT FIELD: MAX CHARACTERS
 ;
 	ORG	CHRSET_BASE
 ;
@@ -863,6 +869,7 @@ NET_INIT	LDA	#0
 	STA	NET_WAIT_HI
 	STA	NET_ROLE_NEW
 	STA	NET_ROLE_CHG
+	STA	NET_NAME_TMR
 	LDA	#$FF
 	STA	NET_TX_CLKLAST
 	STA	SND_CH2_PID
@@ -946,6 +953,8 @@ NET_CLRMAP1
 	LDA	#1
 	STA	NET_ACTIVE
 	STA	NET_BOOT_HIDE
+	LDA	#1	;announce our name on this connection
+	STA	NET_NAME_PEND
 	LDA	#$0F	;hide local actors until authoritative server positions arrive
 	STA	NET_DEAD_MASK
 	STA	NET_ERASE_MASK
@@ -1041,6 +1050,7 @@ NHR_PMCLR
 ;THE SERVER TICKS AT 10 HZ, SO ONLY A REAL OUTAGE REACHES THE LIMIT.
 ;
 NET_WAIT_TICK
+	JSR	NET_NAME_RETRY
 	INC	NET_WAIT_LO
 	BNE	NWT_X
 	INC	NET_WAIT_HI
@@ -1057,6 +1067,28 @@ NWT_MSG	STA	HOST_MSG
 	STX	HOST_MSG+1
 	JMP	NET_HOSTRET
 NWT_X	RTS
+;
+; The server only re-broadcasts names it already knows, so a lost NAME would
+; never be noticed. Every ~2s, if we have a name but our own slot still reads
+; blank, queue it again.
+NET_NAME_RETRY
+	LDA	NET_NAME_TMR
+	BEQ	NNR_GO
+	DEC	NET_NAME_TMR
+	RTS
+NNR_GO
+	LDA	#120
+	STA	NET_NAME_TMR
+	LDA	NAMEBUF		;nothing to announce
+	BEQ	NNR_X
+	LDX	NET_LOCAL_PID
+	CPX	#4
+	BCS	NNR_X
+	JSR	NET_NAME_HAS
+	BNE	NNR_X		;server already echoed it back
+	LDA	#1
+	STA	NET_NAME_PEND
+NNR_X	RTS
 ;
 ;DRAW THE PENDING STATUS MESSAGE ON HOST SCREEN ROW 2. HOST_MSG=0 MEANS
 ;THERE IS NOTHING TO SAY. STRINGS ARE SCREEN CODES TERMINATED BY $FF SO
@@ -1127,18 +1159,24 @@ NP_BOOTCOL
 	JSR	NET_SAMPLE_INPUT
 	; guard against memory scribbles from legacy draw/effect paths
 	LDA	NET_TX_STATE
-	CMP	#5
+	CMP	#NAME_PKT_LEN+1
 	BCC	NP_TXS_OK
 	LDA	#0
 	STA	NET_TX_STATE
 	STA	NET_TX_IDX
 NP_TXS_OK
 	LDA	NET_TX_IDX
-	CMP	#4
+	CMP	#NAME_PKT_LEN
 	BCC	NP_TXI_OK
 	LDA	#0
 	STA	NET_TX_IDX
 NP_TXI_OK
+	LDA	NET_NAME_PEND	;announce our name whenever the line is idle
+	BEQ	NP_NAMEOK
+	LDA	NET_TX_STATE
+	BNE	NP_NAMEOK
+	JSR	NET_TX_BUILD_NAME
+NP_NAMEOK
 	; send immediately on input edge so stop/turn/fire intent is not delayed
 	; until the next periodic frame slot.
 	LDA	NET_TX_STATE
@@ -1288,6 +1326,33 @@ NTB_TRIGUP
 	LDA	#0
 	STA	NET_TX_IDX
 	JSR	NET_SHOT_PREDICT
+	RTS
+;
+; queue $43 seq pid + 8 name chars. The server ignores the pid and uses the
+; sender's own slot, so this cannot rename anyone else.
+NET_TX_BUILD_NAME
+	LDA	#$43
+	STA	NET_TX_BUF
+	LDA	NET_SEQ
+	STA	NET_TX_BUF+1
+	INC	NET_SEQ
+	LDA	NET_LOCAL_PID
+	STA	NET_TX_BUF+2
+	LDX	#0
+NTBN_CP
+	LDA	NAMEBUF,X
+	BNE	NTBN_ST
+	LDA	#$20		;pad short names with spaces
+NTBN_ST
+	STA	NET_TX_BUF+3,X
+	INX
+	CPX	#NAME_LEN
+	BCC	NTBN_CP
+	LDA	#NAME_PKT_LEN
+	STA	NET_TX_STATE
+	LDA	#0
+	STA	NET_TX_IDX
+	STA	NET_NAME_PEND
 	RTS
 ;
 NET_LOCAL_INPUT_PUSH
@@ -1453,18 +1518,27 @@ NET_RX_PARSE	STA	NET_PARSE_BYTE	;preserve received byte
 	JMP	NET_RX_WAIT
 NET_RX_ST
 	; NET_RX_STATE dispatch:
-	;   1=snapshot, 2=shot, 3=brick_full, 4=brick_delta, 5=respawn
+	;   1=snapshot, 2=shot, 3=brick_full, 4=brick_delta, 5=respawn, 6=name
+	; collectors sit far apart now, so dispatch through JMPs rather than
+	; relative branches
 	CMP	#1
-	BEQ	NET_RX_COL40
-	CMP	#2
-	BEQ	NET_RX_COL42
-	CMP	#3
-	BEQ	NET_RX_COL50
-	CMP	#4
-	BEQ	NET_RX_COL51
-	CMP	#5
-	BNE	NET_RX_STDROP
+	BNE	NRD_2
+	JMP	NET_RX_COL40
+NRD_2	CMP	#2
+	BNE	NRD_3
+	JMP	NET_RX_COL42
+NRD_3	CMP	#3
+	BNE	NRD_4
+	JMP	NET_RX_COL50
+NRD_4	CMP	#4
+	BNE	NRD_5
+	JMP	NET_RX_COL51
+NRD_5	CMP	#5
+	BNE	NRD_6
 	JMP	NET_RX_COL52
+NRD_6	CMP	#6
+	BNE	NET_RX_STDROP
+	JMP	NET_RX_COL43
 NET_RX_STDROP
 	JMP	NET_RX_DROP
 NET_RX_COL40
@@ -1527,6 +1601,44 @@ NET_RX_50BAD
 	STA	NET_RX_STATE
 	STA	NET_BRICK_IDX
 	RTS
+NET_RX_COL43
+	; collecting name bytes ($43 seq pid + 8 name chars)
+	LDY	NET_NAME_IDX
+	LDA	NET_PARSE_BYTE
+	STA	NET_NAME_PKT,Y
+	INY
+	STY	NET_NAME_IDX
+	CPY	#NAME_PKT_LEN
+	BCS	NET_RX_43DONE
+	RTS
+NET_RX_43DONE
+	JSR	NET_NAME_APPLY
+	LDA	#0
+	STA	NET_RX_STATE
+	STA	NET_NAME_IDX
+	RTS
+;
+; store the name for slot pid and ask the VBI to repaint the HUD labels.
+NET_NAME_APPLY
+	LDA	NET_NAME_PKT+2	;pid
+	CMP	#4
+	BCS	NNA_X
+	ASL			;pid*8 -> table offset
+	ASL
+	ASL
+	TAY
+	LDX	#0
+NNA_CP
+	LDA	NET_NAME_PKT+3,X
+	STA	NET_NAMES,Y
+	INY
+	INX
+	CPX	#NAME_LEN
+	BCC	NNA_CP
+	LDA	#1
+	STA	NET_SCORE_PEND
+NNA_X	RTS
+;
 NET_RX_COL51
 	; collecting brick-delta bytes
 	LDY	NET_SNAP_IDX
@@ -1578,6 +1690,8 @@ NET_RX_WAIT	LDA	NET_PARSE_BYTE
 	BEQ	NET_RX_WSNAP
 	CMP	#$42
 	BEQ	NET_RX_WSHOT
+	CMP	#$43
+	BEQ	NET_RX_WNAME
 	CMP	#$50
 	BEQ	NET_RX_WFULL50
 	CMP	#$51
@@ -1600,6 +1714,14 @@ NET_RX_WBRD51
 	LDA	#1
 	STA	NET_SNAP_IDX
 	LDA	#4
+	STA	NET_RX_STATE
+	RTS
+NET_RX_WNAME
+	LDA	#$43
+	STA	NET_NAME_PKT
+	LDA	#1
+	STA	NET_NAME_IDX
+	LDA	#6
 	STA	NET_RX_STATE
 	RTS
 NET_RX_WFULL50
@@ -1889,6 +2011,11 @@ NSLBLP
 	STA	POINTER+1
 	JMP	NSLBC
 NSLBW
+	JSR	NET_NAME_HAS	;a named human shows their name instead of WIZARD
+	BEQ	NSLBWL
+	JSR	NET_NAME_DRAW
+	JMP	NSLBN
+NSLBWL
 	LDA	# <PLRTXT
 	STA	POINTER
 	LDA	# >PLRTXT
@@ -1929,6 +2056,86 @@ NSLBN
 	BCC	NSLBLP
 	RTS
 
+; X=slot -> A=0 when the slot has no name, A<>0 when it does.
+; NUL and space both count as empty. Preserves X, clobbers A/Y/COUNT.
+NET_NAME_HAS
+	TXA
+	ASL
+	ASL
+	ASL
+	TAY			;slot*8
+NNH_LP
+	LDA	NET_NAMES,Y
+	BEQ	NNH_NX
+	CMP	#$20
+	BNE	NNH_YES
+NNH_NX
+	INY
+	TYA
+	AND	#NAME_LEN-1	;name blocks are 8-aligned
+	BNE	NNH_LP
+	LDA	#0
+	RTS
+NNH_YES	LDA	#1
+	RTS
+;
+; X=slot -> blank its stored name. Preserves X.
+NET_NAME_CLR
+	TXA
+	ASL
+	ASL
+	ASL
+	TAY			;slot*8
+NNC_LP
+	LDA	#$20
+	STA	NET_NAMES,Y
+	INY
+	TYA
+	AND	#NAME_LEN-1
+	BNE	NNC_LP
+	RTS
+;
+; X=slot -> draw its 8-char name into the HUD label field, padded to the 11
+; columns the field owns. Mode 6 takes the colour from the top two bits of each
+; character, which is how PLRTXT gets four colours out of one word, so the
+; name is OR'd with the same per-slot band. Preserves X.
+NET_NAME_DRAW
+	TXA
+	PHA
+	LDA	LBLDSTLO,X
+	STA	SCRPTR
+	LDA	LBLDSTHI,X
+	STA	SCRPTR+1
+	LDA	NAMECOL,X
+	STA	HOLDIT		;colour band
+	TXA
+	ASL
+	ASL
+	ASL
+	STA	COUNT		;slot*8 source offset
+	LDY	#0
+NND_LP
+	TYA
+	CLC
+	ADC	COUNT
+	TAX
+	LDA	NET_NAMES,X
+	JSR	HOST_SCR	;ASCII -> screen code (same routine the prompt uses)
+	ORA	HOLDIT
+	STA	(SCRPTR),Y
+	INY
+	CPY	#NAME_LEN
+	BCC	NND_LP
+	LDA	#0
+NND_SP
+	STA	(SCRPTR),Y
+	INY
+	CPY	#11
+	BCC	NND_SP
+	PLA
+	TAX
+	RTS
+;
 ; commit the latest fully staged snapshot from mainline RX into the live
 ; target/joy arrays that VBI movement code consumes. Odd NET_STAGE_SEQ means
 ; the parser is mid-write, so VBI skips until an even published snapshot exists.
@@ -2039,6 +2246,7 @@ NRR_LP
 	STA	NET_DESYNC_CNT,X	;divergence was the old actor's, not this one's
 	STA	NET_P_PENDING,X		;so is any queued reconcile
 	STA	NET_STAGE_PENDING,X
+	JSR	NET_NAME_CLR		;and the previous occupant's display name
 	CPX	SND_CH2_PID		;release a sound claim held by the old actor
 	BNE	NRR_NX
 	LDA	#$FF
@@ -3102,16 +3310,18 @@ NGU_X	RTS
 ;
 ;HOSTNAME INPUT
 ;
-HOST_INPUT	LDX	#0
-	JSR	HOST_CLR
-	JSR	HOST_MSGDRAW
-HI_LEN	LDA	HOSTBUF,X
+; Text field editor shared by the host and name prompts.
+; INBUF -> buffer, INPROM -> prompt, INROW -> 40-byte screen row, INMAX = limit.
+; The caller clears the screen, so several fields can stay visible at once.
+TXT_INPUT
+	LDY	#0
+HI_LEN	LDA	(INBUF),Y
 	BEQ	HI_LEN_DONE
-	INX
-	CPX	#HOST_MAX
+	INY
+	CPY	INMAX
 	BCC	HI_LEN
-HI_LEN_DONE	STX	HOSTLEN
-	JSR	HOST_DRAW
+HI_LEN_DONE	STY	HOSTLEN
+	JSR	TXT_DRAW
 HI_LOOP	LDA	KEYIN
 	CMP	#$FF
 	BEQ	HI_LOOP
@@ -3143,49 +3353,87 @@ HI_CHKDOT	CMP	#'.'
 	BEQ	HI_ADD
 	CMP	#'-'
 	BNE	HI_LOOP
-HI_ADD	LDX	HOSTLEN
-	CPX	#HOST_MAX
+HI_ADD	LDY	HOSTLEN
+	CPY	INMAX
 	BCS	HI_LOOP
-	STA	HOSTBUF,X
-	INX
-	STX	HOSTLEN
+	STA	(INBUF),Y
+	INY
+	STY	HOSTLEN
 	LDA	#0
-	STA	HOSTBUF,X
-	JSR	HOST_DRAW
+	STA	(INBUF),Y
+	JSR	TXT_DRAW
 	JMP	HI_LOOP
-HI_BS	LDX	HOSTLEN
+HI_BS	LDY	HOSTLEN
 	BEQ	HI_LOOP
-	DEX
-	STX	HOSTLEN
+	DEY
+	STY	HOSTLEN
 	LDA	#0
-	STA	HOSTBUF,X
-	JSR	HOST_DRAW
+	STA	(INBUF),Y
+	JSR	TXT_DRAW
 	JMP	HI_LOOP
 HI_DONE	RTS
 ;
-HOST_DRAW	LDX	#39
+TXT_DRAW	LDY	#39
 	LDA	#$00
-HD_CLR	STA	HOSTSCR,X
-	DEX
+HD_CLR	STA	(INROW),Y
+	DEY
 	BPL	HD_CLR
 	LDY	#0
-HD_PR	LDA	HOSTPROMPT,Y
+HD_PR	LDA	(INPROM),Y
 	CMP	#$FF	;space is screen code $00, so $FF ends the string
 	BEQ	HD_PR_DONE
-	STA	HOSTSCR,Y
+	STA	(INROW),Y
 	INY
 	BNE	HD_PR
-HD_PR_DONE	LDX	#0
-HD_HST	LDA	HOSTBUF,X
+HD_PR_DONE	STY	HOST_COL	;screen column after the prompt
+	LDY	#0		;buffer index
+HD_HST	LDA	(INBUF),Y
 	BEQ	HD_HST_DONE
 	JSR	HOST_SCR
-	STA	HOSTSCR,Y
+	STY	HOST_SRC
+	LDY	HOST_COL
+	STA	(INROW),Y
+	LDY	HOST_SRC
+	INC	HOST_COL
 	INY
-	INX
-	CPY	#40
-	BCS	HD_HST_DONE
-	JMP	HD_HST
+	LDA	HOST_COL
+	CMP	#40
+	BCC	HD_HST
 HD_HST_DONE	RTS
+;
+; field selectors
+HOST_FIELD
+	LDA	# <HOSTBUF
+	STA	INBUF
+	LDA	# >HOSTBUF
+	STA	INBUF+1
+	LDA	# <HOSTPROMPT
+	STA	INPROM
+	LDA	# >HOSTPROMPT
+	STA	INPROM+1
+	LDA	# <HOSTSCR
+	STA	INROW
+	LDA	# >HOSTSCR
+	STA	INROW+1
+	LDA	#HOST_MAX
+	STA	INMAX
+	RTS
+NAME_FIELD
+	LDA	# <NAMEBUF
+	STA	INBUF
+	LDA	# >NAMEBUF
+	STA	INBUF+1
+	LDA	# <NAMEPROMPT
+	STA	INPROM
+	LDA	# >NAMEPROMPT
+	STA	INPROM+1
+	LDA	# <[HOSTSCR+160]	;row 4, clear of the status message on row 2
+	STA	INROW
+	LDA	# >[HOSTSCR+160]
+	STA	INROW+1
+	LDA	#NAME_LEN
+	STA	INMAX
+	RTS
 ;
 HOST_SCR	CMP	#'a'
 	BCC	HOST_SCUP
@@ -3218,7 +3466,14 @@ HOST_BOOT	LDA	#$40	;DISABLE DLI
 	STA	DLIST
 	LDA	# >HOSTDISP
 	STA	DLIST+1
-	JSR	HOST_INPUT
+	JSR	HOST_CLR
+	JSR	HOST_MSGDRAW
+	JSR	NAME_FIELD	;paint the name field so both are visible
+	JSR	TXT_DRAW
+	JSR	HOST_FIELD
+	JSR	TXT_INPUT
+	JSR	NAME_FIELD
+	JSR	TXT_INPUT
 	LDA	HOST_CHSAV
 	STA	CHBASE
 	RTS
@@ -4959,6 +5214,7 @@ NET_HARDSNAP_TBL	.BYTE	NET_HARD_P0,NET_RECON_P1,NET_RECON_P1,NET_RECON_P1
 ;SCREEN INDEX TO SCORES
 ;
 SCRINDX	.BYTE	4,24,44,64
+NAMECOL	.BYTE	$00,$40,$00,$C0	;mode 6 colour band per slot, matching PLRTXT
 LBLDSTLO	.BYTE	<[BOTSCRN+4],<[BOTSCRN+24],<[BOTSCRN+44],<[BOTSCRN+64]
 LBLDSTHI	.BYTE	>[BOTSCRN+4],>[BOTSCRN+24],>[BOTSCRN+44],>[BOTSCRN+64]
 ;
@@ -5200,7 +5456,7 @@ NET_RX_YSAVE	.DS	1	;mainline RX Y save scratch
 NET_RX_PTR	.DS	2	;mainline RX pointer scratch
 NET_RX_PTR0	.DS	2	;mainline RX pointer scratch
 NET_RX_SCRPTR	.DS	2	;mainline RX screen pointer scratch
-NET_TX_BUF	.DS	4	;outbound DELTA/hello packet bytes
+NET_TX_BUF	.DS	NAME_PKT_LEN	;outbound DELTA/hello/NAME packet bytes
 NET_RX_SEQ	.DS	1	;last accepted snapshot sequence
 NET_RX_STICK	.DS	1	;debounced local stick nibble
 NET_RX_TRIG	.DS	1	;debounced local trigger (0 pressed / 1 released)
@@ -5226,6 +5482,13 @@ NET_LOCAL_PID	.DS	1	;pid assigned by server in snapshot flags
 NET_ROLE_MASK	.DS	1	;server role/zombie mask from snapshot flags
 NET_ROLE_NEW	.DS	1	;role mask decoded from the snapshot being applied
 NET_ROLE_CHG	.DS	1	;slots whose role changed, for NET_ROLE_RESET
+NET_NAME_IDX	.DS	1	;name collector index
+NET_NAME_PEND	.DS	1	;our name is queued for transmission
+NET_NAME_TMR	.DS	1	;frames until the next name retry check
+HOST_COL	.DS	1	;TXT_DRAW screen column
+HOST_SRC	.DS	1	;TXT_DRAW buffer index
+NET_NAME_PKT	.DS	NAME_PKT_LEN	;name packet staging
+NET_NAMES	.DS	4*NAME_LEN	;per-slot display name, all spaces/0 = unnamed
 NET_SCORE_PEND	.DS	1	;request HUD role-label refresh
 NET_GAME_SHOW	.DS	1	;0 until first full-map + snapshot commit is ready to display
 NET_SNAP_IDX	.DS	1	;snapshot / brick-delta collector index
@@ -5297,8 +5560,11 @@ MSG_NOSRV	.BYTE	"NO REPLY - CHECK HOST AND SERVER",$FF
 MSG_LOST	.BYTE	"SERVER STOPPED RESPONDING",$FF
 MSG_INITFAIL	.BYTE	"FUJINET DID NOT OPEN THE CONNECTION",$FF
 HOSTPROMPT	.BYTE	"HOST: ",$FF
+NAMEPROMPT	.BYTE	"NAME: ",$FF
 HOSTBUF	.BYTE	0
 	.DS	HOST_MAX
+NAMEBUF	.BYTE	0
+	.DS	NAME_LEN
 ;
 	ORG	$02E0
 	.WORD	INIT

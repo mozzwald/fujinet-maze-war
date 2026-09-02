@@ -4,9 +4,11 @@
 
 enum {
   PKT_DELTA = 0x41,
+  PKT_NAME = 0x43,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52,
-  MAX_PLAYERS = 4
+  MAX_PLAYERS = 4,
+  PKT_NAME_LEN = 11
 };
 
 static int is_valid_stick_nibble(uint8_t stick) {
@@ -47,6 +49,8 @@ enum transport_rx_result transport_rx_push_byte(struct transport_rx_state *state
       state->need = 4;
     } else if (byte == PKT_RESPAWN) {
       state->need = 6;
+    } else if (byte == PKT_NAME) {
+      state->need = PKT_NAME_LEN;
     } else {
       return TRANSPORT_RX_NONE;
     }

@@ -140,6 +140,33 @@ Notes:
 - Clients must treat `SHOT` as server-authored projectile state. Fire remains
   intent-only `DELTA joy` input; clients do not derive projectile origin locally.
 
+### 0x43 NAME (11 bytes, S<->C)
+
+```
+[0]    type = 0x43
+[1]    seq
+[2]    pid
+[3..10] name, 8 bytes
+```
+
+Behavior:
+- Client sends its display name after connecting. The server uses the
+  **sender's own slot** and ignores `pid`, so a client cannot rename anyone
+  else.
+- The server folds the name to the uppercase subset the Atari character set can
+  draw (`A-Z`, `0-9`, space, `-`, `.`), drops anything else, and pads to 8 with
+  spaces. Treat inbound names as untrusted text.
+- The server broadcasts the sanitized name to every client, sends all known
+  names to a joining client, and repeats them on the `BRICK_RESYNC_MS` period
+  so a lost NAME heals. Clients re-send their own name every ~2s until they see
+  it echoed back for their slot.
+- An all-zero or all-space name means unnamed; clients fall back to their
+  `WIZARD` label. A slot handoff clears the name with the rest of the slot's
+  transient state, so an incoming player never inherits one.
+- 8 characters is what the Atari HUD can show: each slot owns columns 4..11 of
+  its 20-column line before the score digit at column 15. Zombie slots always
+  render `ZOMBIE` regardless of any stored name.
+
 ### 0x50 BRICK_FULL (51 bytes, S->C)
 
 Full brick layout bitset (`20*19=380` bits => 48 bytes).
@@ -200,6 +227,7 @@ Current server behavior:
 ## Connection and Slot Semantics
 
 - Server tracks clients by UDP source address+port.
+- Display names are per slot and are cleared on handoff (see Slot handoff).
 - On first packet from a new endpoint, server assigns a slot (`pid`).
 - New clients immediately receive a `BRICK_FULL`.
 - Client timeout is 15 seconds without packets.
@@ -222,6 +250,8 @@ times out and the zombie backfills it. On both transitions the server resets
 the slot's transient state so the new occupant does not inherit the old one's:
 
 - an in-flight shot is retired with the usual three-tick clear burst,
+- the display name is cleared, so the new occupant is unnamed until it sends
+  its own `NAME`,
 - `joy` returns to neutral (`0x0F`), so no inherited facing or movement,
 - `score` returns to 0,
 - zombie think/move/fire schedules are re-based to the current time.

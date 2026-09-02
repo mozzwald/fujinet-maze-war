@@ -19,7 +19,7 @@ struct transport_rx_state {
   uint8_t need;
   uint8_t idx;
   uint8_t resync_count;
-  uint8_t buf[8];
+  uint8_t buf[16]; /* must hold the longest client->server packet (NAME, 11) */
 };
 
 struct transport_delta_packet {

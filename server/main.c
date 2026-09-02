@@ -18,6 +18,7 @@ enum {
   PKT_SNAPSHOT = 0x40,
   PKT_DELTA = 0x41,
   PKT_SHOT = 0x42,
+  PKT_NAME = 0x43,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52
@@ -42,6 +43,9 @@ enum { TRANSPORT_SUMMARY_MS = 2000 };
    bounds that divergence. Clients treat a later BRICK_FULL as a repair and
    only redraw cells that actually changed, so this is not a visible redraw. */
 enum { BRICK_RESYNC_MS = 3000 };
+/* Display name length. The Atari HUD gives each slot columns 4..11 of its
+   20-column line before the score digit at column 15, so 8 is what fits. */
+#define NAME_LEN 8
 
 #define ZOMBIE_THINK_MS 575
 #define ZOMBIE_MOVE_MS 275
@@ -70,6 +74,9 @@ struct shot_state {
 
 struct client_slot {
   int in_use;
+  /* All-zero means unnamed: the client never sent a NAME, or the slot changed
+     hands. Clients fall back to their WIZARD/ZOMBIE label in that case. */
+  uint8_t name[NAME_LEN];
   struct sockaddr_in addr;
   socklen_t addr_len;
   uint64_t last_seen_ms;
@@ -153,6 +160,7 @@ static int find_or_add_client(struct client_slot *clients,
       clients[i].last_delta_seq = 0;
       clients[i].have_applied_input_seq = 0;
       clients[i].applied_input_seq = 0;
+      memset(clients[i].name, 0, NAME_LEN); /* the seat's previous occupant */
       if (is_new) {
         *is_new = 1;
       }
@@ -170,6 +178,7 @@ static int find_or_add_client(struct client_slot *clients,
       clients[i].last_delta_seq = 0;
       clients[i].have_applied_input_seq = 0;
       clients[i].applied_input_seq = 0;
+      memset(clients[i].name, 0, NAME_LEN); /* the seat's previous occupant */
       if (is_new) {
         *is_new = 1;
       }
@@ -284,6 +293,48 @@ static void debug_joy(uint8_t joy) {
   uint8_t stick = (uint8_t)(joy & 0x0F);
   int trig = (joy & 0x10) != 0;
   printf("JOY stick=%u trig=%d\n", stick, trig);
+}
+
+/* Names come from a remote client, so treat them as untrusted: fold to the
+   uppercase subset the Atari character set can actually draw and pad with
+   spaces, rather than passing arbitrary bytes through to a screen buffer. */
+static void sanitize_name(const uint8_t *in, uint8_t *out) {
+  int w = 0;
+  for (int i = 0; i < NAME_LEN; i++) {
+    uint8_t c = in[i];
+    if (c >= 'a' && c <= 'z') {
+      c = (uint8_t)(c - 'a' + 'A');
+    }
+    int ok = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ' ' ||
+             c == '-' || c == '.';
+    if (!ok) {
+      continue;
+    }
+    out[w++] = c;
+  }
+  while (w < NAME_LEN) {
+    out[w++] = ' ';
+  }
+}
+
+static int name_is_set(const uint8_t *name) {
+  for (int i = 0; i < NAME_LEN; i++) {
+    if (name[i] != 0 && name[i] != ' ') {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void build_name(uint8_t seq, uint8_t pid, const uint8_t *name,
+                       uint8_t *out, size_t out_len) {
+  if (out_len < 3 + NAME_LEN) {
+    return;
+  }
+  out[0] = PKT_NAME;
+  out[1] = seq;
+  out[2] = pid;
+  memcpy(&out[3], name, NAME_LEN);
 }
 
 static void build_brick_delta(uint8_t seq, uint8_t x, uint8_t y,
@@ -514,6 +565,33 @@ static void reset_slot_gameplay(int slot, struct player_state *players,
   last_input_ms[slot] = 0;
 }
 
+/* Announce one slot's name, cycling a slot per tick.
+   Deliberately one packet at a time: sending all four in a burst right behind
+   the 51-byte BRICK_FULL made the Atari lose the map every time, because that
+   whole group leaves the server as five back-to-back datagrams and the FujiNet
+   serial path does not absorb the burst. Spread out, nothing is dropped.
+   Empty slots are announced as blank rather than skipped, so a client stops
+   showing a name once that player leaves. */
+static void broadcast_next_name(int sock, struct client_slot *clients,
+                                uint8_t *seq, int *rotate) {
+  static const uint8_t blank[NAME_LEN] = {' ', ' ', ' ', ' ',
+                                          ' ', ' ', ' ', ' '};
+  int i = *rotate % MAX_PLAYERS;
+  *rotate = (i + 1) % MAX_PLAYERS;
+  const uint8_t *name = (clients[i].in_use && name_is_set(clients[i].name))
+                            ? clients[i].name
+                            : blank;
+  uint8_t pkt[3 + NAME_LEN];
+  build_name((*seq)++, (uint8_t)i, name, pkt, sizeof(pkt));
+  for (int t = 0; t < MAX_PLAYERS; t++) {
+    if (!clients[t].in_use) {
+      continue;
+    }
+    sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&clients[t].addr,
+           clients[t].addr_len);
+  }
+}
+
 static void broadcast_packet(int sock, struct client_slot *clients,
                              const uint8_t *pkt, size_t len) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -584,6 +662,20 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
     return;
   }
 
+  if (len == 3 + NAME_LEN && pkt[0] == PKT_NAME) {
+    /* The sender's slot is authoritative; pkt[2] is ignored so a client cannot
+       rename anyone else. */
+    sanitize_name(&pkt[3], clients[slot].name);
+    uint8_t out[3 + NAME_LEN];
+    build_name((*seq)++, (uint8_t)slot, clients[slot].name, out, sizeof(out));
+    broadcast_packet(sock, clients, out, sizeof(out));
+    if (debug) {
+      printf("NAME slot=%d name=\"%.*s\"\n", slot, NAME_LEN,
+             (const char *)clients[slot].name);
+    }
+    return;
+  }
+
   if (len == 6 && pkt[0] == PKT_RESPAWN) {
     uint8_t pid = (uint8_t)slot;
     if (pid < MAX_PLAYERS) {
@@ -625,7 +717,7 @@ static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
                                  struct transport_counters *global_transport) {
   struct client_slot *c = &clients[slot];
   for (size_t i = 0; i < n; i++) {
-    uint8_t pkt[8];
+    uint8_t pkt[16]; /* NAME is the longest inbound packet at 11 bytes */
     size_t pkt_len = 0;
     enum transport_rx_result result =
         transport_rx_push_byte(&c->rx, (uint8_t)slot, buf[i], pkt,
@@ -1319,6 +1411,7 @@ int main(int argc, char **argv) {
   uint64_t next_tick = now_ms();
   uint64_t last_transport_summary_ms = now_ms();
   uint64_t last_brick_resync_ms = now_ms();
+  int name_rotate = 0;
   const uint64_t tick_ms = 1000ULL / (uint64_t)tick_hz;
 
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1397,6 +1490,9 @@ int main(int argc, char **argv) {
     if (now >= next_tick) {
       step_players(players, shots, brick_bits, sock, clients, &seq, debug,
                    zombies, last_input_ms);
+      /* One name per tick: the whole roster cycles in ~400ms without ever
+         putting several packets on the wire back to back. */
+      broadcast_next_name(sock, clients, &seq, &name_rotate);
       for (int i = 0; i < MAX_PLAYERS; i++) {
         if (!clients[i].have_delta_seq) {
           continue;
