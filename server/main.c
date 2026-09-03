@@ -118,6 +118,7 @@ struct client_slot {
   struct {
     uint8_t seq;
     uint8_t joy;
+    uint64_t ready_at_ms; /* --lag-ms: not applied before this */
   } input_q[INPUT_QUEUE_MAX];
   uint8_t input_head;
   uint8_t input_count;
@@ -711,7 +712,8 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
                                  int sock, struct client_slot *clients,
                                  uint8_t *seq, int debug,
                                  uint64_t now, uint64_t *last_input_ms,
-                                 struct transport_counters *global_transport) {
+                                 struct transport_counters *global_transport,
+                                 int lag_ms) {
   if (pkt[0] == PKT_DELTA) {
     uint8_t pid = (uint8_t)slot;
     if (pid < MAX_PLAYERS) {
@@ -769,6 +771,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
                                    INPUT_QUEUE_MAX);
           c->input_q[tail].seq = delta.seq;
           c->input_q[tail].joy = delta.joy;
+          c->input_q[tail].ready_at_ms = now + (uint64_t)lag_ms;
           c->input_count++;
         } else if (debug) {
           /* Not acked: the client keeps it pending and replays it. */
@@ -840,7 +843,8 @@ static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
                                  int sock, struct client_slot *clients,
                                  uint8_t *seq, int debug,
                                  uint64_t now, uint64_t *last_input_ms,
-                                 struct transport_counters *global_transport) {
+                                 struct transport_counters *global_transport,
+                                 int lag_ms) {
   struct client_slot *c = &clients[slot];
   for (size_t i = 0; i < n; i++) {
     uint8_t pkt[16]; /* NAME is the longest inbound packet at 11 bytes */
@@ -856,7 +860,7 @@ static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
     if (result == TRANSPORT_RX_PACKET && pkt_len > 0) {
       handle_client_packet(slot, pkt, pkt_len, players, brick_bits, sock,
                            clients, seq, debug, now, last_input_ms,
-                           global_transport);
+                           global_transport, lag_ms);
     }
   }
 }
@@ -1248,12 +1252,14 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
    reporting an input as applied when it was not is what produced the snap-back
    on a fast corner turn. */
 static void apply_queued_input(struct client_slot *clients,
-                               struct player_state *players, int debug) {
+                               struct player_state *players, int debug,
+                               uint64_t now) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use) {
       continue;
     }
-    if (clients[i].input_count > 0) {
+    if (clients[i].input_count > 0 &&
+        now >= clients[i].input_q[clients[i].input_head].ready_at_ms) {
       uint8_t head = clients[i].input_head;
       players[i].joy = clients[i].input_q[head].joy;
       clients[i].applied_input_seq = clients[i].input_q[head].seq;
@@ -1448,7 +1454,7 @@ static int load_brick_layout(const char *path, uint8_t *bits, size_t bits_len) {
 
 static void usage(const char *argv0) {
   fprintf(stderr,
-          "Usage: %s [--port PORT] [--bind ADDR] [--tick-hz N] [--zombies N] [--brick PATH] [--debug]\n"
+          "Usage: %s [--port PORT] [--bind ADDR] [--tick-hz N] [--zombies N] [--brick PATH] [--lag-ms N] [--debug]\n"
           "  --bind ADDR  bind a specific address instead of all interfaces.\n"
           "               When FujiNet-PC runs on this host it wants the same\n"
           "               netstream port. Start this server first and it keeps\n"
@@ -1462,6 +1468,7 @@ int main(int argc, char **argv) {
   int tick_hz = 10;
   int debug = 0;
   int zombies = 1;
+  int lag_ms = 0;
   const char *brick_path = "server/brick_layout.txt";
   const char *bind_addr = NULL;
 
@@ -1476,6 +1483,12 @@ int main(int argc, char **argv) {
       zombies = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--brick") == 0 && i + 1 < argc) {
       brick_path = argv[++i];
+    } else if (strcmp(argv[i], "--lag-ms") == 0 && i + 1 < argc) {
+      /* Test aid: hold each input this long before applying it, so a local
+         run reproduces the pending-input backlog a real Atari always has.
+         At zero latency the client's reposition-and-replay path barely runs,
+         which hides bugs in it. */
+      lag_ms = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--debug") == 0) {
       debug = 1;
     } else if (strcmp(argv[i], "--help") == 0) {
@@ -1628,7 +1641,7 @@ int main(int argc, char **argv) {
           transport_stats_note_raw_bytes(&global_transport, (size_t)n);
           process_client_bytes(slot, buf, (size_t)n, players, brick_bits, sock,
                                clients, &seq, debug, now,
-                               last_input_ms, &global_transport);
+                               last_input_ms, &global_transport, lag_ms);
         }
       }
     }
@@ -1661,7 +1674,7 @@ int main(int argc, char **argv) {
          produced it: one brick packet per tick, never two. */
       flush_brick_echo(sock, clients, &seq, debug);
       /* Sets this tick's authoritative joy and the ack that goes with it. */
-      apply_queued_input(clients, players, debug);
+      apply_queued_input(clients, players, debug, now);
       step_players(players, shots, brick_bits, sock, clients, &seq, debug,
                    zombies, last_input_ms);
       uint8_t zombie_mask[MAX_PLAYERS];

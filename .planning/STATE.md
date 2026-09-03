@@ -162,6 +162,49 @@ awaiting respawn while the server had just stopped doing so, so the client
 would refuse a move the server applied. Any such disagreement produces drift
 and then a visible snap, and no amount of interpolation hides it.
 
+### Phase 4 investigation log (2026-09-03)
+
+Reported: the local wizard snaps back when turning a corner at speed. Two
+server-side input bugs were found and fixed, and **neither was the reported
+bug** -- the user reports no change in frequency. Recording so this is not
+re-derived:
+
+- The server kept only the newest joy per tick and acked everything received.
+  Proven with a probe: 12 flick-then-neutral sequences produced 0 movements
+  while the ack advanced to the newest sequence sent. Now queued and applied
+  one per tick with an honest ack. Real, but the wrong bug: turning a corner
+  *holds* the new direction, so the newest joy was the turn and it survived.
+- Client movement prediction blocked on players awaiting respawn after the
+  server stopped doing so. Real mismatch, fixed, not the reported bug either.
+
+Could NOT reproduce the snap on the emulator rig, which is the important
+finding. With loopback latency `LOCX/LOCY` and `NET_PX_X/Y` are byte-identical
+for all four slots, and `NET_LOCAL_REPLAY_PENDING` did not fire once in 10s of
+movement. Adding `--lag-ms 200` to the server did not change that. The rig
+differs from real hardware in ways that matter (real serial link, real loss,
+real FujiNet), so the mechanism has to be measured where it happens.
+
+Hence the diagnostic counters now in the client (addresses in
+`build/maze-war.lab`, cleared per connection):
+
+- `NET_DIAG_SNAPS`    corrections applied, saturating at 255
+- `NET_DIAG_MAXDRIFT` largest local drift in cells -- treat as an UPPER BOUND;
+  a respawn landing is suppressed for 30 frames but still leaks in, so large
+  values here are not yet trustworthy on their own
+- `NET_DIAG_PENDMAX`  largest unacked input backlog
+- `NET_DIAG_SRC`      which triggers fired: 1 staged drift, 2 idle converge,
+                      4 VBI threshold, 8 remote hard snap
+
+`NET_DIAG_SRC` is the most useful of the four: it says which of the four
+correction paths is responsible, which narrows the fix immediately.
+
+Do NOT start smoothing before this reads back from real hardware. Interpolation
+turns a wrong teleport into a wrong slide; if the drift is a genuine desync,
+smoothing hides the symptom and makes the cause harder to find.
+
+`--lag-ms N` was added to the server as a test aid for reproducing a
+pending-input backlog locally.
+
 ### Known gaps (not addressed)
 
 - ~~`combat_world_authority_smoke.sh` flakiness~~ FIXED 2026-09-03. Two causes,

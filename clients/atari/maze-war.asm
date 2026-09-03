@@ -870,6 +870,11 @@ NET_INIT	LDA	#0
 	STA	NET_WAIT_HI
 	STA	NET_ROLE_NEW
 	STA	NET_ROLE_CHG
+	STA	NET_DIAG_SNAPS
+	STA	NET_DIAG_MAXDRIFT
+	STA	NET_DIAG_PENDMAX
+	STA	NET_DIAG_SRC
+	STA	NET_DIAG_HOLD
 	STA	NET_NAME_TMR
 	LDA	#$FF
 	STA	NET_TX_CLKLAST
@@ -2200,7 +2205,11 @@ NSC_X
 NET_LOCAL_RECONCILE
 	LDX	NET_LOCAL_PID
 	LDA	NET_P_PENDING,X
-	BNE	NLRC_GO
+	BEQ	NLRC_IDLE
+	LDA	#$01		;staged drift past NET_RECON_P0
+	JSR	NET_DIAG_BUMP
+	JMP	NLRC_GO
+NLRC_IDLE
 	LDA	MOVEST,X
 	BNE	NLRC_X
 	LDA	NET_PEND_COUNT
@@ -2211,10 +2220,13 @@ NET_LOCAL_RECONCILE
 	BNE	NLRC_X
 	LDA	LOCX,X
 	CMP	NET_PX_X,X
-	BNE	NLRC_GO
+	BNE	NLRC_CONV
 	LDA	LOCY,X
 	CMP	NET_PX_Y,X
 	BEQ	NLRC_X
+NLRC_CONV
+	LDA	#$02		;idle convergence
+	JSR	NET_DIAG_BUMP
 NLRC_GO
 	JSR	NET_LOCAL_REPLAY_PENDING
 NLRC_X	RTS
@@ -2268,6 +2280,29 @@ NET_LOCAL_PID_RESET
 	LDA	#$FF
 	STA	SND_CH2_PID
 	RTS
+;
+; CORRECTION DIAGNOSTICS
+; ---------------------
+; The snap-back could not be reproduced on the emulator rig: with loopback
+; latency the local and authoritative positions stay identical and the replay
+; path never runs, so the mechanism has to be measured where it actually
+; happens. These counters cost nothing during play; peek them after a session
+; using the addresses in build/maze-war.lab.
+;
+; A = trigger bit to record. Preserves X and Y.
+NET_DIAG_BUMP
+	ORA	NET_DIAG_SRC
+	STA	NET_DIAG_SRC
+	LDA	NET_DIAG_SNAPS	;saturate rather than wrap, so a big number
+	CMP	#$FF		;still reads as "a lot"
+	BEQ	NDB_PEND
+	INC	NET_DIAG_SNAPS
+NDB_PEND
+	LDA	NET_PEND_COUNT	;how far behind the server we were
+	CMP	NET_DIAG_PENDMAX
+	BCC	NDB_X
+	STA	NET_DIAG_PENDMAX
+NDB_X	RTS
 ;
 NET_LOCAL_ACK_DISCARD
 	LDA	NET_PEND_COUNT
@@ -2435,7 +2470,11 @@ NET_RESP_APPLY_WRK
 	LDA	NET_ERASE_MASK
 	AND	PLRMSKINV,Y
 	STA	NET_ERASE_MASK
-	RTS
+	CPX	NET_LOCAL_PID	;our own respawn lands as a wholesale jump;
+	BNE	NRAW_X		;keep it out of the drift metric
+	LDA	#30
+	STA	NET_DIAG_HOLD
+NRAW_X	RTS
 NRW_PEND
 	LDA	NET_RX_TMP0
 	AND	#$01
@@ -3644,6 +3683,21 @@ CKMV_DYPOS
 	BCS	CKMVAP
 	JMP	CKMVCK
 CKMV_LOC
+	TXA			;a respawn moves us wholesale, which is not drift
+	TAY			;and would swamp the metric
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,Y
+	BNE	CKMV_L2
+	LDA	NET_DIAG_HOLD	;...and neither is the settling right after one
+	BEQ	CKMV_L1
+	DEC	NET_DIAG_HOLD
+	JMP	CKMV_L2
+CKMV_L1
+	LDA	HOLDIT		;largest genuine local drift seen this session
+	CMP	NET_DIAG_MAXDRIFT
+	BCC	CKMV_L2
+	STA	NET_DIAG_MAXDRIFT
+CKMV_L2
 	LDA	HOLDIT
 	CMP	#NET_RECON_P0
 	BCC	CKMVCK
@@ -3653,9 +3707,13 @@ CKMV_LOC
 	BEQ	CKMVCK
 	LDA	NET_PEND_COUNT
 	BNE	CKMVCK
+	LDA	#$04		;VBI drift threshold
+	JSR	NET_DIAG_BUMP
 	JSR	NET_LOCAL_REPLAY_PENDING
 	JMP	CKMVCK
-CKMVAP	JSR	NET_AUTH_REPOS
+CKMVAP	LDA	#$08		;remote hard snap
+	JSR	NET_DIAG_BUMP
+	JSR	NET_AUTH_REPOS
 	JSR	SETSTIL
 	LDA	#0
 	STA	NET_P_PENDING,X
@@ -5513,6 +5571,11 @@ NET_LOCAL_PID	.DS	1	;pid assigned by server in snapshot flags
 NET_ROLE_MASK	.DS	1	;server role/zombie mask from snapshot flags
 NET_ROLE_NEW	.DS	1	;role mask decoded from the snapshot being applied
 NET_ROLE_CHG	.DS	1	;slots whose role changed, for NET_ROLE_RESET
+NET_DIAG_SNAPS	.DS	1	;corrections applied this connection (saturating)
+NET_DIAG_MAXDRIFT	.DS	1	;largest local drift seen, in cells
+NET_DIAG_PENDMAX	.DS	1	;largest unacked input backlog seen
+NET_DIAG_SRC	.DS	1	;which triggers fired: 1 staged 2 idle 4 vbi 8 remote
+NET_DIAG_HOLD	.DS	1	;frames to ignore drift for after our own respawn
 NET_NAME_IDX	.DS	1	;name collector index
 NET_NAME_PEND	.DS	1	;our name is queued for transmission
 NET_NAME_TMR	.DS	1	;frames until the next name retry check
