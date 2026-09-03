@@ -48,11 +48,6 @@ enum { INPUT_STALE_MS = 500 };
    On overflow the arriving input is dropped and deliberately NOT acked, so the
    client keeps it pending and replays it. */
 enum { INPUT_QUEUE_MAX = 6 };
-/* With an empty queue, keep walking in the last applied direction for a couple
-   of ticks rather than stopping dead. That covers a dropped or late packet
-   while holding a direction. It is capped because every repeat is a move the
-   client never asked for, which is drift in the opposite direction. */
-enum { INPUT_REPEAT_MAX = 2 };
 enum { TRANSPORT_SUMMARY_MS = 2000 };
 /* BRICK_DELTA is sent once and never acknowledged, so a single lost packet
    used to desync a client's maze from the server for the rest of the match
@@ -122,7 +117,6 @@ struct client_slot {
   } input_q[INPUT_QUEUE_MAX];
   uint8_t input_head;
   uint8_t input_count;
-  uint8_t input_repeat_left;
 };
 
 static volatile sig_atomic_t g_running = 1;
@@ -198,7 +192,6 @@ static int find_or_add_client(struct client_slot *clients,
       clients[i].applied_input_seq = 0;
       clients[i].input_head = 0;
       clients[i].input_count = 0;
-      clients[i].input_repeat_left = 0;
       memset(clients[i].name, 0, NAME_LEN); /* the seat's previous occupant */
       if (is_new) {
         *is_new = 1;
@@ -219,7 +212,6 @@ static int find_or_add_client(struct client_slot *clients,
       clients[i].applied_input_seq = 0;
       clients[i].input_head = 0;
       clients[i].input_count = 0;
-      clients[i].input_repeat_left = 0;
       memset(clients[i].name, 0, NAME_LEN); /* the seat's previous occupant */
       if (is_new) {
         *is_new = 1;
@@ -759,12 +751,26 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
         struct client_slot *c = &clients[slot];
         uint8_t last = (uint8_t)((c->input_head + c->input_count +
                                   INPUT_QUEUE_MAX - 1) % INPUT_QUEUE_MAX);
-        if (c->input_count > 0 && c->input_q[last].joy == delta.joy) {
-          /* Same joy as the entry already waiting: the client is holding a
-             direction or idling, and the repeat carries no new intent. Advance
-             that entry's sequence instead of queueing another, so keepalives
-             cannot push a real direction change to the back of the queue or
-             build up input latency. Only genuine transitions take a slot. */
+        /* Idle keepalives fold; real intent never does.
+
+           A neutral costs the sender no predicted cell, so collapsing a run of
+           them into the entry already waiting loses no movement, and advancing
+           that entry's sequence acks only inputs that were always going to
+           move nothing. It also keeps a stream of keepalives from queueing
+           ahead of a genuine turn.
+
+           A directional repeat is the opposite: the client predicted a cell
+           for it. Folding one used to advance the queued entry's sequence too,
+           so applying that single entry acked every input folded into it. The
+           client discards its pending ring up to the ack, so it threw away
+           inputs it had already moved for and kept the cells -- a permanent
+           one-cell divergence per fold, with nothing left pending to reveal
+           it. On hardware that read as a one-cell perpendicular offset, the
+           server turning a cell late, plus two to three cells of along-track
+           lag: the corner-turn snap. */
+        int foldable = (c->input_count > 0 && c->input_q[last].joy == delta.joy &&
+                        (delta.joy & 0x1F) == 0x0F);
+        if (foldable) {
           c->input_q[last].seq = delta.seq;
         } else if (c->input_count < INPUT_QUEUE_MAX) {
           uint8_t tail = (uint8_t)((c->input_head + c->input_count) %
@@ -1266,7 +1272,6 @@ static void apply_queued_input(struct client_slot *clients,
       clients[i].have_applied_input_seq = 1;
       clients[i].input_head = (uint8_t)((head + 1) % INPUT_QUEUE_MAX);
       clients[i].input_count--;
-      clients[i].input_repeat_left = INPUT_REPEAT_MAX;
       if (debug) {
         printf("input apply slot=%d seq=%u joy=%02X queued=%u\n", i,
                (unsigned)clients[i].applied_input_seq,
@@ -1274,11 +1279,16 @@ static void apply_queued_input(struct client_slot *clients,
       }
       continue;
     }
-    if (clients[i].input_repeat_left > 0) {
-      clients[i].input_repeat_left--; /* keep the last direction briefly */
-      continue;
-    }
-    players[i].joy = 0x0F; /* nothing left to repeat: stand still */
+    /* Nothing queued: stand still. Repeating the last applied direction to
+       cover a late packet walked the actor a cell the client never predicted,
+       and the client had already been acked for everything it sent, so that
+       cell was never reconciled -- it became a permanent offset along the
+       direction of travel. On hardware that showed up as shots leaving from a
+       row the player was not standing on, then a snap onto that row once
+       firing stopped, because ACTFLAG's shot bits suppress the reconcile while
+       the trigger is held. A missing input is a lost packet: it goes unacked,
+       stays in the client's pending ring and is replayed. */
+    players[i].joy = 0x0F;
   }
 }
 

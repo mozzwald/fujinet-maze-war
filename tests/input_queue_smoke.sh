@@ -108,30 +108,33 @@ if len(seen) < 3:
          "still being coalesced away or dropped")
 print(f"burst applied in order, ack walked {seen}")
 
-# Repeats of the same joy must not accumulate. Spam far faster than the tick,
-# then send one genuine turn: it has to land on the very next tick.
-for _ in range(60):
-    c.send(0x0F)
-    time.sleep(0.02)
-c.ack(2 * TICK)
-turn = c.send(0x0D)
-landed = None
-for k in range(4):
+# A repeat of the joy already queued is still its own input. The ack must walk
+# one applied sequence per tick and never jump to the newest received. Folding a
+# repeat into the waiting entry used to advance that entry's sequence, so
+# applying it acked inputs that had never run; the client discards its pending
+# ring up to the ack and kept the cells it had already predicted, diverging by
+# one cell per fold with nothing left pending to show for it.
+reps = [c.send(0x0D) for _ in range(4)]
+first = c.ack(TICK + 0.02)
+if first == reps[-1]:
+    fail(f"ack jumped to {reps[-1]} after a single tick; repeats were folded "
+         "and the ack claims inputs the server never applied")
+seen2 = []
+for _ in range(8):
     a = c.ack(TICK + 0.02)
-    if a == turn:
-        landed = k
+    if a is not None and (not seen2 or seen2[-1] != a):
+        seen2.append(a)
+    if seen2 and seen2[-1] == reps[-1]:
         break
-if landed is None:
-    fail("a turn sent after idle keepalives never got applied; repeats are "
-         "building a backlog ahead of real input")
-if landed > 1:
-    fail(f"turn took {landed + 1} ticks to apply; keepalives are adding latency")
-print("turn after keepalive spam applied promptly")
+if not seen2 or seen2[-1] != reps[-1]:
+    fail(f"ack stalled at {seen2[-1] if seen2 else None}, never reached "
+         f"{reps[-1]}: a repeated input was swallowed")
+print(f"repeats each applied in turn, ack walked {seen2}")
 PYEOF
 
 # Keepalive spam must not have overflowed the queue.
 if grep -F "queue-full" "$LOG_FILE" >/dev/null; then
-    echo "FAIL: queue overflowed on plain keepalives" >&2
+    echo "FAIL: queue overflowed on a handful of repeats" >&2
     exit 1
 fi
 
@@ -146,6 +149,24 @@ grep -A6 -F "clients[i].input_q[head].joy" "$SERVER_SRC" \
     echo "FAIL: ack is not set from the applied queue entry" >&2
     exit 1
 }
-grep -E "INPUT_REPEAT_MAX" "$SERVER_SRC" >/dev/null
+# The server must never walk the actor on a tick the client did not ask for.
+# Repeating the last direction over a late packet moved a cell the client never
+# predicted, and the client had already been acked, so it was never reconciled.
+if grep -E "input_repeat_left" "$SERVER_SRC" >/dev/null; then
+    echo "FAIL: the server repeats the last direction on an empty queue again;" \
+         "that invents movement the client never predicted" >&2
+    exit 1
+fi
+
+# Folding is allowed only for idle keepalives. Folding a directional repeat
+# advances the queued entry's sequence, so applying it acks inputs the client
+# already predicted cells for, and those cells are never reconciled.
+if grep -F "input_q[last].seq = delta.seq" "$SERVER_SRC" >/dev/null; then
+    grep -F "(delta.joy & 0x1F) == 0x0F" "$SERVER_SRC" >/dev/null || {
+        echo "FAIL: repeats are folded without restricting the fold to" \
+             "neutral keepalives; the ack will over-report what was applied" >&2
+        exit 1
+    }
+fi
 
 echo "input queue smoke passed"

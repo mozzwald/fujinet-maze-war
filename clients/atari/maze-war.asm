@@ -75,6 +75,7 @@ NET_PORT_LO	=	$23	;swap16(9000) -> $2823
 NET_PORT_HI	=	$28
 NET_FRAME_DIV	=	6	;~10 Hz @ 60 FPS (matches server tick)
 NET_RECON_P0	=	3	;local player reconcile threshold (manhattan cells)
+NET_IDLE_SETTLE	=	20	;frames of held-neutral before idle convergence
 NET_RECON_P1	=	10	;remote catastrophic hard-snap guard
 NET_RECOVER_P1	=	3	;remote bounded-recovery snap threshold
 NET_DESYNC_MAX	=	3	;remote failed-recovery attempts before forced snap
@@ -875,6 +876,12 @@ NET_INIT	LDA	#0
 	STA	NET_DIAG_PENDMAX
 	STA	NET_DIAG_SRC
 	STA	NET_DIAG_HOLD
+	STA	NET_DIAG_CNT
+	STA	NET_DIAG_CNT+1
+	STA	NET_DIAG_CNT+2
+	STA	NET_DIAG_CNT+3
+	STA	NET_SNAPLOG_IDX
+	STA	NET_IDLE_FRAMES
 	STA	NET_NAME_TMR
 	LDA	#$FF
 	STA	NET_TX_CLKLAST
@@ -935,6 +942,9 @@ NET_CLRMAP1
 	LDA	STRIG0
 	AND	#$01
 	STA	NET_TX_LAST_TRIG
+	STA	NET_TRIG_PREV
+	LDA	#0
+	STA	NET_TRIG_LATCH
 	LDA	POINTER
 	STA	NET_SAVPTR
 	LDA	POINTER+1
@@ -1057,6 +1067,7 @@ NHR_PMCLR
 ;
 NET_WAIT_TICK
 	JSR	NET_NAME_RETRY
+	JSR	NET_IDLE_TICK
 	INC	NET_WAIT_LO
 	BNE	NWT_X
 	INC	NET_WAIT_HI
@@ -1073,6 +1084,23 @@ NWT_MSG	STA	HOST_MSG
 	STX	HOST_MSG+1
 	JMP	NET_HOSTRET
 NWT_X	RTS
+;
+; Track how long the stick has been centred. A direction change passes through
+; centre for a frame or two, which must not read as "the player has stopped".
+NET_IDLE_TICK
+	LDA	NET_RX_STICK
+	AND	#$0F
+	CMP	#$0F
+	BEQ	NIT_NEUTRAL
+	LDA	#0
+	STA	NET_IDLE_FRAMES
+	RTS
+NIT_NEUTRAL
+	LDA	NET_IDLE_FRAMES
+	CMP	#$FF
+	BEQ	NIT_X
+	INC	NET_IDLE_FRAMES
+NIT_X	RTS
 ;
 ; The server only re-broadcasts names it already knows, so a lost NAME would
 ; never be noticed. Every ~2s, if we have a name but our own slot still reads
@@ -1183,20 +1211,9 @@ NP_TXI_OK
 	BNE	NP_NAMEOK
 	JSR	NET_TX_BUILD_NAME
 NP_NAMEOK
-	; send immediately on input edge so stop/turn/fire intent is not delayed
-	; until the next periodic frame slot.
-	LDA	NET_TX_STATE
-	BNE	NP_TICK
-	LDA	NET_RX_STICK
-	CMP	NET_TX_LAST_STICK
-	BNE	NP_MKDELTA
-	LDA	NET_RX_TRIG
-	CMP	NET_TX_LAST_TRIG
-	BEQ	NP_TICK
-NP_MKDELTA
-	JSR	NET_TX_BUILD_DELTA
-	LDA	#0
-	STA	NET_TICK
+	; Input edges no longer transmit on their own; the periodic slot below
+	; carries the newest stick, one delta per predicted cell. A turn waits at
+	; most one slot, which is the server's own tick granularity anyway.
 NP_TICK
 	LDA	RTCLOK
 	CMP	NET_TX_CLKLAST
@@ -1247,6 +1264,15 @@ NSI_STOK
 	LDA	#1
 NSI_TROK
 	STA	NET_RX_TRIG
+	TAY			;press edge (released 1 -> pressed 0) latches
+	LDA	NET_TRIG_PREV	;so a tap between slots still reaches the server
+	BEQ	NSI_TRPREV
+	CPY	#0
+	BNE	NSI_TRPREV
+	LDA	#1
+	STA	NET_TRIG_LATCH
+NSI_TRPREV
+	STY	NET_TRIG_PREV
 	RTS
 ;
 ; map local stick input to non-diagonal canonical stick nibble so server
@@ -1319,6 +1345,14 @@ NET_TX_BUILD_DELTA
 NTB_TRIGUP
 	TYA
 	STA	NET_TX_LAST_TRIG
+	LDA	NET_TRIG_LATCH
+	BEQ	NTB_NOLATCH
+	LDA	#0
+	STA	NET_TRIG_LATCH
+	LDA	NET_TX_BUF+3
+	ORA	#$10
+	STA	NET_TX_BUF+3
+NTB_NOLATCH
 	LDA	#$41
 	STA	NET_TX_BUF
 	LDA	NET_SEQ
@@ -2214,10 +2248,9 @@ NLRC_IDLE
 	BNE	NLRC_X
 	LDA	NET_PEND_COUNT
 	BNE	NLRC_X
-	LDA	NET_RX_STICK
-	AND	#$0F
-	CMP	#$0F
-	BNE	NLRC_X
+	LDA	NET_IDLE_FRAMES	;genuinely stopped, not just passing through
+	CMP	#NET_IDLE_SETTLE	;centre on the way to another direction
+	BCC	NLRC_X
 	LDA	LOCX,X
 	CMP	NET_PX_X,X
 	BNE	NLRC_CONV
@@ -2291,8 +2324,25 @@ NET_LOCAL_PID_RESET
 ;
 ; A = trigger bit to record. Preserves X and Y.
 NET_DIAG_BUMP
+	STA	NET_DIAG_BIT	;callers keep the slot index in X, so the
+	STY	NET_DIAG_YSAV	;counter lookup walks Y instead
 	ORA	NET_DIAG_SRC
 	STA	NET_DIAG_SRC
+	LDA	NET_DIAG_BIT
+	LDY	#0
+NDB_IDX	LSR
+	BCS	NDB_HIT
+	INY
+	CPY	#4
+	BCC	NDB_IDX
+	BCS	NDB_TOT
+NDB_HIT	LDA	NET_DIAG_CNT,Y	;no INC abs,Y on 6502
+	CMP	#$FF
+	BEQ	NDB_TOT
+	CLC
+	ADC	#1
+	STA	NET_DIAG_CNT,Y
+NDB_TOT
 	LDA	NET_DIAG_SNAPS	;saturate rather than wrap, so a big number
 	CMP	#$FF		;still reads as "a lot"
 	BEQ	NDB_PEND
@@ -2302,7 +2352,37 @@ NDB_PEND
 	CMP	NET_DIAG_PENDMAX
 	BCC	NDB_X
 	STA	NET_DIAG_PENDMAX
-NDB_X	RTS
+	LDY	NET_SNAPLOG_IDX	;wraps: the newest 16 events are what matter,
+	LDA	NET_DIAG_BIT	;which path fired
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	LOCX,X		;predicted cell, still un-repositioned
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	LOCY,X
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	NET_PX_X,X	;authoritative cell
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	NET_PX_Y,X
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	DIR,X		;facing the prediction was running
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	NET_RX_STICK	;and what the stick was asking for
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	NET_PEND_COUNT
+	STA	NET_SNAPLOG,Y
+	LDA	NET_SNAPLOG_IDX	;a snap is read out right after it is felt
+	CLC
+	ADC	#8
+	AND	#$7F
+	STA	NET_SNAPLOG_IDX
+NDB_X	LDY	NET_DIAG_YSAV
+	RTS
 ;
 NET_LOCAL_ACK_DISCARD
 	LDA	NET_PEND_COUNT
@@ -3750,8 +3830,8 @@ STRTMOV	CPX	NET_LOCAL_PID
 ;READ STICK AND SET DIRECTION IF
 ;IT HAS BEEN MOVED. ALSO, DO ZIGZAG
 ;
-PLRMVE	LDA	NET_RX_STICK	;use debounced sampled input
-	JSR	NET_SAN_STICKA
+PLRMVE	LDA	NET_TX_LAST_STICK	;predict on the input we transmitted, not
+	JSR	NET_SAN_STICKA		;a fresher sample the server will never see
 	CMP	#$0F
 	BNE	PLRDIR
 	JMP	CHKSHOT	;ELSE, DO SHOTS
@@ -5564,6 +5644,8 @@ HOST_MSG	.DS	2	;pending host-screen status string ($0000 = none)
 NET_TX_CLKLAST	.DS	1	;last RTCLOK used for pacing
 NET_TX_LAST_STICK	.DS	1	;last transmitted stick nibble
 NET_TX_LAST_TRIG	.DS	1	;last transmitted trigger bit
+NET_TRIG_PREV	.DS	1	;previous debounced trigger sample
+NET_TRIG_LATCH	.DS	1	;fire seen since the last delta
 NET_RX_DBG	.DS	1	;set after first valid snapshot (enables seq checks)
 NET_IN_TMP	.DS	1	;input debounce scratch
 NET_BOOT_HIDE	.DS	1	;hide actors until first authoritative sync
@@ -5576,6 +5658,12 @@ NET_DIAG_MAXDRIFT	.DS	1	;largest local drift seen, in cells
 NET_DIAG_PENDMAX	.DS	1	;largest unacked input backlog seen
 NET_DIAG_SRC	.DS	1	;which triggers fired: 1 staged 2 idle 4 vbi 8 remote
 NET_DIAG_HOLD	.DS	1	;frames to ignore drift for after our own respawn
+NET_DIAG_BIT	.DS	1	;NET_DIAG_BUMP scratch
+NET_DIAG_YSAV	.DS	1	;NET_DIAG_BUMP saved Y
+NET_DIAG_CNT	.DS	4	;per-path counts: staged, idle, vbi, remote
+NET_IDLE_FRAMES	.DS	1	;consecutive frames with the stick centred
+NET_SNAPLOG_IDX	.DS	1	;write cursor into NET_SNAPLOG
+NET_SNAPLOG	.DS	128	;16 x 8: bit,locx,locy,px,py,dir,stick,pend
 NET_NAME_IDX	.DS	1	;name collector index
 NET_NAME_PEND	.DS	1	;our name is queued for transmission
 NET_NAME_TMR	.DS	1	;frames until the next name retry check
