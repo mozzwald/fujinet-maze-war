@@ -161,26 +161,16 @@ class Client:
                 return
         raise SystemExit(f"timed out waiting for pid {pid} at {pos}")
 
-    def hold_until_change(self, pid, start, joy, timeout=5.0):
-        """Hold a direction until the move lands.
-
-        The server samples one joy value per tick, so a direction sent once can
-        be overwritten by the neutral from the previous step before the tick
-        reads it. Re-sending while waiting is what holding the stick does, and
-        it makes the walk independent of tick alignment.
-        """
+    def try_change(self, pid, start, timeout=1.5):
+        """Wait for a move, returning None instead of raising if it never comes."""
         deadline = time.time() + timeout
-        next_send = 0.0
         while time.time() < deadline:
-            if time.time() >= next_send:
-                self.send_delta(joy)
-                next_send = time.time() + 0.15
             self.pump(0.02)
             if self.players.get(pid):
                 pos = (self.players[pid]["x"], self.players[pid]["y"])
                 if pos != start:
                     return pos
-        raise SystemExit(f"timed out holding {joy:#04x} for pid {pid} from {start}")
+        return None
 
     def wait_snapshot_change(self, pid, start, timeout=5.0):
         deadline = time.time() + timeout
@@ -280,13 +270,37 @@ def occupied_now(client, *exclude):
     return out
 
 def walk(client, pid, path):
+    """Follow a path, re-planning whenever reality disagrees with the plan.
+
+    The old version walked a precomputed path and accepted whatever cell it
+    landed in. One unexpected step desynced it from the plan and the next move
+    was into a wall, which showed up as a hang or a "no direction" error. The
+    maze is shared and mutable, so the walk has to re-plan rather than assume.
+    """
+    if not path:
+        return
+    goal = path[-1]
     current = (client.players[pid]["x"], client.players[pid]["y"])
-    for step in path:
+    replans = 0
+    while path:
+        step = path[0]
         _dir_id, joy = joy_for_step(current, step)
-        actual = client.hold_until_change(pid, current, joy)
+        client.send_delta(joy)
+        actual = client.try_change(pid, current)
         client.send_neutral()
-        client.wait_snapshot_pos(pid, actual)
-        current = actual
+        if actual is not None:
+            client.wait_snapshot_pos(pid, actual)
+            current = actual
+        if actual == step:
+            path = path[1:]
+            continue
+        replans += 1
+        if replans > 8:
+            raise SystemExit(
+                f"pid {pid} stuck at {current} trying to reach {goal}")
+        path = bfs(bricks, current, goal, occupied_now(client, pid))
+        if path is None:
+            raise SystemExit(f"no route for pid {pid} from {current} to {goal}")
 
 
 def choose_move_then_fire(bricks, start, blocked):

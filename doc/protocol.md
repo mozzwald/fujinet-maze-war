@@ -73,8 +73,12 @@ Sent each server tick (default 10 Hz) to each connected client.
 Notes:
 - Clients should treat position/joy/score in snapshots as authoritative.
 - Scores are raw 0..255 values.
-- `ack_seq` is the last local `DELTA` sequence authoritatively applied for the
-  recipient of this snapshot, not merely the latest received DELTA byte stream.
+- `ack_seq` is the last local `DELTA` sequence authoritatively **applied** for
+  the recipient of this snapshot, not merely the latest received. The server
+  queues inbound inputs and applies one per tick in order; the ack names the
+  entry it applied. Acking a sequence that was received but never applied makes
+  the client discard an input it predicted, which is what produced a snap-back
+  when turning a corner at speed.
 - When `ack_valid` is clear, byte `[19]` must be ignored.
 
 ### 0x41 DELTA (4 bytes, C->S)
@@ -275,6 +279,23 @@ finish through the normal `RESPAWN` path.
 Because slot identity is address+port, and FujiNet chooses a fresh source port
 each time it reopens a stream, a reconnecting player lands in a **new** slot;
 their previous slot persists until the timeout above expires.
+
+## Client Input Model
+
+- Inbound `DELTA` inputs are queued per client and applied **one per tick, in
+  order**. The server used to keep only the newest joy each tick and discard
+  the rest, so any input arriving between ticks was lost.
+- Consecutive inputs carrying the **same** joy are coalesced into the waiting
+  queue entry, which only advances its sequence. A held direction or an idle
+  keepalive therefore costs no queue depth and cannot push a real direction
+  change to the back or add input latency. Only genuine transitions take a slot.
+- With an empty queue the server repeats the last applied joy for at most
+  `INPUT_REPEAT_MAX` ticks before falling back to neutral, so a dropped or late
+  packet does not stop a held direction dead.
+- On queue overflow the arriving input is dropped and **not** acked, so the
+  client keeps it pending and replays it.
+- Measured on a live Atari session: queue depth stays at 0-1 with zero
+  overflow, so none of this adds latency in practice.
 
 ## Gameplay and Timing Semantics
 

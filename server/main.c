@@ -35,6 +35,24 @@ enum { MAX_PLAYERS = 4 };
    so the slot frees shortly after the client has stopped sending. */
 enum { CLIENT_TIMEOUT_MS = 15000 };
 enum { INPUT_STALE_MS = 500 };
+/* Client inputs are queued and applied one per tick, in order, instead of the
+   newest arrival overwriting whatever had not been read yet. Overwriting lost
+   every input that landed between ticks -- a quick corner turn never reached
+   the simulation at all -- while the ack still advanced to the newest sequence
+   received, so the client believed the turn had been applied, dropped it from
+   its pending ring, and then snapped back once the drift crossed the
+   reconcile threshold.
+
+   The queue is short on purpose. It only needs to absorb the burst a player
+   makes changing direction; anything deeper would just be added input latency.
+   On overflow the arriving input is dropped and deliberately NOT acked, so the
+   client keeps it pending and replays it. */
+enum { INPUT_QUEUE_MAX = 6 };
+/* With an empty queue, keep walking in the last applied direction for a couple
+   of ticks rather than stopping dead. That covers a dropped or late packet
+   while holding a direction. It is capped because every repeat is a move the
+   client never asked for, which is drift in the opposite direction. */
+enum { INPUT_REPEAT_MAX = 2 };
 enum { TRANSPORT_SUMMARY_MS = 2000 };
 /* BRICK_DELTA is sent once and never acknowledged, so a single lost packet
    used to desync a client's maze from the server for the rest of the match
@@ -97,6 +115,13 @@ struct client_slot {
   uint8_t last_delta_seq;
   uint8_t have_applied_input_seq;
   uint8_t applied_input_seq;
+  struct {
+    uint8_t seq;
+    uint8_t joy;
+  } input_q[INPUT_QUEUE_MAX];
+  uint8_t input_head;
+  uint8_t input_count;
+  uint8_t input_repeat_left;
 };
 
 static volatile sig_atomic_t g_running = 1;
@@ -170,6 +195,9 @@ static int find_or_add_client(struct client_slot *clients,
       clients[i].last_delta_seq = 0;
       clients[i].have_applied_input_seq = 0;
       clients[i].applied_input_seq = 0;
+      clients[i].input_head = 0;
+      clients[i].input_count = 0;
+      clients[i].input_repeat_left = 0;
       memset(clients[i].name, 0, NAME_LEN); /* the seat's previous occupant */
       if (is_new) {
         *is_new = 1;
@@ -188,6 +216,9 @@ static int find_or_add_client(struct client_slot *clients,
       clients[i].last_delta_seq = 0;
       clients[i].have_applied_input_seq = 0;
       clients[i].applied_input_seq = 0;
+      clients[i].input_head = 0;
+      clients[i].input_count = 0;
+      clients[i].input_repeat_left = 0;
       memset(clients[i].name, 0, NAME_LEN); /* the seat's previous occupant */
       if (is_new) {
         *is_new = 1;
@@ -722,7 +753,29 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
                slot, transport_delta_format_name(delta.format),
                (unsigned)delta.seq, (unsigned)delta.joy);
       }
-      players[pid].joy = delta.joy;
+      {
+        struct client_slot *c = &clients[slot];
+        uint8_t last = (uint8_t)((c->input_head + c->input_count +
+                                  INPUT_QUEUE_MAX - 1) % INPUT_QUEUE_MAX);
+        if (c->input_count > 0 && c->input_q[last].joy == delta.joy) {
+          /* Same joy as the entry already waiting: the client is holding a
+             direction or idling, and the repeat carries no new intent. Advance
+             that entry's sequence instead of queueing another, so keepalives
+             cannot push a real direction change to the back of the queue or
+             build up input latency. Only genuine transitions take a slot. */
+          c->input_q[last].seq = delta.seq;
+        } else if (c->input_count < INPUT_QUEUE_MAX) {
+          uint8_t tail = (uint8_t)((c->input_head + c->input_count) %
+                                   INPUT_QUEUE_MAX);
+          c->input_q[tail].seq = delta.seq;
+          c->input_q[tail].joy = delta.joy;
+          c->input_count++;
+        } else if (debug) {
+          /* Not acked: the client keeps it pending and replays it. */
+          printf("DROP DELTA slot=%d queue-full seq=%u\n", slot,
+                 (unsigned)delta.seq);
+        }
+      }
       last_input_ms[pid] = now;
       clients[slot].transport.accepted_delta++;
       global_transport->accepted_delta++;
@@ -1189,6 +1242,40 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
   }
 }
 
+/* Take one queued input per client per tick, in the order the client sent it,
+   and acknowledge exactly what was applied and nothing more. The ack is what
+   the client's pending-input ring trusts when deciding what it may discard, so
+   reporting an input as applied when it was not is what produced the snap-back
+   on a fast corner turn. */
+static void apply_queued_input(struct client_slot *clients,
+                               struct player_state *players, int debug) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (!clients[i].in_use) {
+      continue;
+    }
+    if (clients[i].input_count > 0) {
+      uint8_t head = clients[i].input_head;
+      players[i].joy = clients[i].input_q[head].joy;
+      clients[i].applied_input_seq = clients[i].input_q[head].seq;
+      clients[i].have_applied_input_seq = 1;
+      clients[i].input_head = (uint8_t)((head + 1) % INPUT_QUEUE_MAX);
+      clients[i].input_count--;
+      clients[i].input_repeat_left = INPUT_REPEAT_MAX;
+      if (debug) {
+        printf("input apply slot=%d seq=%u joy=%02X queued=%u\n", i,
+               (unsigned)clients[i].applied_input_seq,
+               (unsigned)players[i].joy, (unsigned)clients[i].input_count);
+      }
+      continue;
+    }
+    if (clients[i].input_repeat_left > 0) {
+      clients[i].input_repeat_left--; /* keep the last direction briefly */
+      continue;
+    }
+    players[i].joy = 0x0F; /* nothing left to repeat: stand still */
+  }
+}
+
 static void step_players(struct player_state *players, struct shot_state *shots,
                          uint8_t *bricks, int sock,
                          struct client_slot *clients, uint8_t *seq,
@@ -1573,15 +1660,10 @@ int main(int argc, char **argv) {
       /* Before the step, so an echo never shares a tick with the break that
          produced it: one brick packet per tick, never two. */
       flush_brick_echo(sock, clients, &seq, debug);
+      /* Sets this tick's authoritative joy and the ack that goes with it. */
+      apply_queued_input(clients, players, debug);
       step_players(players, shots, brick_bits, sock, clients, &seq, debug,
                    zombies, last_input_ms);
-      for (int i = 0; i < MAX_PLAYERS; i++) {
-        if (!clients[i].have_delta_seq) {
-          continue;
-        }
-        clients[i].applied_input_seq = clients[i].last_delta_seq;
-        clients[i].have_applied_input_seq = 1;
-      }
       uint8_t zombie_mask[MAX_PLAYERS];
       uint8_t zombie_bits = 0;
       uint8_t snapshot_seq = seq++;

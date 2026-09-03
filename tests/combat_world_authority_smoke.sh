@@ -165,50 +165,6 @@ class Client:
                 return
         raise SystemExit(f"timed out waiting for pid {pid} at {pos}")
 
-    def hold_fire_until_respawn(self, pid, joy, final, timeout=8.0):
-        """Hold the trigger until the kill registers.
-
-        Same reason as hold_until_change: the server reads one joy per tick, so
-        a fire sent once can be overwritten by a neighbouring neutral before the
-        tick sees it, and the kill never happens.
-        """
-        deadline = time.time() + timeout
-        next_send = 0.0
-        while time.time() < deadline:
-            if time.time() >= next_send:
-                self.send_delta(joy)
-                next_send = time.time() + 0.15
-            self.pump(0.02)
-            for pkt in self.respawns:
-                if pkt[2] != pid:
-                    continue
-                if final and (pkt[5] & 0x02):
-                    return pkt
-                if not final and (pkt[5] & 0x01) and not (pkt[5] & 0x02):
-                    return pkt
-        raise SystemExit(f"timed out holding fire for respawn pid={pid}")
-
-    def hold_until_change(self, pid, start, joy, timeout=5.0):
-        """Hold a direction until the move lands.
-
-        The server samples one joy value per tick, so a direction sent once can
-        be overwritten by the neutral from the previous step before the tick
-        reads it. Re-sending while waiting is what holding the stick does, and
-        it makes the walk independent of tick alignment.
-        """
-        deadline = time.time() + timeout
-        next_send = 0.0
-        while time.time() < deadline:
-            if time.time() >= next_send:
-                self.send_delta(joy)
-                next_send = time.time() + 0.15
-            self.pump(0.02)
-            if self.players.get(pid):
-                pos = (self.players[pid]["x"], self.players[pid]["y"])
-                if pos != start:
-                    return pos
-        raise SystemExit(f"timed out holding {joy:#04x} for pid {pid} from {start}")
-
     def wait_snapshot_change(self, pid, start, timeout=5.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -296,7 +252,8 @@ def walk(client, pid, path):
     current = (client.players[pid]["x"], client.players[pid]["y"])
     for step in path:
         joy = joy_for_step(current, step)
-        actual = client.hold_until_change(pid, current, joy)
+        client.send_delta(joy)
+        actual = client.wait_snapshot_change(pid, current)
         if actual != step:
             raise SystemExit(f"expected pid {pid} step {step}, got {actual}")
         client.send_neutral()
@@ -429,7 +386,8 @@ target, fire_joy, path = choose_adjacent_target(
 )
 walk(clients[1], slot1_pid, path)
 slot1_pos = target
-clients[0].hold_fire_until_respawn(slot1_pid, fire_joy | 0x10, False)
+clients[0].send_delta(fire_joy | 0x10)
+clients[0].wait_respawn(slot1_pid, False, timeout=8.0)
 clients[0].pump(0.4)
 clients[0].send_neutral()
 clients[0].wait_snapshot_score(slot0_pid, 1)
@@ -450,7 +408,8 @@ shooter, fire_joy, shooter_path = choose_line_shot_toward_target(
 )
 walk(clients[0], slot0_pid, shooter_path)
 slot0_pos = shooter
-clients[0].hold_fire_until_respawn(slot1_pid, fire_joy | 0x10, False)
+clients[0].send_delta(fire_joy | 0x10)
+clients[0].wait_respawn(slot1_pid, False, timeout=8.0)
 clients[0].pump(0.4)
 clients[0].send_neutral()
 clients[0].pump(2.0)
