@@ -81,10 +81,20 @@ b.name(0, "j\x01e\xffn<>!")
 a.pump(0.8)
 b.pump(0.8)
 
+# The rotation announces one slot per second, so give it a full cycle rather
+# than assuming everything has landed.
+deadline = time.time() + 8.0
+while time.time() < deadline:
+    a.pump(0.4)
+    b.pump(0.4)
+    named = [p for p in a.names if a.names[p].strip()]
+    if a.names.get(0, "").strip() and len(named) >= 2:
+        break
+
 if a.names.get(0) != "MOZZWALD":
     fail(f"slot 0 name wrong: {a.names.get(0)!r}")
 
-other = [p for p in a.names if p != 0]
+other = [p for p in a.names if p != 0 and a.names[p].strip()]
 if not other:
     fail("second client's name never broadcast")
 pid_b = other[0]
@@ -92,13 +102,22 @@ if pid_b == 0:
     fail("a client renamed slot 0 by spoofing pid")
 if a.names[pid_b] != "JEN     ":
     fail(f"name not sanitized/padded: {a.names[pid_b]!r}")
-if a.names != b.names:
-    fail(f"clients disagree: {a.names} vs {b.names}")
+# Compare only slots both clients have actually heard about.
+shared = set(a.names) & set(b.names)
+for p in sorted(shared):
+    if a.names[p] != b.names[p]:
+        fail(f"clients disagree on slot {p}: {a.names[p]!r} vs {b.names[p]!r}")
+if not shared:
+    fail("clients share no name state at all")
 
 # a late joiner must be told the names already in play
 c = C()
 c.name(0, "LATE")
-c.pump(1.0)
+deadline = time.time() + 8.0
+while time.time() < deadline:
+    c.pump(0.4)
+    if c.names.get(0, "").strip():
+        break
 if c.names.get(0) != "MOZZWALD":
     fail(f"joining client not told existing names: {c.names}")
 
@@ -118,9 +137,27 @@ grep -F 'memset(clients[i].name, 0, NAME_LEN)' "$SERVER_SRC" >/dev/null || {
 # Names must be repeated so a lost NAME heals, and must go out one at a time.
 # Bursting them behind the 51-byte BRICK_FULL made the Atari drop the map.
 grep -F "broadcast_next_name(sock, clients, &seq, &name_rotate)" "$SERVER_SRC" >/dev/null || {
-    echo "FAIL: names are not re-broadcast on the tick rotation" >&2
+    echo "FAIL: names are not re-broadcast" >&2
     exit 1
 }
+# ...and on their own slow timer, not once per tick. At tick rate the name
+# packet doubled the inbound packet count and starved BRICK_DELTA, which made
+# destroyed bricks linger until the next full resync.
+grep -E "NAME_ROTATE_MS" "$SERVER_SRC" >/dev/null || {
+    echo "FAIL: name rotation has no slow timer" >&2
+    exit 1
+}
+# The one call site must sit inside the NAME_ROTATE_MS timer block, not the
+# game tick. Anchor on the timer assignment that immediately precedes it.
+if ! grep -B2 -F "broadcast_next_name(sock, clients, &seq, &name_rotate)" \
+     "$SERVER_SRC" | grep -F "last_name_rotate_ms = now_ms();" >/dev/null; then
+    echo "FAIL: name rotation is not driven by its own timer" >&2
+    exit 1
+fi
+if [ "$(grep -c "broadcast_next_name(sock" "$SERVER_SRC")" != "1" ]; then
+    echo "FAIL: expected exactly one name rotation call site" >&2
+    exit 1
+fi
 if grep -A6 -E "build_brick_full\(seq\+\+, brick_bits, bfull" "$SERVER_SRC" \
     | grep -E "broadcast_(names|next_name)"; then
     echo "FAIL: name packets burst alongside BRICK_FULL; that loses the map" >&2
@@ -161,5 +198,28 @@ grep -A2 -E "^HI_LOOP" "$ATARI_SRC" | grep -E "JSR[$TAB ]+TXT_CURSOR" >/dev/null
 # leaving a field must not strand a block on it
 grep -A2 -E "^HI_DONE" "$ATARI_SRC" | grep -E "JSR[$TAB ]+TXT_CUROFF" >/dev/null || {
     echo "FAIL: cursor is left behind when the field loses focus" >&2; exit 1; }
+
+# A destroyed brick is announced more than once. Losing the single packet used
+# to leave the wall painted until the next full resync, seconds later.
+grep -E "BRICK_ECHO_REPEATS" "$SERVER_SRC" >/dev/null || {
+    echo "FAIL: brick destruction is still announced once and forgotten" >&2
+    exit 1
+}
+grep -F "queue_brick_echo(" "$SERVER_SRC" >/dev/null || {
+    echo "FAIL: no brick echo queue" >&2; exit 1; }
+# every break site must register an echo
+breaks=$(grep -c "clear_brick(" "$SERVER_SRC" || true)
+echoes=$(grep -c "queue_brick_echo(" "$SERVER_SRC" || true)
+if [ "${echoes:-0}" -lt 4 ]; then
+    echo "FAIL: a brick break site does not queue an echo ($echoes for $breaks)" >&2
+    exit 1
+fi
+# echoes go out one per tick, ahead of the step, so a break and its echo never
+# share a tick
+grep -A3 -F "flush_brick_echo(sock, clients, &seq, debug);" "$SERVER_SRC" \
+    | grep -F "step_players(" >/dev/null || {
+    echo "FAIL: brick echo no longer flushes before the step" >&2
+    exit 1
+}
 
 echo "player names smoke passed"

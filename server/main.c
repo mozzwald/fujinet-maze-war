@@ -43,6 +43,16 @@ enum { TRANSPORT_SUMMARY_MS = 2000 };
    bounds that divergence. Clients treat a later BRICK_FULL as a repair and
    only redraw cells that actually changed, so this is not a visible redraw. */
 enum { BRICK_RESYNC_MS = 3000 };
+/* Names change only on join, leave or rename, and each of those broadcasts
+   immediately. The rotation is just a safety net for a lost NAME, so it runs
+   on a slow timer: at tick rate it was adding a packet to every single tick,
+   which is bandwidth taken from BRICK_DELTA on a link that drops things. */
+enum { NAME_ROTATE_MS = 1000 };
+/* A destroyed brick used to be announced once. Losing that one packet left the
+   wall painted on a client until the next full resync, which is why a brick
+   could take seconds to vanish. Echo it on following ticks like SHOT clears
+   do -- one packet per tick, never a burst. */
+enum { BRICK_ECHO_MAX = 8, BRICK_ECHO_REPEATS = 2 };
 /* Display name length. The Atari HUD gives each slot columns 4..11 of its
    20-column line before the score digit at column 15, so 8 is what fits. */
 #define NAME_LEN 8
@@ -338,6 +348,59 @@ static void build_name(uint8_t seq, uint8_t pid, const uint8_t *name,
 }
 
 static void build_brick_delta(uint8_t seq, uint8_t x, uint8_t y,
+                              uint8_t *out, size_t out_len);
+static void broadcast_packet(int sock, struct client_slot *clients,
+                             const uint8_t *pkt, size_t len);
+
+/* Pending brick-destruction echoes. Single-threaded server, one game, so a
+   file-scope queue keeps the three break sites from having to thread it. */
+static struct {
+  uint8_t x;
+  uint8_t y;
+  uint8_t left;
+} g_brick_echo[BRICK_ECHO_MAX];
+
+static void queue_brick_echo(uint8_t x, uint8_t y) {
+  int spare = -1;
+  for (int i = 0; i < BRICK_ECHO_MAX; i++) {
+    if (g_brick_echo[i].left > 0 && g_brick_echo[i].x == x &&
+        g_brick_echo[i].y == y) {
+      g_brick_echo[i].left = BRICK_ECHO_REPEATS;
+      return;
+    }
+    if (spare < 0 && g_brick_echo[i].left == 0) {
+      spare = i;
+    }
+  }
+  if (spare < 0) {
+    spare = 0; /* full: the oldest loses its echo, the resync still covers it */
+  }
+  g_brick_echo[spare].x = x;
+  g_brick_echo[spare].y = y;
+  g_brick_echo[spare].left = BRICK_ECHO_REPEATS;
+}
+
+/* At most one echo per tick: several at once is the burst that loses packets. */
+static void flush_brick_echo(int sock, struct client_slot *clients,
+                             uint8_t *seq, int debug) {
+  for (int i = 0; i < BRICK_ECHO_MAX; i++) {
+    if (g_brick_echo[i].left == 0) {
+      continue;
+    }
+    g_brick_echo[i].left--;
+    uint8_t pkt[4];
+    build_brick_delta((*seq)++, g_brick_echo[i].x, g_brick_echo[i].y, pkt,
+                      sizeof(pkt));
+    broadcast_packet(sock, clients, pkt, sizeof(pkt));
+    if (debug) {
+      printf("TX brick_delta echo x=%u y=%u\n", g_brick_echo[i].x,
+             g_brick_echo[i].y);
+    }
+    return;
+  }
+}
+
+static void build_brick_delta(uint8_t seq, uint8_t x, uint8_t y,
                               uint8_t *out, size_t out_len) {
   if (out_len < 4) {
     return;
@@ -496,6 +559,15 @@ static int is_player_at(const struct player_state *players, int x, int y,
                          int ignore_idx) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (i == ignore_idx) {
+      continue;
+    }
+    /* A player awaiting respawn is not on the board. Its coordinates still hold
+       the cell it died in, and clients hide it, so counting it here turned the
+       death cell into an invisible wall for the whole respawn delay -- and you
+       are usually walking straight at someone when you kill them. Every other
+       subsystem (zombie targeting, fire evaluation, shot hits) already skips
+       respawning players; movement collision was the one that did not. */
+    if (players[i].respawn_at_ms != 0) {
       continue;
     }
     if (players[i].x == (uint8_t)x && players[i].y == (uint8_t)y) {
@@ -699,6 +771,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
     if (x < 20 && y < 19 && !is_outer_wall_cell((int)x, (int)y)) {
       uint8_t out[4];
       clear_brick(brick_bits, x, y);
+      queue_brick_echo(x, y);
       build_brick_delta((*seq)++, x, y, out, sizeof(out));
       broadcast_packet(sock, clients, out, sizeof(out));
       if (debug) {
@@ -947,6 +1020,7 @@ static void start_shot(int shooter, struct player_state *players,
   if (is_brick(bricks, sx, sy)) {
     if (!is_outer_wall_cell(sx, sy)) {
       clear_brick(bricks, sx, sy);
+      queue_brick_echo((uint8_t)sx, (uint8_t)sy);
       uint8_t pkt[4];
       build_brick_delta((*seq)++, (uint8_t)sx, (uint8_t)sy, pkt, sizeof(pkt));
       broadcast_packet(sock, clients, pkt, sizeof(pkt));
@@ -1035,6 +1109,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
     if (is_brick(bricks, nx, ny)) {
       if (!is_outer_wall_cell(nx, ny)) {
         clear_brick(bricks, nx, ny);
+        queue_brick_echo((uint8_t)nx, (uint8_t)ny);
         uint8_t pkt[4];
         build_brick_delta((*seq)++, (uint8_t)nx, (uint8_t)ny, pkt, sizeof(pkt));
         broadcast_packet(sock, clients, pkt, sizeof(pkt));
@@ -1411,7 +1486,9 @@ int main(int argc, char **argv) {
   uint64_t next_tick = now_ms();
   uint64_t last_transport_summary_ms = now_ms();
   uint64_t last_brick_resync_ms = now_ms();
+  uint64_t last_name_rotate_ms = now_ms();
   int name_rotate = 0;
+  memset(g_brick_echo, 0, sizeof(g_brick_echo));
   const uint64_t tick_ms = 1000ULL / (uint64_t)tick_hz;
 
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1469,6 +1546,11 @@ int main(int argc, char **argv) {
       }
     }
 
+    if (now_ms() - last_name_rotate_ms >= NAME_ROTATE_MS) {
+      last_name_rotate_ms = now_ms();
+      broadcast_next_name(sock, clients, &seq, &name_rotate);
+    }
+
     if (now_ms() - last_brick_resync_ms >= BRICK_RESYNC_MS) {
       last_brick_resync_ms = now_ms();
       uint8_t bfull[51];
@@ -1488,11 +1570,11 @@ int main(int argc, char **argv) {
 
     now = now_ms();
     if (now >= next_tick) {
+      /* Before the step, so an echo never shares a tick with the break that
+         produced it: one brick packet per tick, never two. */
+      flush_brick_echo(sock, clients, &seq, debug);
       step_players(players, shots, brick_bits, sock, clients, &seq, debug,
                    zombies, last_input_ms);
-      /* One name per tick: the whole roster cycles in ~400ms without ever
-         putting several packets on the wire back to back. */
-      broadcast_next_name(sock, clients, &seq, &name_rotate);
       for (int i = 0; i < MAX_PLAYERS; i++) {
         if (!clients[i].have_delta_seq) {
           continue;

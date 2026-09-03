@@ -156,9 +156,11 @@ Behavior:
 - The server folds the name to the uppercase subset the Atari character set can
   draw (`A-Z`, `0-9`, space, `-`, `.`), drops anything else, and pads to 8 with
   spaces. Treat inbound names as untrusted text.
-- The server broadcasts the sanitized name to every client, sends all known
-  names to a joining client, and repeats them on the `BRICK_RESYNC_MS` period
-  so a lost NAME heals. Clients re-send their own name every ~2s until they see
+- The server broadcasts the sanitized name to every client immediately, and
+  re-announces one slot per `NAME_ROTATE_MS` (1s) so a lost NAME heals. The
+  rotation is deliberately slow and never shares a tick with other traffic:
+  running it every tick roughly doubled the inbound packet rate and starved
+  `BRICK_DELTA`. Clients re-send their own name every ~2s until they see
   it echoed back for their slot.
 - An all-zero or all-space name means unnamed; clients fall back to their
   `WIZARD` label. A slot handoff clears the name with the rest of the slot's
@@ -195,7 +197,10 @@ Bit ordering:
 ```
 
 Behavior:
-- Server broadcasts this when a non-outer-wall brick is destroyed.
+- Server broadcasts this when a non-outer-wall brick is destroyed, then echoes
+  it on the next `BRICK_ECHO_REPEATS` ticks (one packet per tick). A single
+  lost packet used to leave the wall painted on a client until the next full
+  resync seconds later.
 - Client may request brick removal with this packet; server validates bounds and
   rejects outer border cells.
 - During authoritative combat resolution, a shot that would spawn directly into
@@ -225,6 +230,10 @@ Current server behavior:
   sender's slot and broadcasts final respawn (`flags=0x03`).
 - For client requests, payload `pid/x/y/flags` is currently ignored by server.
 - Score, death, and respawn transitions remain authoritative server outcomes.
+- A player awaiting respawn is off the board: it is skipped by zombie
+  targeting, fire evaluation, shot hits **and movement collision**. Its stored
+  coordinates still hold the cell it died in, so counting it as an obstacle
+  would make that cell an invisible wall for the whole respawn delay.
 
 ## Connection and Slot Semantics
 

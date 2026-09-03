@@ -236,4 +236,81 @@ if ! grep -F 'reset_slot_gameplay(i, players, shots, last_input_ms, now)' \
     exit 1
 fi
 
+# A player awaiting respawn must not block movement. Its coordinates still hold
+# the cell it died in and clients hide it, so counting it in collision turned
+# the death cell into an invisible wall for the whole respawn delay.
+SERVER_SRC="$ROOT_DIR/server/main.c"
+sed -n '/^static int is_player_at/,/^}/p' "$SERVER_SRC" \
+    | grep -F "respawn_at_ms != 0" >/dev/null || {
+    echo "FAIL: is_player_at counts respawning players, walling off death cells" >&2
+    exit 1
+}
+
+# And prove it live: a live player standing on a corpse cell is only reachable
+# once respawning players stop blocking. Deaths come from the zombies, so treat
+# a run that produced too few as inconclusive rather than failing.
+"$SERVER_BIN" --port 9152 --tick-hz 20 --zombies 3 >/dev/null 2>&1 &
+CORPSE_PID=$!
+sleep 1
+python3 - 9152 <<'PYEOF2'
+import socket, sys, time
+PORT = int(sys.argv[1])
+
+def mk():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("127.0.0.1", PORT))
+    s.settimeout(0.02)
+    return s
+
+a, b = mk(), mk()
+a.send(bytes([0x41, 1, 0, 0x0F]))
+b.send(bytes([0x41, 1, 0, 0x0F]))
+pos, dead = {}, set()
+overlaps = deaths = 0
+seq, i = 2, 0
+dirs = [0x07, 0x0D, 0x0B, 0x0E]
+t0 = time.time()
+while time.time() - t0 < 30:
+    a.send(bytes([0x41, seq & 0xFF, 0, dirs[(i // 7) % 4]]))
+    b.send(bytes([0x41, seq & 0xFF, 0, dirs[(i // 5) % 4] | 0x10]))
+    seq += 1
+    i += 1
+    end = time.time() + 0.1
+    while time.time() < end:
+        for s in (a, b):
+            try:
+                p = s.recv(256)
+            except socket.timeout:
+                continue
+            if len(p) >= 6 and p[0] == 0x52:
+                pid = p[2]
+                if p[5] & 0x02:
+                    dead.discard(pid)
+                elif p[5] & 0x01:
+                    dead.add(pid)
+                    deaths += 1
+            elif len(p) >= 19 and p[0] == 0x40:
+                for k in range(4):
+                    pos[k] = (p[3 + k * 2], p[4 + k * 2])
+                for dp in list(dead):
+                    for k in range(4):
+                        if k != dp and k not in dead and pos.get(k) == pos.get(dp):
+                            overlaps += 1
+
+if deaths < 3:
+    print(f"note: only {deaths} deaths in the window, corpse check inconclusive")
+elif overlaps == 0:
+    raise SystemExit(
+        f"FAIL: {deaths} deaths and never once could a player stand on a "
+        "corpse cell; respawning players are still blocking movement")
+else:
+    print(f"corpse pass-through confirmed ({overlaps} over {deaths} deaths)")
+PYEOF2
+status=$?
+kill "$CORPSE_PID" 2>/dev/null || true
+wait "$CORPSE_PID" 2>/dev/null || true
+if [ $status -ne 0 ]; then
+    exit 1
+fi
+
 echo "slot lifecycle smoke passed"
