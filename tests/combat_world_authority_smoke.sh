@@ -165,6 +165,50 @@ class Client:
                 return
         raise SystemExit(f"timed out waiting for pid {pid} at {pos}")
 
+    def hold_fire_until_respawn(self, pid, joy, final, timeout=8.0):
+        """Hold the trigger until the kill registers.
+
+        Same reason as hold_until_change: the server reads one joy per tick, so
+        a fire sent once can be overwritten by a neighbouring neutral before the
+        tick sees it, and the kill never happens.
+        """
+        deadline = time.time() + timeout
+        next_send = 0.0
+        while time.time() < deadline:
+            if time.time() >= next_send:
+                self.send_delta(joy)
+                next_send = time.time() + 0.15
+            self.pump(0.02)
+            for pkt in self.respawns:
+                if pkt[2] != pid:
+                    continue
+                if final and (pkt[5] & 0x02):
+                    return pkt
+                if not final and (pkt[5] & 0x01) and not (pkt[5] & 0x02):
+                    return pkt
+        raise SystemExit(f"timed out holding fire for respawn pid={pid}")
+
+    def hold_until_change(self, pid, start, joy, timeout=5.0):
+        """Hold a direction until the move lands.
+
+        The server samples one joy value per tick, so a direction sent once can
+        be overwritten by the neutral from the previous step before the tick
+        reads it. Re-sending while waiting is what holding the stick does, and
+        it makes the walk independent of tick alignment.
+        """
+        deadline = time.time() + timeout
+        next_send = 0.0
+        while time.time() < deadline:
+            if time.time() >= next_send:
+                self.send_delta(joy)
+                next_send = time.time() + 0.15
+            self.pump(0.02)
+            if self.players.get(pid):
+                pos = (self.players[pid]["x"], self.players[pid]["y"])
+                if pos != start:
+                    return pos
+        raise SystemExit(f"timed out holding {joy:#04x} for pid {pid} from {start}")
+
     def wait_snapshot_change(self, pid, start, timeout=5.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -231,12 +275,28 @@ def joy_for_step(a, b):
     raise SystemExit(f"no direction from {a} to {b}")
 
 
+
+def occupied_now(client, *exclude):
+    """Cells currently held by anyone except the listed pids.
+
+    Read fresh each time a path is planned: positions captured once at startup
+    go stale as soon as an actor moves, and a plan plotted through an occupied
+    cell blocks forever.
+    """
+    client.pump(0.1)
+    skip = set(exclude)
+    out = set()
+    for idx in range(4):
+        if idx in skip or not client.players.get(idx):
+            continue
+        out.add((client.players[idx]["x"], client.players[idx]["y"]))
+    return out
+
 def walk(client, pid, path):
     current = (client.players[pid]["x"], client.players[pid]["y"])
     for step in path:
         joy = joy_for_step(current, step)
-        client.send_delta(joy)
-        actual = client.wait_snapshot_change(pid, current)
+        actual = client.hold_until_change(pid, current, joy)
         if actual != step:
             raise SystemExit(f"expected pid {pid} step {step}, got {actual}")
         client.send_neutral()
@@ -365,12 +425,11 @@ other_slots = {
 
 # Immediate adjacent hit -> score + pending + final respawn
 target, fire_joy, path = choose_adjacent_target(
-    bricks, slot0_pos, slot1_pos, {slot0_pos} | other_slots
+    bricks, slot0_pos, slot1_pos, occupied_now(clients[0], slot1_pid)
 )
 walk(clients[1], slot1_pid, path)
 slot1_pos = target
-clients[0].send_delta(fire_joy | 0x10)
-clients[0].wait_respawn(slot1_pid, False)
+clients[0].hold_fire_until_respawn(slot1_pid, fire_joy | 0x10, False)
 clients[0].pump(0.4)
 clients[0].send_neutral()
 clients[0].wait_snapshot_score(slot0_pid, 1)
@@ -387,12 +446,11 @@ for client in clients:
 slot0_pos = (clients[0].players[slot0_pid]["x"], clients[0].players[slot0_pid]["y"])
 slot1_pos = final_pos
 shooter, fire_joy, shooter_path = choose_line_shot_toward_target(
-    bricks, slot0_pos, slot1_pos, {slot1_pos} | other_slots
+    bricks, slot0_pos, slot1_pos, occupied_now(clients[0], slot0_pid)
 )
 walk(clients[0], slot0_pid, shooter_path)
 slot0_pos = shooter
-clients[0].send_delta(fire_joy | 0x10)
-clients[0].wait_respawn(slot1_pid, False, timeout=8.0)
+clients[0].hold_fire_until_respawn(slot1_pid, fire_joy | 0x10, False)
 clients[0].pump(0.4)
 clients[0].send_neutral()
 clients[0].pump(2.0)
@@ -402,7 +460,7 @@ for client in clients:
 # Brick mutation -> authoritative BRICK_DELTA
 slot0_pos = (clients[0].players[slot0_pid]["x"], clients[0].players[slot0_pid]["y"])
 origin, brick_joy, wall, path = choose_fire_into_brick(
-    bricks, slot0_pos, {slot1_pos} | other_slots
+    bricks, slot0_pos, occupied_now(clients[0], slot0_pid)
 )
 walk(clients[0], slot0_pid, path)
 clients[0].send_delta(brick_joy | 0x10)

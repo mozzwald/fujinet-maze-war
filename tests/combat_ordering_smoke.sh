@@ -161,6 +161,27 @@ class Client:
                 return
         raise SystemExit(f"timed out waiting for pid {pid} at {pos}")
 
+    def hold_until_change(self, pid, start, joy, timeout=5.0):
+        """Hold a direction until the move lands.
+
+        The server samples one joy value per tick, so a direction sent once can
+        be overwritten by the neutral from the previous step before the tick
+        reads it. Re-sending while waiting is what holding the stick does, and
+        it makes the walk independent of tick alignment.
+        """
+        deadline = time.time() + timeout
+        next_send = 0.0
+        while time.time() < deadline:
+            if time.time() >= next_send:
+                self.send_delta(joy)
+                next_send = time.time() + 0.15
+            self.pump(0.02)
+            if self.players.get(pid):
+                pos = (self.players[pid]["x"], self.players[pid]["y"])
+                if pos != start:
+                    return pos
+        raise SystemExit(f"timed out holding {joy:#04x} for pid {pid} from {start}")
+
     def wait_snapshot_change(self, pid, start, timeout=5.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -241,12 +262,28 @@ def joy_for_step(a, b):
     raise SystemExit(f"no direction from {a} to {b}")
 
 
+
+def occupied_now(client, *exclude):
+    """Cells currently held by anyone except the listed pids.
+
+    Read fresh each time a path is planned: positions captured once at startup
+    go stale as soon as an actor moves, and a plan plotted through an occupied
+    cell blocks forever.
+    """
+    client.pump(0.1)
+    skip = set(exclude)
+    out = set()
+    for idx in range(4):
+        if idx in skip or not client.players.get(idx):
+            continue
+        out.add((client.players[idx]["x"], client.players[idx]["y"]))
+    return out
+
 def walk(client, pid, path):
     current = (client.players[pid]["x"], client.players[pid]["y"])
     for step in path:
         _dir_id, joy = joy_for_step(current, step)
-        client.send_delta(joy)
-        actual = client.wait_snapshot_change(pid, current)
+        actual = client.hold_until_change(pid, current, joy)
         client.send_neutral()
         client.wait_snapshot_pos(pid, actual)
         current = actual
@@ -361,7 +398,7 @@ other_slots = {
 }
 
 origin, move_dir, move_joy, moved, shot_pos, path = choose_move_then_fire(
-    bricks, slot0_pos, {slot1_pos} | other_slots
+    bricks, slot0_pos, occupied_now(clients[0], slot0_pid)
 )
 walk(clients[0], slot0_pid, path)
 slot0_pos = origin
@@ -376,7 +413,7 @@ clients[0].send_neutral()
 clients[0].pump(4.5)
 
 brick_origin, brick_dir, brick_joy, wall, path = choose_fire_into_brick(
-    bricks, slot0_pos, {slot1_pos} | other_slots
+    bricks, slot0_pos, occupied_now(clients[0], slot0_pid)
 )
 walk(clients[0], slot0_pid, path)
 slot0_pos = brick_origin
@@ -386,7 +423,7 @@ clients[0].pump(0.4)
 clients[0].send_neutral()
 
 turn_origin, turn_dir, turn_joy, turn_shot_pos, path = choose_turn_fire(
-    bricks, slot0_pos, {slot1_pos} | other_slots
+    bricks, slot0_pos, occupied_now(clients[0], slot0_pid)
 )
 walk(clients[0], slot0_pid, path)
 slot0_pos = turn_origin
@@ -396,7 +433,7 @@ clients[0].send_neutral()
 clients[0].pump(4.5)
 
 target, hit_dir, hit_joy, path = choose_adjacent_target(
-    bricks, slot0_pos, slot1_pos, {slot0_pos} | other_slots
+    bricks, slot0_pos, slot1_pos, occupied_now(clients[0], slot1_pid)
 )
 walk(clients[1], slot1_pid, path)
 slot1_pos = target

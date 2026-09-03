@@ -164,13 +164,13 @@ and then a visible snap, and no amount of interpolation hides it.
 
 ### Known gaps (not addressed)
 
-- `tests/combat_world_authority_smoke.sh` is intermittently flaky, roughly 1 run
-  in 10, failing as `timed out waiting for pid 0 to change from (x, y)` with the
-  server logging repeated `move-blocked`. Confirmed **pre-existing**: it fails at
-  the same rate with the Phase 5 server changes reverted. The cause looks like
-  the test planning a BFS path against a `blocked` set captured once, so the two
-  walked clients can end up in each other's way. Worth fixing before Phase 6
-  leans on `make test`, since it makes the suite unreliable.
+- ~~`combat_world_authority_smoke.sh` flakiness~~ FIXED 2026-09-03. Two causes,
+  both artefacts of the server reading one joy per tick: a direction or a fire
+  sent exactly once could be overwritten by a neighbouring neutral before the
+  tick read it (the tests run at `--tick-hz 4`, a 250ms window), and the BFS
+  `blocked` set was captured once at startup while actors kept moving. The
+  walks now hold the direction and hold the trigger the way a player does, and
+  occupancy is read live at every plan. 20 consecutive green runs.
 
 - Slot identity is address+port with no client token, so a fast reconnect still briefly shows the player's old slot until the 15s timeout expires. Self-healing; a proper fix needs a protocol change.
 - With `--zombies N` below 3, slots beyond N stay empty and render as motionless wizards. Documented rather than changed, since it is a design decision about what `--zombies` means.
