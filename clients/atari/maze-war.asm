@@ -3224,6 +3224,11 @@ NAF_OCCLP
 NAF_OLP
 	CPX	NET_AHEAD_ID
 	BEQ	NAF_ONX
+	TXA			;a slot awaiting respawn is not on the board.
+	TAY			;the server stopped counting it in collision, so
+	LDA	NET_DEAD_MASK	;predicting otherwise here would make us refuse a
+	AND	PLRMSK,Y	;move the server allows, drift, and then snap.
+	BNE	NAF_ONX
 	LDA	LOCX,X
 	CMP	NET_AHEAD_X
 	BNE	NAF_ONX

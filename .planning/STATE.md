@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready
-stopped_at: Phase 3.1 verified and closed; Phase 5 slot lifecycle implemented. Phase 3 human mixed-session checkpoint is now unblocked and still outstanding.
-last_updated: "2026-09-02T00:00:00.000Z"
+stopped_at: Phases 3, 3.1 and 5 complete and human-approved. Next is Phase 6 minimal validation, then Phase 4 render smoothing.
+last_updated: "2026-09-03T00:00:00.000Z"
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 5
   total_plans: 14
   completed_plans: 14
 ---
@@ -23,7 +23,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 ## Current Position
 
-Phase: 03 (combat-and-world-authority) — CODE COMPLETE (03-01/02/03 executed, smokes green). The human mixed-session checkpoint (1 Atari + 1 Linux + 2 zombies) is now UNBLOCKED by 3.1 closing, and is the one outstanding item. Not yet run.
+Phase: 03 (combat-and-world-authority) — COMPLETE 2026-09-03. Human mixed-session checkpoint approved.
 Phase: 03.1 (handler-refresh-pokey-isolation) — COMPLETE 2026-09-02. All four success criteria verified; see "Phase 3.1 verification" below.
 Phase: 05 (slot-lifecycle-and-zombie-handoff) — CODE COMPLETE 2026-09-02 (LIFE-01..04 addressed), full smoke suite green including the new `slot_lifecycle_smoke.sh`. Human confirmation of a live join/leave handoff still wanted.
 
@@ -87,8 +87,8 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Run the Phase 3 human mixed-session checkpoint (1 Atari + 1 Linux + 2 zombies): move-then-fire and turn-then-fire parity, bullets from the visible wizard, score/death/respawn/brick alignment. This is the last open Phase 3 item; nothing now blocks it.
-- Human confirmation of a live slot handoff (join a zombie seat, then drop) on real hardware.
+- Phase 6 minimal validation: scripted emulator sessions including join/leave handoff.
+- Phase 4 render-state separation. See "Phase 4 starting notes" below before planning it.
 - Update `.planning/REQUIREMENTS.md` if the Phase 3.1 invariant should become a tracked requirement ID.
 
 ### Phase 3.1 implementation notes (2026-07-19)
@@ -129,6 +129,38 @@ All four success criteria checked, so the phase is closed:
 - `clients/atari/maze-war.asm`: `NET_STAGE_COMMIT` now gates `NET_LOCAL_PID` on an actual change and calls `NET_LOCAL_PID_RESET`, flushing the pending-input ring, predicted shot and channel-2 claim that were keyed to the slot we left.
 - `doc/protocol.md`: documented slot allocation order (slot 0 is never zombie-filled; it is the first human's seat), the handoff contract, and the address+port reconnect consequence.
 - Testing note: `joy` inheritance and shot retirement are not assertable black-box. The joining client's own first DELTA sets `joy` on the same tick, and a zombie only fires at a human in its row/column with a clear line — measured at >20s and on an arbitrary slot. Those two are guarded at source level in `slot_lifecycle_smoke.sh`; role-mask tracking in both directions, score inheritance and the no-teleport rule are asserted live against the real server.
+
+### Phase 4 starting notes (2026-09-03)
+
+Reported symptom: the Atari client briefly pauses movement and/or the local
+wizard jitters/snaps to the authoritative position, seemingly around respawns
+and shots.
+
+Measured, so the next session does not repeat it: the periodic BRICK_FULL
+resync is **not** the cause. Breaking at `NET_BRICK_FULL_APPLY` and running to
+`NET_RX_50BAD` reports `elapsed_frames: 0`, i.e. the whole apply completes
+inside one frame even though `NMIEN=0` disables the VBI across it. That was the
+first hypothesis and it is wrong.
+
+What the correction actually does (`NET_LOCAL_REPLAY_PENDING`):
+`NET_AUTH_REPOS` teleports LOCX/LOCY to the authoritative cell, then `SETSTIL`
+resets the walk pose, then pending inputs replay. So a correction is an
+instant jump *plus* an animation restart, which is why it reads as a stutter
+as well as a snap. It only triggers at `NET_RECON_P0` = 3 cells of drift
+(`CKMV_LOC`), so corrections are rare but always large; there is no small
+continuous correction. Remote actors additionally have an unconditional
+hard-snap path (`CKMVAP`).
+
+The structural problem for Phase 4: LOCX/LOCY is simultaneously the rendered
+position, the collision position and the shot origin. There is no render-only
+state, so there is nothing to smooth into.
+
+Before adding smoothing, hunt client/server rule mismatches -- they are what
+generate the drift that triggers the snaps. One was found and fixed on
+2026-09-03: `NAF_OCCLP` (client movement prediction) blocked on players
+awaiting respawn while the server had just stopped doing so, so the client
+would refuse a move the server applied. Any such disagreement produces drift
+and then a visible snap, and no amount of interpolation hides it.
 
 ### Known gaps (not addressed)
 

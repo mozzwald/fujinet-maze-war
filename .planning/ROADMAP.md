@@ -12,7 +12,7 @@ This roadmap follows the dependency chain identified in research: normalize tran
 
 - [x] **Phase 1: Transport Normalization and Observability** - Canonicalize packet ingress so transport bugs stop masquerading as gameplay bugs.
 - [x] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded. Final real-Atari verification approved the cadence/fire-direction replay fix and closed RECN-01 through RECN-04.
-- [ ] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients. All three plans are code-complete with green smokes; only the human mixed-session checkpoint remains, and Phase 3.1 closing has unblocked it.
+- [x] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients. Human mixed-session checkpoint approved 2026-09-03.
 - [x] **Phase 3.1: Netstream Handler Refresh and POKEY Channel Isolation (INSERTED)** - Update to the latest netstream handler (built from source) and remap all sound to POKEY channels 1+2 so the game can never corrupt the handler's channel 3+4 baud timer. See `ref/net-fix-plan.md` for full analysis. Completed 2026-09-02; all four criteria verified (see STATE.md).
 - [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors. Reordered after Phase 5: presentation polish, needed for release but not for reliable play.
 - [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff still wanted.
@@ -151,6 +151,8 @@ Plans:
 **Execution Order:**
 1 -> 2 -> 3 (code) -> 3.1 (INSERTED) -> 5 -> 3 human checkpoint -> 6 (minimal validation) -> 4 -> 6 (full hardening)
 
+Phases 1, 2, 3, 3.1 and 5 are done. Next: Phase 6 minimal validation, then Phase 4.
+
 Phase 5 was brought forward ahead of the Phase 3 human checkpoint: both need the same
 mixed session to verify, and running the checkpoint before the slot work would have
 meant running it twice.
@@ -163,7 +165,7 @@ Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) 
 |-------|----------------|--------|-----------|
 | 1. Transport Normalization and Observability | 2/2 | Complete | 2026-04-08 |
 | 2. Reconciliation Contract | 5/5 | Complete | 2026-04-08 |
-| 3. Combat and World Authority | 3/3 | Code complete; human mixed-session checkpoint pending (now unblocked) | - |
+| 3. Combat and World Authority | 3/3 | Complete | 2026-09-03 |
 | 3.1 Netstream Handler Refresh and POKEY Channel Isolation | 2/2 | Complete | 2026-09-02 |
 | 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
 | 4. Render-State Separation | 0/TBD | Not started | - |

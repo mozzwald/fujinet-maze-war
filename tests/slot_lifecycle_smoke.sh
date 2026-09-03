@@ -246,6 +246,16 @@ sed -n '/^static int is_player_at/,/^}/p' "$SERVER_SRC" \
     exit 1
 }
 
+# The Atari client predicts its own movement, so its occupancy rule has to
+# agree with the server's. If the client still blocked on a corpse the server
+# lets you walk through, it would refuse a move the server applies, drift, and
+# then snap to the authoritative position.
+ATARI_SRC="$ROOT_DIR/clients/atari/maze-war.asm"
+grep -A8 -E "^NAF_OCCLP" "$ATARI_SRC" | grep -F "NET_DEAD_MASK" >/dev/null || {
+    echo "FAIL: client movement prediction still blocks on respawning players" >&2
+    exit 1
+}
+
 # And prove it live: a live player standing on a corpse cell is only reachable
 # once respawning players stop blocking. Deaths come from the zombies, so treat
 # a run that produced too few as inconclusive rather than failing.
