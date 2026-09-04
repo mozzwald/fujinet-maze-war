@@ -2661,7 +2661,22 @@ NLRP_LP
 NLRP_X
 	RTS
 
+; Refuse to move an actor onto a cell that is not playfield interior. Net init
+; zeroes NET_PX, so any reposition before the first authoritative snapshot would
+; otherwise park the actor on (0,0) and draw it over the top-left border block.
+; Guarding the source stops both the draw and the erase; the matching check in
+; ERASMAN stays as defence in depth for any other stale coordinate.
 NET_AUTH_REPOS
+	LDA	NET_PX_X,X
+	BEQ	NAR_X
+	CMP	#19
+	BCS	NAR_X
+	LDA	NET_PX_Y,X
+	BEQ	NAR_X
+	CMP	#18
+	BCC	NAR_OK
+NAR_X	RTS
+NAR_OK
 	TXA
 	TAY
 	LDA	NET_ERASE_MASK
@@ -5425,7 +5440,22 @@ ERSHXIT	JSR	SND_OFF	;TURN OFF SOUND
 ;
 ;ERASE PLAYER/ZOMBIE
 ;
-ERASMAN	LDA	LOCLO,X	;SET A POINTER
+; Only x 1..18, y 1..17 are legal actor cells; row 0, row 18 and columns 0 and
+; 19 are the border. An actor parked outside that has never been drawn there:
+; NET_AUTH_REPOS copies NET_PX into LOC, and net init zeroes NET_PX, so any
+; reposition before the first authoritative snapshot leaves an actor on (0,0).
+; Blanking two characters there ate the top-left border block, and the map paint
+; had already run, so nothing put it back. The player-missile erase below is
+; unconditional -- it is bounded to the actor's own PM page and always safe.
+ERASMAN	LDA	LOCX,X
+	BEQ	ERMNXIT
+	CMP	#19
+	BCS	ERMNXIT
+	LDA	LOCY,X
+	BEQ	ERMNXIT
+	CMP	#18
+	BCS	ERMNXIT
+	LDA	LOCLO,X	;SET A POINTER
 	STA	POINTR0	;TO THE SCREEN
 	LDA	LOCHI,X	;CHR IMAGE
 	STA	POINTR0+1
