@@ -5209,17 +5209,15 @@ SETMOV2	INY		;SET NEXT 2 BYTES
 ;
 ;SET STATIONARY PLAYER/ZOMBIE
 ;
-; Standing still means the player-missile stops too. SETSUIT is the only code
-; that writes the PM image and HPOSP, and MOVEIM is its only caller, so drawing
-; a still pose here left the sprite wherever the interrupted move had put it --
-; including its MOVEST*2 sub-cell offset. MOVEIM counts MOVEST up for
-; right/down but down for left/up, so stopping while heading left or up left a
-; residual offset of up to six pixels and the sprite sat clear of its own
-; characters, clipping the wizard's head. Zeroing MOVEST first selects the
-; phase-0 image and drops the offset on both axes.
-SETSTIL	LDA	#0
-	STA	MOVEST,X
-	LDA	LOCLO,X	;SET POINTER
+; NOTE: refreshing the player-missile from here was tried and reverted. It
+; looked right -- SETSUIT is the only code that writes the PM image and HPOSP,
+; and MOVEIM is its only caller -- but SETSTIL has ten callers, several of them
+; mid-move or on actors that are meant to be hidden. Zeroing MOVEST reset move
+; animations (movement went sluggish), painting the PM put a sprite on hidden
+; actors at the placeholder cell (a second wizard in the top-left border), and
+; SETSUIT clobbers SCRPTR, which callers here may rely on. It also did not fix
+; the clipped head, so that cause is still unknown.
+SETSTIL	LDA	LOCLO,X	;SET POINTER
 	STA	SCRPTR	;TO SCREEN FOR
 	LDA	LOCHI,X	;SUBROUTINE
 	STA	SCRPTR+1
@@ -5230,7 +5228,6 @@ SETSTIL	LDA	#0
 	STA	POINTER
 	LDA	# >SHAPES
 	JSR	SHRTSET	;AND SET AWAY...
-	JSR	SETSUIT	;and re-seat the PM at the un-offset cell
 ;
 ;SET PM PORTION OF PLAYER/ZOMBIE
 ;
