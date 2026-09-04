@@ -2265,75 +2265,23 @@ NND_SP
 	TAX
 	RTS
 ;
-; NS_GetStatus latch and resync count, drawn in the fourth scoreboard row's
-; free columns. Both read 00 on a healthy link.
+; Frames rejected by the checksum or by framing, in the fourth scoreboard row's
+; free columns. Reads 00 on a healthy link; a climbing value means the link is
+; damaging frames. The other counters that found the corruption (serial error
+; latch, resync bytes, map repairs, cells rewritten, brick deltas) are still
+; maintained in RAM for peeking, they are just no longer drawn.
 NET_DIAG_DRAW
-	LDA	NET_NS_ERRS
-	LSR
-	LSR
-	LSR
-	LSR
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+60
-	LDA	NET_NS_ERRS
-	AND	#$0F
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+61
-	LDA	NET_RX_JUNK
+	LDA	NET_CK_BAD
 	LSR
 	LSR
 	LSR
 	LSR
 	JSR	NET_HEXDIG
 	STA	BOTSCRN+62
-	LDA	NET_RX_JUNK
-	AND	#$0F
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+63
-	LDA	NET_BF_CNT	;map repairs, then cells the last one rewrote
-	LSR
-	LSR
-	LSR
-	LSR
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+40
-	LDA	NET_BF_CNT
-	AND	#$0F
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+41
-	LDA	NET_BF_WRITES
-	LSR
-	LSR
-	LSR
-	LSR
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+42
-	LDA	NET_BF_WRITES
-	AND	#$0F
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+43
-	LDA	NET_BD_CNT	;brick deltas applied
-	LSR
-	LSR
-	LSR
-	LSR
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+22
-	LDA	NET_BD_CNT
-	AND	#$0F
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+23
-	LDA	NET_CK_BAD	;packets the checksum rejected
-	LSR
-	LSR
-	LSR
-	LSR
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+2
 	LDA	NET_CK_BAD
 	AND	#$0F
 	JSR	NET_HEXDIG
-	STA	BOTSCRN+3
+	STA	BOTSCRN+63
 	RTS
 ; C set when a live actor occupies the cell the repair is about to paint.
 ; Column is the current screen byte offset halved; row is in X, which the
@@ -5858,6 +5806,13 @@ EXPLSHP	.BYTE	$00,$9B,$9C,$9C	;R&D0
 ;
 ;DISPLAY LIST
 ;
+; ANTIC only increments the low 10 bits of the display list counter, so a list
+; that crosses a 1K boundary wraps to the start of its own 1K page and executes
+; garbage. Nothing otherwise pins these three lists down -- they land wherever
+; the preceding code happens to end -- so any change to code size can push one
+; across a boundary and corrupt the display. Aligning the block to 1K puts all
+; three (about 490 bytes) inside a single page for good.
+	.ALIGN	$0400
 TITLDISP	.BYTE	$70,$70,$70,$70,$70,$42
 	.WORD	TITLES
 	.BYTE	2,2,$70,6,$70,$70,5,$70
