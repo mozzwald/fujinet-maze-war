@@ -21,6 +21,29 @@ This document matches current server behavior in `server/main.c`.
 | 0x51 | BRICK_DELTA | S<->C | 4    | Brick removed |
 | 0x52 | RESPAWN     | S<->C | 6    | Respawn request/event |
 
+## Packet Integrity (server -> client)
+
+Every server-to-client packet carries one extra trailing byte: the sum of all
+preceding bytes of that packet, modulo 256. The lengths in the table above are
+payload lengths; on the wire each is one byte longer.
+
+This exists for the Atari. Its receive path is a byte stream over SIO rather
+than discrete datagrams, so a single dropped or duplicated byte shifts framing
+and payload bytes begin to be read as packet type markers. Bounds checks alone
+were not enough on real hardware: corrupt positions placed actors on the border
+and the erase pass blanked border cells, corrupt scores flickered, a corrupt
+BRICK_DELTA cleared a random cell that the 3s map resync then repainted seconds
+later, and a corrupt sequence number parked the client roughly a hundred ticks
+in the future so every genuine snapshot was dropped as stale for seconds.
+
+The client accumulates the sum as it collects a packet and compares it against
+the trailing byte. On a mismatch the packet is discarded whole and the parser
+resyncs to the next recognisable type marker.
+
+Client-to-server packets are unchanged: they arrive as UDP datagrams with the
+kernel's own checksum, and the inbound path accepts several historical DELTA
+framings that a length change would disturb.
+
 ## Common Encoding
 
 ### Joystick (`joy`, 1 byte)

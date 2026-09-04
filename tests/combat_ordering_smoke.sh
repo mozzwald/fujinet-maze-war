@@ -152,7 +152,10 @@ class Client:
     def send_neutral(self):
         self.send_delta(0x0F)
 
-    def wait_snapshot_pos(self, pid, pos, timeout=5.0):
+    # Waits are generous on purpose. These assert ORDERING, not latency, and
+    # the suite is often run alongside an emulator and a FujiNet sidecar on the
+    # same box; a tight deadline turns machine load into a false failure.
+    def wait_snapshot_pos(self, pid, pos, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)
@@ -172,7 +175,7 @@ class Client:
                     return pos
         return None
 
-    def wait_snapshot_change(self, pid, start, timeout=5.0):
+    def wait_snapshot_change(self, pid, start, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)
@@ -183,7 +186,7 @@ class Client:
                     return pos
         raise SystemExit(f"timed out waiting for pid {pid} to change from {start}")
 
-    def wait_shot(self, pid, pos=None, active=True, timeout=5.0):
+    def wait_shot(self, pid, pos=None, active=True, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)
@@ -198,7 +201,7 @@ class Client:
         wanted = "active" if active else "clear"
         raise SystemExit(f"timed out waiting for {wanted} shot pid={pid} pos={pos}")
 
-    def wait_respawn_pending(self, pid, timeout=5.0):
+    def wait_respawn_pending(self, pid, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)
@@ -207,7 +210,7 @@ class Client:
                     return packet
         raise SystemExit(f"timed out waiting for respawn pending pid={pid}")
 
-    def wait_brick_delta(self, pos, timeout=5.0):
+    def wait_brick_delta(self, pos, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)

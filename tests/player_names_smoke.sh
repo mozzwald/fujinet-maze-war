@@ -63,8 +63,8 @@ class C:
                 p = self.sock.recv(256)
             except socket.timeout:
                 continue
-            if len(p) == 3 + NAME_LEN and p[0] == PKT_NAME:
-                self.names[p[2]] = bytes(p[3:]).decode("latin1")
+            if len(p) >= 3 + NAME_LEN and p[0] == PKT_NAME:  # trailing checksum byte
+                self.names[p[2]] = bytes(p[3:3 + NAME_LEN]).decode("latin1")
 
 
 def fail(m):

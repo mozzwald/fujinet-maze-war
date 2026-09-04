@@ -78,6 +78,7 @@ NET_RECON_P0	=	3	;local player reconcile threshold (manhattan cells)
 NET_IDLE_SETTLE	=	20	;frames of held-neutral before idle convergence
 NET_RECON_P1	=	10	;remote catastrophic hard-snap guard
 NET_RECOVER_P1	=	3	;remote bounded-recovery snap threshold
+NET_GLIDE_MAX	=	6	;local drift still worth walking off rather than snapping
 NET_DESYNC_MAX	=	3	;remote failed-recovery attempts before forced snap
 NET_HARD_P0	=	12	;local hard-snap guard (only on severe divergence)
 HOST_MAX	=	31	;max hostname length
@@ -514,7 +515,8 @@ STIMER	LDA	#5	;SET TIMER 5
 ;GAME START SETUP
 ;----------------
 ;
-START	JSR	STIMER
+START	JSR	NET_STATE_CLEAR
+	JSR	STIMER
 	LDA	#4	;net-only: track all 4 server slots as active participants
 	STA	PLYRS
 	LDA	#0
@@ -522,10 +524,7 @@ START	JSR	STIMER
 	LDA	#3
 	STA	ACTIVE	;ACTIVE stores count-1
 ;
-	LDX	#0	;ERASE WALKERS
-	JSR	ERASMAN
-	INX
-	JSR	ERASMAN
+	; walkers are erased after SETALLP has built their screen pointers
 ;
 ;SETUP GAME SCREEN
 ;
@@ -599,6 +598,10 @@ SETALLP	LDA	#0	;TYPE = PLAYER
 	LDA	#$0F	;hide all actors until server authoritative state arrives
 	STA	NET_DEAD_MASK
 	STA	NET_ERASE_MASK
+	LDX	#3		;now that every slot has a valid screen pointer,
+STRT_ERS	JSR	ERASMAN	;clear all four, characters and PM alike
+	DEX
+	BPL	STRT_ERS
 ;
 PUTINVB
 	LDA	# <MSG_CONNECT	;name the wait instead of showing a blank screen
@@ -1068,6 +1071,10 @@ NHR_PMCLR
 NET_WAIT_TICK
 	JSR	NET_NAME_RETRY
 	JSR	NET_IDLE_TICK
+	LDA	NET_GAME_SHOW	;only once the scoreboard exists
+	BEQ	NWT_NODIAG
+	JSR	NET_DIAG_DRAW
+NWT_NODIAG
 	INC	NET_WAIT_LO
 	BNE	NWT_X
 	INC	NET_WAIT_HI
@@ -1585,12 +1592,18 @@ NET_RX_COL40
 	; collecting snapshot bytes
 	LDY	NET_SNAP_IDX
 	LDA	NET_PARSE_BYTE
+	CPY	#20	;trailing byte is the checksum
+	BEQ	NRX40_CK
 	STA	NET_SNAP_BUF,Y
+	CLC
+	ADC	NET_CK_SUM
+	STA	NET_CK_SUM
 	INY
 	STY	NET_SNAP_IDX
-	CPY	#20
-	BCS	NET_RX_40DONE
 	RTS
+NRX40_CK	CMP	NET_CK_SUM
+	BEQ	NET_RX_40DONE
+	JMP	NET_RX_CKBAD
 NET_RX_40DONE
 	JSR	NET_SNAP_APPLY
 	LDA	#0
@@ -1601,12 +1614,18 @@ NET_RX_COL42
 	; collecting shot bytes
 	LDY	NET_SHOT_IDX
 	LDA	NET_PARSE_BYTE
+	CPY	#6	;trailing byte is the checksum
+	BEQ	NRX42_CK
 	STA	NET_SHOT_PKT,Y
+	CLC
+	ADC	NET_CK_SUM
+	STA	NET_CK_SUM
 	INY
 	STY	NET_SHOT_IDX
-	CPY	#6
-	BCS	NET_RX_42DONE
 	RTS
+NRX42_CK	CMP	NET_CK_SUM
+	BEQ	NET_RX_42DONE
+	JMP	NET_RX_CKBAD
 NET_RX_42DONE
 	JSR	NET_SHOT_QUEUE
 	JSR	NET_PRED_CONFIRM
@@ -1618,12 +1637,18 @@ NET_RX_COL50
 	; collecting brick-full bytes
 	LDY	NET_BRICK_IDX
 	LDA	NET_PARSE_BYTE
+	CPY	#51	;trailing byte is the checksum
+	BEQ	NRX50_CK
 	STA	NET_BRICK_BUF,Y
+	CLC
+	ADC	NET_CK_SUM
+	STA	NET_CK_SUM
 	INY
 	STY	NET_BRICK_IDX
-	CPY	#51
-	BCS	NET_RX_50DONE
 	RTS
+NRX50_CK	CMP	NET_CK_SUM
+	BEQ	NET_RX_50DONE
+	JMP	NET_RX_CKBAD
 NET_RX_50DONE
 	; NMIEN is write-only on ANTIC; do not read/restore from hardware register.
 	; Force known net-only setting after map apply.
@@ -1645,12 +1670,18 @@ NET_RX_COL43
 	; collecting name bytes ($43 seq pid + 8 name chars)
 	LDY	NET_NAME_IDX
 	LDA	NET_PARSE_BYTE
+	CPY	#NAME_PKT_LEN	;trailing byte is the checksum
+	BEQ	NRX43_CK
 	STA	NET_NAME_PKT,Y
+	CLC
+	ADC	NET_CK_SUM
+	STA	NET_CK_SUM
 	INY
 	STY	NET_NAME_IDX
-	CPY	#NAME_PKT_LEN
-	BCS	NET_RX_43DONE
 	RTS
+NRX43_CK	CMP	NET_CK_SUM
+	BEQ	NET_RX_43DONE
+	JMP	NET_RX_CKBAD
 NET_RX_43DONE
 	JSR	NET_NAME_APPLY
 	LDA	#0
@@ -1683,12 +1714,18 @@ NET_RX_COL51
 	; collecting brick-delta bytes
 	LDY	NET_SNAP_IDX
 	LDA	NET_PARSE_BYTE
+	CPY	#4	;trailing byte is the checksum
+	BEQ	NRX51_CK
 	STA	NET_SNAP_BUF,Y
+	CLC
+	ADC	NET_CK_SUM
+	STA	NET_CK_SUM
 	INY
 	STY	NET_SNAP_IDX
-	CPY	#4
-	BCS	NET_RX_51DONE
 	RTS
+NRX51_CK	CMP	NET_CK_SUM
+	BEQ	NET_RX_51DONE
+	JMP	NET_RX_CKBAD
 NET_RX_51DONE
 	LDA	NET_BRICK_DONE
 	BEQ	NET_RX_51CLR
@@ -1702,18 +1739,33 @@ NET_RX_COL52
 	; collecting respawn bytes
 	LDY	NET_RESP_IDX
 	LDA	NET_PARSE_BYTE
+	CPY	#6	;trailing byte is the checksum
+	BEQ	NRX52_CK
 	STA	NET_RESP_PKT,Y
+	CLC
+	ADC	NET_CK_SUM
+	STA	NET_CK_SUM
 	INY
 	STY	NET_RESP_IDX
-	CPY	#6
-	BCS	NET_RX_52DONE
 	RTS
+NRX52_CK	CMP	NET_CK_SUM
+	BEQ	NET_RX_52DONE
+	JMP	NET_RX_CKBAD
 NET_RX_52DONE
 	JSR	NET_RESP_APPLY
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_RESP_IDX
 	RTS
+; A packet whose trailing checksum does not match is discarded whole and the
+; parser resyncs. Misframed data used to reach the apply paths with only bounds
+; checks in the way, which is how corrupt scores, corrupt brick deltas and a
+; corrupt sequence number (parking the client ticks in the future, so real
+; snapshots were dropped as stale for seconds) all got through on hardware.
+NET_RX_CKBAD
+	INC	NET_CK_BAD
+	JMP	NET_RX_DROP
+;
 NET_RX_DROP
 	; framing lost: drop partial packet and resync at next recognizable type byte.
 	LDA	#0
@@ -1740,6 +1792,7 @@ NET_RX_WAIT	LDA	NET_PARSE_BYTE
 	BNE	NET_RX_EXIT
 	LDA	#$52
 	STA	NET_RESP_PKT
+	STA	NET_CK_SUM
 	LDA	#1
 	STA	NET_RESP_IDX
 	LDA	#5
@@ -1751,6 +1804,7 @@ NET_RX_WBRD51
 	; misparsed as packet markers.
 	LDA	#$51
 	STA	NET_SNAP_BUF
+	STA	NET_CK_SUM
 	LDA	#1
 	STA	NET_SNAP_IDX
 	LDA	#4
@@ -1759,6 +1813,7 @@ NET_RX_WBRD51
 NET_RX_WNAME
 	LDA	#$43
 	STA	NET_NAME_PKT
+	STA	NET_CK_SUM
 	LDA	#1
 	STA	NET_NAME_IDX
 	LDA	#6
@@ -1770,6 +1825,7 @@ NET_RX_WFULL50
 	; them keeps 50 bitmap bytes out of the packet-marker scanner.
 	LDA	#$50
 	STA	NET_BRICK_BUF
+	STA	NET_CK_SUM
 	LDA	#1
 	STA	NET_BRICK_IDX
 	LDA	#3
@@ -1778,6 +1834,7 @@ NET_RX_WFULL50
 NET_RX_WSHOT
 	LDA	#$42
 	STA	NET_SHOT_PKT
+	STA	NET_CK_SUM
 	LDA	#1
 	STA	NET_SHOT_IDX
 	LDA	#2
@@ -1786,12 +1843,46 @@ NET_RX_WSHOT
 NET_RX_WSNAP
 	LDA	#$40
 	STA	NET_SNAP_BUF
+	STA	NET_CK_SUM
 	LDA	#1
 	STA	NET_SNAP_IDX
 	LDA	#1
 	STA	NET_RX_STATE
-NET_RX_EXIT	RTS
+	RTS			;NET_RX_WSNAP used to fall through to the bare RTS
+NET_RX_EXIT			;below; it must not reach the resync counter
+	INC	NET_RX_JUNK	;wraps: sampled as a rate, not a total
+	RTS
 
+; The net runtime block is all .DS, so on a cold boot it holds whatever the RAM
+; powered up with. Most of it is written before use, but NET_ACTIVE and
+; NET_GAME_SHOW are read by the poll loop during the host prompt -- before net
+; init ever runs -- so a non-zero power-up byte could start polling and switch
+; the display to the game screen: garbled graphics, the prompt invisible, yet
+; still accepting keys. Adding state over time moved these variables onto
+; different power-up RAM, which is why it appeared suddenly rather than at the
+; start. Stops at the first initialised byte so the strings survive.
+NET_STATE_CLEAR
+	LDA	# <NET_TICK
+	STA	POINTER
+	LDA	# >NET_TICK
+	STA	POINTER+1
+NSTC_LP
+	LDA	POINTER+1
+	CMP	# >NET_INIT_ARGS
+	BCC	NSTC_ZERO
+	LDA	POINTER
+	CMP	# <NET_INIT_ARGS
+	BCS	NSTC_X
+NSTC_ZERO
+	LDA	#0
+	TAY
+	STA	(POINTER),Y
+	INC	POINTER
+	BNE	NSTC_LP
+	INC	POINTER+1
+	JMP	NSTC_LP
+NSTC_X	RTS
+;
 ; --- NET snapshot apply (type 0x40, 20 bytes) ---
 NET_SNAP_APPLY
 	LDA	NET_SNAP_BUF+2	;flags must indicate valid snapshot
@@ -1987,18 +2078,14 @@ NSV_POSLP
 	ADC	#3
 	TAY
 	LDA	NET_SNAP_BUF,Y
-	CMP	#20
-	BCS	NSV_BAD
-	BEQ	NSV_BAD
+	BEQ	NSV_BAD		;column 0 is border, never an actor cell
 	CMP	#19
-	BEQ	NSV_BAD
+	BCS	NSV_BAD		;19 and beyond is border or off-map
 	INY
 	LDA	NET_SNAP_BUF,Y
-	CMP	#19
-	BCS	NSV_BAD
-	BEQ	NSV_BAD
+	BEQ	NSV_BAD		;row 0 likewise
 	CMP	#18
-	BEQ	NSV_BAD
+	BCS	NSV_BAD
 	INX
 	CPX	#4
 	BCC	NSV_POSLP
@@ -2176,6 +2263,117 @@ NND_SP
 	TAX
 	RTS
 ;
+; NS_GetStatus latch and resync count, drawn in the fourth scoreboard row's
+; free columns. Both read 00 on a healthy link.
+NET_DIAG_DRAW
+	LDA	NET_NS_ERRS
+	LSR
+	LSR
+	LSR
+	LSR
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+60
+	LDA	NET_NS_ERRS
+	AND	#$0F
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+61
+	LDA	NET_RX_JUNK
+	LSR
+	LSR
+	LSR
+	LSR
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+62
+	LDA	NET_RX_JUNK
+	AND	#$0F
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+63
+	LDA	NET_BF_CNT	;map repairs, then cells the last one rewrote
+	LSR
+	LSR
+	LSR
+	LSR
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+40
+	LDA	NET_BF_CNT
+	AND	#$0F
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+41
+	LDA	NET_BF_WRITES
+	LSR
+	LSR
+	LSR
+	LSR
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+42
+	LDA	NET_BF_WRITES
+	AND	#$0F
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+43
+	LDA	NET_BD_CNT	;brick deltas applied
+	LSR
+	LSR
+	LSR
+	LSR
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+22
+	LDA	NET_BD_CNT
+	AND	#$0F
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+23
+	LDA	NET_CK_BAD	;packets the checksum rejected
+	LSR
+	LSR
+	LSR
+	LSR
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+2
+	LDA	NET_CK_BAD
+	AND	#$0F
+	JSR	NET_HEXDIG
+	STA	BOTSCRN+3
+	RTS
+; C set when a live actor occupies the cell the repair is about to paint.
+; Column is the current screen byte offset halved; row is in X, which the
+; caller's walk depends on, so it is saved and restored.
+NBF_ACTOR_HERE
+	STX	NET_BF_ROW
+	LDA	NET_RX_YSAVE
+	LSR
+	STA	NET_BF_CELLX
+	LDX	#3
+NBFA_LP
+	LDA	NET_DEAD_MASK	;awaiting respawn: not on the board
+	AND	PLRMSK,X
+	BNE	NBFA_NX
+	LDA	LOCX,X
+	CMP	NET_BF_CELLX
+	BNE	NBFA_NX
+	LDA	LOCY,X
+	CMP	NET_BF_ROW
+	BNE	NBFA_NX
+	LDX	NET_BF_ROW
+	SEC
+	RTS
+NBFA_NX
+	DEX
+	BPL	NBFA_LP
+	LDX	NET_BF_ROW
+	CLC
+	RTS
+;
+NET_HEXDIG
+	CMP	#10
+	BCC	NHD_NUM
+	CLC
+	ADC	#'A'-10
+	BNE	NHD_CV
+NHD_NUM	CLC
+	ADC	#'0'
+NHD_CV	JSR	HOST_SCR
+	ORA	#$C0		;fourth row's colour band
+	RTS
+;
 ; commit the latest fully staged snapshot from mainline RX into the live
 ; target/joy arrays that VBI movement code consumes. Odd NET_STAGE_SEQ means
 ; the parser is mid-write, so VBI skips until an even published snapshot exists.
@@ -2261,6 +2459,29 @@ NLRC_CONV
 	LDA	#$02		;idle convergence
 	JSR	NET_DIAG_BUMP
 NLRC_GO
+	LDA	LOCX,X		;a gap small enough to walk belongs to the mainline
+	SEC			;glide; only a jump no walk can cover is repositioned
+	SBC	NET_PX_X,X
+	BCS	NLRC_DX
+	EOR	#$FF
+	CLC
+	ADC	#1
+NLRC_DX	STA	NET_GLIDE_TMP
+	LDA	LOCY,X
+	SEC
+	SBC	NET_PX_Y,X
+	BCS	NLRC_DY
+	EOR	#$FF
+	CLC
+	ADC	#1
+NLRC_DY	CLC
+	ADC	NET_GLIDE_TMP
+	CMP	#NET_GLIDE_MAX
+	BCS	NLRC_FAR
+	LDA	#1		;arm the walk; it runs to alignment on its own latch
+	STA	NET_GLIDE_ON
+	RTS
+NLRC_FAR
 	JSR	NET_LOCAL_REPLAY_PENDING
 NLRC_X	RTS
 
@@ -2307,6 +2528,7 @@ NRR_NX
 ; already mutates the pending ring through NET_LOCAL_ACK_DISCARD.
 NET_LOCAL_PID_RESET
 	LDA	#0
+	STA	NET_GLIDE_ON
 	STA	NET_PEND_HEAD
 	STA	NET_PEND_COUNT
 	STA	NET_PRED_TTL
@@ -2526,11 +2748,23 @@ NRC_NX
 
 NET_RESP_APPLY_WRK
 	LDA	NET_RESP_WRK+2
+	CMP	#4		;slot index indexes four-entry arrays
+	BCC	NRW_PIDOK
+	RTS
+NRW_PIDOK
 	TAX
 	LDA	NET_RESP_WRK+5
 	STA	NET_RX_TMP0
 	AND	#$02
 	BEQ	NRW_PEND
+	LDA	NET_RESP_WRK+3	;same interior-only bounds as a snapshot
+	BEQ	NRW_BADPOS
+	CMP	#19
+	BCS	NRW_BADPOS
+	LDA	NET_RESP_WRK+4
+	BEQ	NRW_BADPOS
+	CMP	#18
+	BCS	NRW_BADPOS
 	LDA	NET_RESP_WRK+3
 	STA	NET_PX_X,X
 	LDA	NET_RESP_WRK+4
@@ -2539,6 +2773,10 @@ NET_RESP_APPLY_WRK
 	STA	NET_P_PENDING,X
 	LDA	#0
 	STA	NET_DESYNC_CNT,X
+	JMP	NRW_POSOK
+NRW_BADPOS
+	RTS
+NRW_POSOK
 	TXA
 	TAY
 	LDA	NET_GUARD_MASK
@@ -2845,6 +3083,9 @@ NBFV_BITOK
 
 ; --- NET brick full apply (type 0x50, 51 bytes) ---
 NET_BRICK_FULL_APPLY
+	LDA	#0
+	STA	NET_BF_WRITES	;cells rewritten by this pass
+	INC	NET_BF_CNT	;map repairs applied (wraps)
 	LDA	NET_BRICK_DONE	;0 = first sync (write everything),
 	STA	NET_BRICK_RESYNC	;1 = repair (touch only what changed)
 	LDA	# <[NET_BRICK_BUF+3]
@@ -2903,13 +3144,20 @@ NBF_PUT
 	CMP	NET_RX_TMP0
 	BEQ	NBF_SKIP
 NBF_WRITE
+	INC	NET_BF_WRITES
+	JSR	NBF_ACTOR_HERE	;C set: something is drawn on this cell
+	BCC	NBF_PAINT
+	INC	NET_RX_YSAVE	;screen belongs to the actor; still step the cell
+	JMP	NBF_MAPONLY
+NBF_PAINT
 	LDY	NET_RX_YSAVE
 	LDA	NET_BRICK_GLYPH
 	JSR	NET_RX_STA_SCRPTR
 	INY
 	JSR	NET_RX_STA_SCRPTR
-	; store authoritative collision map cell (0 empty, 1 blocked).
 	STY	NET_RX_YSAVE
+NBF_MAPONLY
+	; store authoritative collision map cell (0 empty, 1 blocked).
 	LDY	#0
 	LDA	NET_RX_TMP0
 	JSR	NET_RX_STA_PTR0
@@ -2972,7 +3220,8 @@ NET_BRICK_DELTA_APPLY
 	CMP	#18
 	BCS	NBRK_X
 	STA	NET_RX_HOLD
-	JSR	NET_RX_MAP_CLRXY
+	INC	NET_BD_CNT	;deltas applied; far more than the server sent
+	JSR	NET_RX_MAP_CLRXY	;would mean misparsed packets are creating them
 	JSR	NET_RX_SCREEN_PTR
 	LDY	#1
 	LDA	#0
@@ -3789,7 +4038,8 @@ CKMV_L2
 	BNE	CKMVCK
 	LDA	#$04		;VBI drift threshold
 	JSR	NET_DIAG_BUMP
-	JSR	NET_LOCAL_REPLAY_PENDING
+	LDA	#1		;walk it off rather than repositioning
+	STA	NET_GLIDE_ON
 	JMP	CKMVCK
 CKMVAP	LDA	#$08		;remote hard snap
 	JSR	NET_DIAG_BUMP
@@ -3824,8 +4074,12 @@ SETIME	LDA	MOVRATE,X	;RESET MOVE
 ;
 ; --- STRTMOV net-only dispatch ---
 STRTMOV	CPX	NET_LOCAL_PID
-	BEQ	PLRMVE		;local slot uses local prediction for responsive control
-	JMP	REMOTE_FOLLOW	;non-local slots follow authoritative targets via normal move animation
+	BNE	STM_REMOTE	;non-local slots follow authoritative targets
+	LDA	NET_GLIDE_ON	;a correction outstanding on our own slot is walked
+	BEQ	PLRMVE		;off, not teleported; otherwise predict as normal
+	JMP	LOCAL_FOLLOW
+STM_REMOTE
+	JMP	REMOTE_FOLLOW	;via normal move animation
 ;
 ;READ STICK AND SET DIRECTION IF
 ;IT HAS BEEN MOVED. ALSO, DO ZIGZAG
@@ -3876,6 +4130,122 @@ CHKTRG_NF
 CHKTRG_BLK
 	JSR	SETSTIL	;NONE. POINT 'IM
 	JMP	CHKSHOT	;AND DO SHOTS
+;
+; LOCAL CORRECTION GLIDE
+; ---------------------
+; A correction on the local slot used to be NET_AUTH_REPOS plus SETSTIL: the
+; actor jumped to the authoritative cell and its walk pose reset. That jump is
+; the snap the player sees. Remote slots have always closed the same gap with
+; the normal move animation, so the local slot now does too -- one cell per
+; move tick toward authority, with the hard snap kept only for distances no
+; walk should cover (respawn, join) and for a walk that cannot make progress.
+;
+; Entered from STRTMOV with X = local pid and NET_P_PENDING set.
+LOCAL_FOLLOW
+	LDA	ACTFLAG,X	;evaporating or coalescing: leave the actor alone
+	AND	#$03
+	BEQ	LF_ALIGN
+	JMP	CHKSHOT
+LF_ALIGN
+	LDA	LOCX,X
+	CMP	NET_PX_X,X
+	BNE	LF_WORK
+	LDA	LOCY,X
+	CMP	NET_PX_Y,X
+	BNE	LF_WORK
+	LDA	#0		;caught up: hand control back to the player
+	STA	NET_GLIDE_ON
+	STA	NET_P_PENDING,X
+	STA	NET_DESYNC_CNT,X
+	JMP	PLRMVE
+LF_WORK
+	LDA	LOCX,X
+	SEC
+	SBC	NET_PX_X,X
+	BCS	LF_DXP
+	EOR	#$FF
+	CLC
+	ADC	#1
+LF_DXP	STA	COUNT		;abs dx
+	LDA	LOCY,X
+	SEC
+	SBC	NET_PX_Y,X
+	BCS	LF_DYP
+	EOR	#$FF
+	CLC
+	ADC	#1
+LF_DYP	STA	HOLDIT		;abs dy
+	CLC
+	ADC	COUNT
+	CMP	#NET_GLIDE_MAX	;too far to be drift: that is a teleport
+	BCC	LF_NEAR
+	JMP	LF_SNAP
+LF_NEAR
+	LDA	COUNT		;close the longer axis first
+	CMP	HOLDIT
+	BCS	LF_TRYX
+LF_TRYY
+	LDA	HOLDIT
+	BEQ	LF_TRYX
+	JSR	LF_SETY
+	JSR	NET_AHEAD_FREE
+	BEQ	LF_STEP
+	LDA	COUNT		;blocked: the other axis may still close the gap
+	BEQ	LF_MISS
+	JSR	LF_SETX
+	JSR	NET_AHEAD_FREE
+	BEQ	LF_STEP
+	BNE	LF_MISS
+LF_TRYX
+	LDA	COUNT
+	BEQ	LF_TRYY2
+	JSR	LF_SETX
+	JSR	NET_AHEAD_FREE
+	BEQ	LF_STEP
+LF_TRYY2
+	LDA	HOLDIT
+	BEQ	LF_MISS
+	JSR	LF_SETY
+	JSR	NET_AHEAD_FREE
+	BNE	LF_MISS
+LF_STEP
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+	JMP	INITMOVE	;walk the cell with the normal animation
+LF_MISS
+	INC	NET_DESYNC_CNT,X	;walled in on both axes; give it a few tries
+	LDA	NET_DESYNC_CNT,X	;before conceding and snapping
+	CMP	#NET_DESYNC_MAX
+	BCC	LF_OUT
+LF_SNAP
+	LDA	MOVEST,X	;never reposition mid-step
+	BNE	LF_OUT
+	JSR	NET_AUTH_REPOS
+	JSR	SETSTIL
+	LDA	#0
+	STA	NET_GLIDE_ON
+	STA	NET_P_PENDING,X
+	STA	NET_DESYNC_CNT,X
+LF_OUT	JMP	CHKSHOT
+;
+LF_SETX	LDA	NET_PX_X,X
+	CMP	LOCX,X
+	BCC	LF_SXL
+	LDA	#0		;authority lies to the right
+	STA	DIR,X
+	RTS
+LF_SXL	LDA	#2		;authority lies to the left
+	STA	DIR,X
+	RTS
+LF_SETY	LDA	NET_PX_Y,X
+	CMP	LOCY,X
+	BCC	LF_SYU
+	LDA	#1		;authority lies below
+	STA	DIR,X
+	RTS
+LF_SYU	LDA	#3		;authority lies above
+	STA	DIR,X
+	RTS
 ;
 ; --- REMOTE_Z1_MOVE ---
 REMOTE_Z1_MOVE	LDA	NET_Z1_PENDING
@@ -5632,6 +6002,14 @@ NET_RX_TRIG	.DS	1	;debounced local trigger (0 pressed / 1 released)
 NET_RX_AVLO	.DS	1	;NS_AVAIL low byte
 NET_RX_AVHI	.DS	1	;NS_AVAIL high byte
 NET_NS_ERRS	.DS	1	;sticky NS_GetStatus bits ($80 framing/$40 overrun/$10 ring)
+NET_RX_JUNK	.DS	1	;bytes skipped while resyncing to a packet marker
+NET_BF_CNT	.DS	1	;map repairs applied
+NET_BF_WRITES	.DS	1	;cells the last repair rewrote
+NET_BD_CNT	.DS	1	;brick deltas applied
+NET_BF_ROW	.DS	1	;repair walk row, saved across the actor test
+NET_BF_CELLX	.DS	1	;repair walk column
+NET_CK_SUM	.DS	1	;running checksum of the packet being collected
+NET_CK_BAD	.DS	1	;packets rejected by the checksum
 SND_CH2_PID	.DS	1	;remote slot currently owning shared sound channel 2
 NET_PRED_TTL	.DS	1	;frames until predicted local shot self-clears
 NET_PRED_X	.DS	1	;shot publish parameter: x
@@ -5662,6 +6040,8 @@ NET_DIAG_BIT	.DS	1	;NET_DIAG_BUMP scratch
 NET_DIAG_YSAV	.DS	1	;NET_DIAG_BUMP saved Y
 NET_DIAG_CNT	.DS	4	;per-path counts: staged, idle, vbi, remote
 NET_IDLE_FRAMES	.DS	1	;consecutive frames with the stick centred
+NET_GLIDE_TMP	.DS	1	;VBI-safe scratch for the glide distance test
+NET_GLIDE_ON	.DS	1	;local correction being walked off
 NET_SNAPLOG_IDX	.DS	1	;write cursor into NET_SNAPLOG
 NET_SNAPLOG	.DS	128	;16 x 8: bit,locx,locy,px,py,dir,stick,pend
 NET_NAME_IDX	.DS	1	;name collector index

@@ -149,7 +149,7 @@ class Client:
     def send_neutral(self):
         self.send_delta(0x0F)
 
-    def wait_snapshot_score(self, pid, score, timeout=5.0):
+    def wait_snapshot_score(self, pid, score, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)
@@ -157,7 +157,10 @@ class Client:
                 return
         raise SystemExit(f"timed out waiting for pid {pid} score {score}")
 
-    def wait_snapshot_pos(self, pid, pos, timeout=5.0):
+    # Waits are generous on purpose. These assert ORDERING, not latency, and
+    # the suite is often run alongside an emulator and a FujiNet sidecar on the
+    # same box; a tight deadline turns machine load into a false failure.
+    def wait_snapshot_pos(self, pid, pos, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)
@@ -165,7 +168,7 @@ class Client:
                 return
         raise SystemExit(f"timed out waiting for pid {pid} at {pos}")
 
-    def wait_snapshot_change(self, pid, start, timeout=5.0):
+    def wait_snapshot_change(self, pid, start, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)
@@ -186,7 +189,7 @@ class Client:
         kind = "final" if final else "pending"
         raise SystemExit(f"timed out waiting for {kind} respawn pid={pid}")
 
-    def wait_brick_delta(self, pos, timeout=5.0):
+    def wait_brick_delta(self, pos, timeout=12.0):
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.pump(0.02)
@@ -393,8 +396,8 @@ clients[0].send_neutral()
 clients[0].wait_snapshot_score(slot0_pid, 1)
 final_packet = clients[0].wait_respawn(slot1_pid, True, timeout=7.0)
 final_pos = (final_packet[3], final_packet[4])
-clients[0].wait_snapshot_pos(slot1_pid, final_pos, timeout=5.0)
-clients[1].wait_snapshot_pos(slot1_pid, final_pos, timeout=5.0)
+clients[0].wait_snapshot_pos(slot1_pid, final_pos, timeout=12.0)
+clients[1].wait_snapshot_pos(slot1_pid, final_pos, timeout=12.0)
 for client in clients:
     client.respawns = []
     client.brick_deltas = []

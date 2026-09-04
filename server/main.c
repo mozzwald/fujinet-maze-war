@@ -375,6 +375,8 @@ static void build_brick_delta(uint8_t seq, uint8_t x, uint8_t y,
                               uint8_t *out, size_t out_len);
 static void broadcast_packet(int sock, struct client_slot *clients,
                              const uint8_t *pkt, size_t len);
+static ssize_t send_checked(int sock, const struct sockaddr *addr,
+                            socklen_t addrlen, const uint8_t *pkt, size_t len);
 
 /* Pending brick-destruction echoes. Single-threaded server, one game, so a
    file-scope queue keeps the three break sites from having to thread it. */
@@ -683,9 +685,39 @@ static void broadcast_next_name(int sock, struct client_slot *clients,
     if (!clients[t].in_use) {
       continue;
     }
-    sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&clients[t].addr,
-           clients[t].addr_len);
+    send_checked(sock, (struct sockaddr *)&clients[t].addr,
+                 clients[t].addr_len, pkt, sizeof(pkt));
   }
+}
+
+/* Every server->client packet carries a trailing sum checksum.
+   The Atari receives over SIO as a byte stream, so a dropped or duplicated
+   byte shifts framing and payload bytes start being read as packet type
+   markers. Bounds checks alone let far too much of that through: corrupt
+   positions landed actors on the border and erased it, corrupt scores
+   flickered, a corrupt brick delta cleared a random cell, and a corrupt
+   sequence number parked the client ~100 ticks in the future so every real
+   snapshot was dropped as stale for seconds. A checksum makes a misframed
+   packet fail closed instead. */
+enum { PKT_CKSUM_MAX = 64 };
+
+static ssize_t send_checked(int sock, const struct sockaddr *addr,
+                            socklen_t addrlen, const uint8_t *pkt, size_t len) {
+  uint8_t buf[PKT_CKSUM_MAX];
+  if (len + 1 > sizeof(buf)) {
+    return -1;
+  }
+  memcpy(buf, pkt, len);
+  uint8_t sum = 0;
+  for (size_t i = 0; i < len; i++) {
+    sum = (uint8_t)(sum + pkt[i]);
+  }
+  buf[len] = sum;
+  ssize_t n = sendto(sock, buf, len + 1, 0, addr, addrlen);
+  /* Report the payload length callers passed in, not the wire length: the
+     checksum is transport, and every call site checks the result against the
+     size of the packet it built. */
+  return (n == (ssize_t)(len + 1)) ? (ssize_t)len : -1;
 }
 
 static void broadcast_packet(int sock, struct client_slot *clients,
@@ -694,8 +726,8 @@ static void broadcast_packet(int sock, struct client_slot *clients,
     if (!clients[i].in_use) {
       continue;
     }
-    sendto(sock, pkt, len, 0,
-           (struct sockaddr *)&clients[i].addr, clients[i].addr_len);
+    send_checked(sock, (struct sockaddr *)&clients[i].addr,
+                 clients[i].addr_len, pkt, len);
   }
 }
 
@@ -1639,8 +1671,8 @@ int main(int argc, char **argv) {
           reset_slot_gameplay(slot, players, shots, last_input_ms, now);
           uint8_t bfull[51];
           build_brick_full(seq++, brick_bits, bfull, sizeof(bfull));
-          sendto(sock, bfull, sizeof(bfull), 0,
-                 (struct sockaddr *)&clients[slot].addr, clients[slot].addr_len);
+          send_checked(sock, (struct sockaddr *)&clients[slot].addr,
+                       clients[slot].addr_len, bfull, sizeof(bfull));
           clients[slot].sent_bricks = 1;
           if (debug) {
             printf("TX brick_full -> slot %d\n", slot);
@@ -1709,9 +1741,8 @@ int main(int argc, char **argv) {
         if (clients[i].have_applied_input_seq) {
           pkt[2] |= 0x80u;
         }
-        ssize_t wn = sendto(sock, pkt, sizeof(pkt), 0,
-                            (struct sockaddr *)&clients[i].addr,
-                            clients[i].addr_len);
+        ssize_t wn = send_checked(sock, (struct sockaddr *)&clients[i].addr,
+                                  clients[i].addr_len, pkt, sizeof(pkt));
         if (debug && wn == (ssize_t)sizeof(pkt)) {
           printf("TX snapshot -> slot %d\n", i);
         }
