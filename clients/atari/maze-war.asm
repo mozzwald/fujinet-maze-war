@@ -3357,8 +3357,24 @@ NSHOT_OFSOK
 	LDA	# >SHOTSHP
 	ADC	#0
 	STA	POINTER+1
+	; SETMOVE writes four characters. Right and down carry their visible glyphs
+	; in bytes 2,3 of the entry and trail blanks forward, away from the shooter.
+	; Left and up carry them in bytes 0,1 and trail $00,$00 -- and the shot sits
+	; one cell back (LOC-2) or one row up (LOC-40), so those blanks land exactly
+	; on the shooter's own two cells and erase the wizard. Draw only the visible
+	; pair for those two directions.
+	CPY	#2
+	BCS	NSHOT_HALF
 	LDA	SHOTDIR,X
 	JSR	SETMOVE
+	JMP	NSHOT_EXIT
+NSHOT_HALF
+	LDY	#1
+NSHOT_HLP
+	LDA	(POINTER),Y
+	STA	(SCRPTR),Y
+	DEY
+	BPL	NSHOT_HLP
 NSHOT_EXIT
 	LDA	#1
 	RTS
