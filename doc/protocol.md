@@ -21,7 +21,14 @@ This document matches current server behavior in `server/main.c`.
 | 0x51 | BRICK_DELTA | S<->C | 4    | Brick removed |
 | 0x52 | RESPAWN     | S<->C | 6    | Respawn request/event |
 
-## Packet Integrity (server -> client)
+## Framing and Integrity (server -> client)
+
+Every server-to-client packet is COBS encoded, followed by a single `$00`
+delimiter byte. Inside the encoded frame the payload carries one extra trailing
+byte: the sum of all preceding bytes of that packet, modulo 256. The lengths in
+the table above are payload lengths; on the wire each is the encoded length
+plus the checksum and delimiter.
+
 
 Every server-to-client packet carries one extra trailing byte: the sum of all
 preceding bytes of that packet, modulo 256. The lengths in the table above are
@@ -36,9 +43,17 @@ BRICK_DELTA cleared a random cell that the 3s map resync then repainted seconds
 later, and a corrupt sequence number parked the client roughly a hundred ticks
 in the future so every genuine snapshot was dropped as stale for seconds.
 
-The client accumulates the sum as it collects a packet and compares it against
-the trailing byte. On a mismatch the packet is discarded whole and the parser
-resyncs to the next recognisable type marker.
+COBS is what makes the stream self-synchronising: no zero byte can appear
+inside an encoded frame, so the next delimiter is always a frame boundary. The
+client buffers bytes until a delimiter, decodes in place, checks the trailing
+sum, and dispatches on the type byte. A byte lost, gained or flipped costs
+exactly one frame and the parser realigns immediately -- verified by
+tests/cobs_resync_smoke.sh against a literal transcription of the 6502 decoder.
+
+The checksum alone was not enough: it makes a damaged packet fail closed, but a
+parser that scans for a type marker stays misaligned until a payload byte
+happens to look like one, which is how spurious BRICK_DELTAs and corrupt
+positions kept getting through.
 
 Client-to-server packets are unchanged: they arrive as UDP datagrams with the
 kernel's own checksum, and the inbound path accepts several historical DELTA

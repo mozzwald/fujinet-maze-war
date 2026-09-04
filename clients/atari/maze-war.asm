@@ -79,6 +79,7 @@ NET_IDLE_SETTLE	=	20	;frames of held-neutral before idle convergence
 NET_RECON_P1	=	10	;remote catastrophic hard-snap guard
 NET_RECOVER_P1	=	3	;remote bounded-recovery snap threshold
 NET_GLIDE_MAX	=	6	;local drift still worth walking off rather than snapping
+NET_FRAME_MAX	=	60	;longest frame we accept (BRICK_FULL encodes to 53)
 NET_DESYNC_MAX	=	3	;remote failed-recovery attempts before forced snap
 NET_HARD_P0	=	12	;local hard-snap guard (only on severe divergence)
 HOST_MAX	=	31	;max hostname length
@@ -1559,73 +1560,234 @@ NET_RX_DECLO
 	JMP	NET_RX_LOOP
 NET_RX_DONE	RTS
 ;
+; COBS FRAMING
+; ------------
+; Bytes accumulate until a zero delimiter, then the frame is COBS-decoded, its
+; checksum checked, and it is dispatched by type. COBS guarantees no zero
+; appears inside an encoded frame, so the delimiter always realigns the parser.
+;
+; The old parser scanned the stream for a type marker and then took a fixed
+; count of bytes. On real hardware, where the SIO link delivers a byte stream
+; rather than datagrams, one byte lost or gained shifted everything and payload
+; bytes started being read as markers -- spurious brick deltas cleared random
+; cells, corrupt positions landed actors on the border, and a corrupt sequence
+; number parked the client ticks in the future. A checksum alone makes that
+; fail closed but cannot realign; the delimiter can, so a damaged frame now
+; costs exactly one frame.
 NET_RX_PARSE	STA	NET_PARSE_BYTE	;preserve received byte
-	LDA	NET_RX_STATE
-	BNE	NET_RX_ST
-	JMP	NET_RX_WAIT
-NET_RX_ST
-	; NET_RX_STATE dispatch:
-	;   1=snapshot, 2=shot, 3=brick_full, 4=brick_delta, 5=respawn, 6=name
-	; collectors sit far apart now, so dispatch through JMPs rather than
-	; relative branches
-	CMP	#1
-	BNE	NRD_2
-	JMP	NET_RX_COL40
-NRD_2	CMP	#2
-	BNE	NRD_3
-	JMP	NET_RX_COL42
-NRD_3	CMP	#3
-	BNE	NRD_4
-	JMP	NET_RX_COL50
-NRD_4	CMP	#4
-	BNE	NRD_5
-	JMP	NET_RX_COL51
-NRD_5	CMP	#5
-	BNE	NRD_6
-	JMP	NET_RX_COL52
-NRD_6	CMP	#6
-	BNE	NET_RX_STDROP
-	JMP	NET_RX_COL43
-NET_RX_STDROP
-	JMP	NET_RX_DROP
-NET_RX_COL40
-	; collecting snapshot bytes
-	LDY	NET_SNAP_IDX
-	LDA	NET_PARSE_BYTE
-	CPY	#20	;trailing byte is the checksum
-	BEQ	NRX40_CK
-	STA	NET_SNAP_BUF,Y
+	BEQ	NET_FRAME_END		;zero is the delimiter, never data
+	LDY	NET_FRAME_IDX
+	CPY	#NET_FRAME_MAX
+	BCS	NRP_OVF
+	STA	NET_FRAME_BUF,Y
+	INC	NET_FRAME_IDX
+	RTS
+NRP_OVF	LDA	#1		;longer than any frame we send: junk
+	STA	NET_FRAME_OVF
+	RTS
+;
+NET_FRAME_END
+	LDA	NET_FRAME_IDX
+	BEQ	NFE_RESET	;delimiter run, nothing buffered
+	LDA	NET_FRAME_OVF
+	BNE	NFE_BAD
+	JSR	NET_COBS_DECODE	;A = decoded length, C set if malformed
+	BCS	NFE_BAD
+	CMP	#2		;type byte plus checksum at minimum
+	BCC	NFE_BAD
+	STA	NET_FRAME_LEN
+	JSR	NET_FRAME_CKSUM
+	BCS	NFE_BAD
+	JSR	NET_FRAME_DISPATCH
+	JMP	NFE_RESET
+NFE_BAD	INC	NET_CK_BAD
+NFE_RESET
+	LDA	#0
+	STA	NET_FRAME_IDX
+	STA	NET_FRAME_OVF
+	RTS
+;
+; Decode in place: a group of code c consumes c bytes and emits c, so the write
+; index never overtakes the read index.
+NET_COBS_DECODE
+	LDA	#0
+	STA	NET_COBS_RD
+	STA	NET_COBS_WR
+NCD_GRP	LDY	NET_COBS_RD
+	CPY	NET_FRAME_IDX
+	BCS	NCD_OK
+	LDA	NET_FRAME_BUF,Y
+	BEQ	NCD_BAD		;a zero inside a frame cannot happen
+	STA	NET_COBS_CODE
+	INC	NET_COBS_RD
+	LDA	#1
+	STA	NET_COBS_N
+NCD_CPY	LDA	NET_COBS_N
+	CMP	NET_COBS_CODE
+	BCS	NCD_ZERO
+	LDY	NET_COBS_RD
+	CPY	NET_FRAME_IDX
+	BCS	NCD_BAD		;group overruns the delimiter
+	LDA	NET_FRAME_BUF,Y
+	LDY	NET_COBS_WR
+	STA	NET_FRAME_BUF,Y
+	INC	NET_COBS_RD
+	INC	NET_COBS_WR
+	INC	NET_COBS_N
+	JMP	NCD_CPY
+NCD_ZERO
+	LDA	NET_COBS_CODE	;a short group stands for a zero, unless it is
+	CMP	#$FF		;the group that ends the frame
+	BEQ	NCD_GRP
+	LDY	NET_COBS_RD
+	CPY	NET_FRAME_IDX
+	BCS	NCD_OK
+	LDA	#0
+	LDY	NET_COBS_WR
+	STA	NET_FRAME_BUF,Y
+	INC	NET_COBS_WR
+	JMP	NCD_GRP
+NCD_OK	LDA	NET_COBS_WR
+	CLC
+	RTS
+NCD_BAD	SEC
+	RTS
+;
+; Sum every byte but the last and compare against it.
+NET_FRAME_CKSUM
+	LDA	NET_FRAME_LEN
+	SEC
+	SBC	#1
+	STA	NET_CK_LEN
+	LDA	#0
+	STA	NET_CK_SUM
+	LDY	#0
+NFC_LP	CPY	NET_CK_LEN
+	BCS	NFC_END
+	LDA	NET_FRAME_BUF,Y
 	CLC
 	ADC	NET_CK_SUM
 	STA	NET_CK_SUM
 	INY
-	STY	NET_SNAP_IDX
+	JMP	NFC_LP
+NFC_END	LDY	NET_CK_LEN
+	LDA	NET_FRAME_BUF,Y
+	CMP	NET_CK_SUM
+	BEQ	NFC_OK
+	SEC
 	RTS
-NRX40_CK	CMP	NET_CK_SUM
-	BEQ	NET_RX_40DONE
-	JMP	NET_RX_CKBAD
+NFC_OK	CLC
+	RTS
+;
+; A = expected length. C set (and counted) when it does not match.
+NET_FRAME_LENCK
+	CMP	NET_FRAME_LEN
+	BEQ	NFL_OK
+	INC	NET_CK_BAD	;framed and intact, but wrong size for its type
+	SEC
+	RTS
+NFL_OK	CLC
+	RTS
+;
+; A/X = destination pointer low/high. Indirect indexed needs a zero page
+; pointer, and POINTER is mainline scratch the caller may still want, so it is
+; borrowed and put back.
+NET_FRAME_COPY
+	STA	NET_FRAME_DST
+	STX	NET_FRAME_DST+1
+	LDA	POINTER
+	STA	NET_FRAME_SAV
+	LDA	POINTER+1
+	STA	NET_FRAME_SAV+1
+	LDA	NET_FRAME_DST
+	STA	POINTER
+	LDA	NET_FRAME_DST+1
+	STA	POINTER+1
+	LDY	#0
+NFCP_LP	CPY	NET_FRAME_LEN
+	BCS	NFCP_X
+	LDA	NET_FRAME_BUF,Y
+	STA	(POINTER),Y
+	INY
+	BNE	NFCP_LP
+NFCP_X	LDA	NET_FRAME_SAV
+	STA	POINTER
+	LDA	NET_FRAME_SAV+1
+	STA	POINTER+1
+	RTS
+;
+; Hand the decoded frame to the collector buffer its apply path already reads.
+NET_FRAME_DISPATCH
+	LDA	NET_FRAME_BUF
+	CMP	#$40
+	BEQ	NFD_SNAP
+	CMP	#$42
+	BEQ	NFD_SHOT
+	CMP	#$43
+	BEQ	NFD_NAME
+	CMP	#$50
+	BEQ	NFD_FULL
+	CMP	#$51
+	BEQ	NFD_BRK
+	CMP	#$52
+	BEQ	NFD_RESP
+	RTS			;unknown type: ignore, the stream stays aligned
+NFD_SNAP
+	LDA	#21
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_SNAP_BUF
+	LDX	# >NET_SNAP_BUF
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_40DONE
+NFD_SHOT
+	LDA	#7
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_SHOT_PKT
+	LDX	# >NET_SHOT_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_42DONE
+NFD_NAME
+	LDA	#NAME_PKT_LEN+1
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_NAME_PKT
+	LDX	# >NET_NAME_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_43DONE
+NFD_FULL
+	LDA	#52
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_BRICK_BUF
+	LDX	# >NET_BRICK_BUF
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_50DONE
+NFD_BRK
+	LDA	#5
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_SNAP_BUF
+	LDX	# >NET_SNAP_BUF
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_51DONE
+NFD_RESP
+	LDA	#7
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_RESP_PKT
+	LDX	# >NET_RESP_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_52DONE
+NFD_X	RTS
+;
 NET_RX_40DONE
 	JSR	NET_SNAP_APPLY
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_SNAP_IDX
 	RTS
-NET_RX_COL42
-	; collecting shot bytes
-	LDY	NET_SHOT_IDX
-	LDA	NET_PARSE_BYTE
-	CPY	#6	;trailing byte is the checksum
-	BEQ	NRX42_CK
-	STA	NET_SHOT_PKT,Y
-	CLC
-	ADC	NET_CK_SUM
-	STA	NET_CK_SUM
-	INY
-	STY	NET_SHOT_IDX
-	RTS
-NRX42_CK	CMP	NET_CK_SUM
-	BEQ	NET_RX_42DONE
-	JMP	NET_RX_CKBAD
 NET_RX_42DONE
 	JSR	NET_SHOT_QUEUE
 	JSR	NET_PRED_CONFIRM
@@ -1633,22 +1795,6 @@ NET_RX_42DONE
 	STA	NET_RX_STATE
 	STA	NET_SHOT_IDX
 	RTS
-NET_RX_COL50
-	; collecting brick-full bytes
-	LDY	NET_BRICK_IDX
-	LDA	NET_PARSE_BYTE
-	CPY	#51	;trailing byte is the checksum
-	BEQ	NRX50_CK
-	STA	NET_BRICK_BUF,Y
-	CLC
-	ADC	NET_CK_SUM
-	STA	NET_CK_SUM
-	INY
-	STY	NET_BRICK_IDX
-	RTS
-NRX50_CK	CMP	NET_CK_SUM
-	BEQ	NET_RX_50DONE
-	JMP	NET_RX_CKBAD
 NET_RX_50DONE
 	; NMIEN is write-only on ANTIC; do not read/restore from hardware register.
 	; Force known net-only setting after map apply.
@@ -1666,22 +1812,6 @@ NET_RX_50BAD
 	STA	NET_RX_STATE
 	STA	NET_BRICK_IDX
 	RTS
-NET_RX_COL43
-	; collecting name bytes ($43 seq pid + 8 name chars)
-	LDY	NET_NAME_IDX
-	LDA	NET_PARSE_BYTE
-	CPY	#NAME_PKT_LEN	;trailing byte is the checksum
-	BEQ	NRX43_CK
-	STA	NET_NAME_PKT,Y
-	CLC
-	ADC	NET_CK_SUM
-	STA	NET_CK_SUM
-	INY
-	STY	NET_NAME_IDX
-	RTS
-NRX43_CK	CMP	NET_CK_SUM
-	BEQ	NET_RX_43DONE
-	JMP	NET_RX_CKBAD
 NET_RX_43DONE
 	JSR	NET_NAME_APPLY
 	LDA	#0
@@ -1710,22 +1840,6 @@ NNA_CP
 	STA	NET_SCORE_PEND
 NNA_X	RTS
 ;
-NET_RX_COL51
-	; collecting brick-delta bytes
-	LDY	NET_SNAP_IDX
-	LDA	NET_PARSE_BYTE
-	CPY	#4	;trailing byte is the checksum
-	BEQ	NRX51_CK
-	STA	NET_SNAP_BUF,Y
-	CLC
-	ADC	NET_CK_SUM
-	STA	NET_CK_SUM
-	INY
-	STY	NET_SNAP_IDX
-	RTS
-NRX51_CK	CMP	NET_CK_SUM
-	BEQ	NET_RX_51DONE
-	JMP	NET_RX_CKBAD
 NET_RX_51DONE
 	LDA	NET_BRICK_DONE
 	BEQ	NET_RX_51CLR
@@ -1735,124 +1849,12 @@ NET_RX_51CLR
 	STA	NET_RX_STATE
 	STA	NET_SNAP_IDX
 	RTS
-NET_RX_COL52
-	; collecting respawn bytes
-	LDY	NET_RESP_IDX
-	LDA	NET_PARSE_BYTE
-	CPY	#6	;trailing byte is the checksum
-	BEQ	NRX52_CK
-	STA	NET_RESP_PKT,Y
-	CLC
-	ADC	NET_CK_SUM
-	STA	NET_CK_SUM
-	INY
-	STY	NET_RESP_IDX
-	RTS
-NRX52_CK	CMP	NET_CK_SUM
-	BEQ	NET_RX_52DONE
-	JMP	NET_RX_CKBAD
 NET_RX_52DONE
 	JSR	NET_RESP_APPLY
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_RESP_IDX
 	RTS
-; A packet whose trailing checksum does not match is discarded whole and the
-; parser resyncs. Misframed data used to reach the apply paths with only bounds
-; checks in the way, which is how corrupt scores, corrupt brick deltas and a
-; corrupt sequence number (parking the client ticks in the future, so real
-; snapshots were dropped as stale for seconds) all got through on hardware.
-NET_RX_CKBAD
-	INC	NET_CK_BAD
-	JMP	NET_RX_DROP
-;
-NET_RX_DROP
-	; framing lost: drop partial packet and resync at next recognizable type byte.
-	LDA	#0
-	STA	NET_RX_STATE
-	STA	NET_SNAP_IDX
-	STA	NET_SHOT_IDX
-	STA	NET_RESP_IDX
-	STA	NET_BRICK_IDX
-	RTS
-NET_RX_WAIT	LDA	NET_PARSE_BYTE
-	; idle parser: wait for type marker, then switch to fixed-length collector.
-	; after first full map, ignore additional $50 packets.
-	CMP	#$40
-	BEQ	NET_RX_WSNAP
-	CMP	#$42
-	BEQ	NET_RX_WSHOT
-	CMP	#$43
-	BEQ	NET_RX_WNAME
-	CMP	#$50
-	BEQ	NET_RX_WFULL50
-	CMP	#$51
-	BEQ	NET_RX_WBRD51
-	CMP	#$52
-	BNE	NET_RX_EXIT
-	LDA	#$52
-	STA	NET_RESP_PKT
-	STA	NET_CK_SUM
-	LDA	#1
-	STA	NET_RESP_IDX
-	LDA	#5
-	STA	NET_RX_STATE
-	RTS
-NET_RX_WBRD51
-	; always collect, even before the first full map: NET_RX_51DONE decides
-	; whether to apply. Bailing out here would leave 3 payload bytes to be
-	; misparsed as packet markers.
-	LDA	#$51
-	STA	NET_SNAP_BUF
-	STA	NET_CK_SUM
-	LDA	#1
-	STA	NET_SNAP_IDX
-	LDA	#4
-	STA	NET_RX_STATE
-	RTS
-NET_RX_WNAME
-	LDA	#$43
-	STA	NET_NAME_PKT
-	STA	NET_CK_SUM
-	LDA	#1
-	STA	NET_NAME_IDX
-	LDA	#6
-	STA	NET_RX_STATE
-	RTS
-NET_RX_WFULL50
-	; later BRICK_FULLs are a re-sync, not a duplicate: they repair a map that
-	; drifted from the server because a BRICK_DELTA was lost, and consuming
-	; them keeps 50 bitmap bytes out of the packet-marker scanner.
-	LDA	#$50
-	STA	NET_BRICK_BUF
-	STA	NET_CK_SUM
-	LDA	#1
-	STA	NET_BRICK_IDX
-	LDA	#3
-	STA	NET_RX_STATE
-	RTS
-NET_RX_WSHOT
-	LDA	#$42
-	STA	NET_SHOT_PKT
-	STA	NET_CK_SUM
-	LDA	#1
-	STA	NET_SHOT_IDX
-	LDA	#2
-	STA	NET_RX_STATE
-	RTS
-NET_RX_WSNAP
-	LDA	#$40
-	STA	NET_SNAP_BUF
-	STA	NET_CK_SUM
-	LDA	#1
-	STA	NET_SNAP_IDX
-	LDA	#1
-	STA	NET_RX_STATE
-	RTS			;NET_RX_WSNAP used to fall through to the bare RTS
-NET_RX_EXIT			;below; it must not reach the resync counter
-	INC	NET_RX_JUNK	;wraps: sampled as a rate, not a total
-	RTS
-
 ; The net runtime block is all .DS, so on a cold boot it holds whatever the RAM
 ; powered up with. Most of it is written before use, but NET_ACTIVE and
 ; NET_GAME_SHOW are read by the poll loop during the host prompt -- before net
@@ -5207,7 +5209,17 @@ SETMOV2	INY		;SET NEXT 2 BYTES
 ;
 ;SET STATIONARY PLAYER/ZOMBIE
 ;
-SETSTIL	LDA	LOCLO,X	;SET POINTER
+; Standing still means the player-missile stops too. SETSUIT is the only code
+; that writes the PM image and HPOSP, and MOVEIM is its only caller, so drawing
+; a still pose here left the sprite wherever the interrupted move had put it --
+; including its MOVEST*2 sub-cell offset. MOVEIM counts MOVEST up for
+; right/down but down for left/up, so stopping while heading left or up left a
+; residual offset of up to six pixels and the sprite sat clear of its own
+; characters, clipping the wizard's head. Zeroing MOVEST first selects the
+; phase-0 image and drops the offset on both axes.
+SETSTIL	LDA	#0
+	STA	MOVEST,X
+	LDA	LOCLO,X	;SET POINTER
 	STA	SCRPTR	;TO SCREEN FOR
 	LDA	LOCHI,X	;SUBROUTINE
 	STA	SCRPTR+1
@@ -5218,6 +5230,7 @@ SETSTIL	LDA	LOCLO,X	;SET POINTER
 	STA	POINTER
 	LDA	# >SHAPES
 	JSR	SHRTSET	;AND SET AWAY...
+	JSR	SETSUIT	;and re-seat the PM at the un-offset cell
 ;
 ;SET PM PORTION OF PLAYER/ZOMBIE
 ;
@@ -6009,7 +6022,18 @@ NET_BD_CNT	.DS	1	;brick deltas applied
 NET_BF_ROW	.DS	1	;repair walk row, saved across the actor test
 NET_BF_CELLX	.DS	1	;repair walk column
 NET_CK_SUM	.DS	1	;running checksum of the packet being collected
-NET_CK_BAD	.DS	1	;packets rejected by the checksum
+NET_CK_BAD	.DS	1	;frames rejected by checksum or framing
+NET_CK_LEN	.DS	1	;index of a decoded frame's checksum byte
+NET_FRAME_IDX	.DS	1	;bytes buffered for the frame in flight
+NET_FRAME_OVF	.DS	1	;frame ran past NET_FRAME_MAX
+NET_FRAME_LEN	.DS	1	;decoded frame length
+NET_COBS_RD	.DS	1	;COBS decode read cursor
+NET_COBS_WR	.DS	1	;COBS decode write cursor
+NET_COBS_CODE	.DS	1	;current COBS group code
+NET_COBS_N	.DS	1	;bytes copied from the current group
+NET_FRAME_DST	.DS	2	;frame copy destination
+NET_FRAME_SAV	.DS	2	;POINTER saved across a frame copy
+NET_FRAME_BUF	.DS	NET_FRAME_MAX	;COBS frame, decoded in place
 SND_CH2_PID	.DS	1	;remote slot currently owning shared sound channel 2
 NET_PRED_TTL	.DS	1	;frames until predicted local shot self-clears
 NET_PRED_X	.DS	1	;shot publish parameter: x

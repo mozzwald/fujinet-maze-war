@@ -157,6 +157,33 @@ static float clampf(float v, float lo, float hi) {
   return v;
 }
 
+/* Server frames are COBS-encoded with a trailing zero delimiter, so a byte
+   lost on the Atari's SIO link cannot desynchronise its parser. Datagrams keep
+   frame boundaries for us here, so decoding is all that is needed; the trailing
+   checksum byte is left in place and simply ignored by the length checks. */
+static ssize_t cobs_decode_inplace(uint8_t *buf, ssize_t n) {
+  if (n <= 0) {
+    return n;
+  }
+  if (buf[n - 1] == 0) {
+    n--; /* drop the delimiter */
+  }
+  ssize_t rd = 0, wr = 0;
+  while (rd < n) {
+    uint8_t code = buf[rd++];
+    if (code == 0) {
+      return -1;
+    }
+    for (uint8_t i = 1; i < code && rd < n; i++) {
+      buf[wr++] = buf[rd++];
+    }
+    if (code != 0xFF && rd < n) {
+      buf[wr++] = 0;
+    }
+  }
+  return wr;
+}
+
 static uint8_t pack_joy(uint8_t stick, uint8_t trig) {
   uint8_t joy = (uint8_t)(stick & 0x0F);
   if (trig) {
@@ -1307,6 +1334,7 @@ int main(int argc, char **argv) {
     while (1) {
       uint8_t buf[256];
       ssize_t n = recvfrom(sock, buf, sizeof(buf), 0, NULL, NULL);
+      n = cobs_decode_inplace(buf, n);
       if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
           break;

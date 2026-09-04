@@ -701,23 +701,55 @@ static void broadcast_next_name(int sock, struct client_slot *clients,
    packet fail closed instead. */
 enum { PKT_CKSUM_MAX = 64 };
 
+/* COBS: encode so no zero byte can appear inside a frame, then terminate with
+   one. The checksum makes a corrupt frame fail closed, but it cannot realign a
+   parser that has lost byte alignment -- it still hunts for a type marker and a
+   payload byte that looks like one starts a false packet. With a zero
+   delimiter the next boundary always resynchronises, so a byte lost, gained or
+   flipped costs exactly one frame. Overhead is one byte for packets this size.
+   (The same conclusion the FujiRealm realtime protocol reached.) */
+static size_t cobs_encode(const uint8_t *in, size_t n, uint8_t *out) {
+  size_t rd = 0, wr = 1, code_i = 0;
+  uint8_t code = 1;
+  while (rd < n) {
+    if (in[rd] == 0) {
+      out[code_i] = code;
+      code_i = wr++;
+      code = 1;
+      rd++;
+    } else {
+      out[wr++] = in[rd++];
+      if (++code == 0xFF) {
+        out[code_i] = code;
+        code_i = wr++;
+        code = 1;
+      }
+    }
+  }
+  out[code_i] = code;
+  return wr;
+}
+
 static ssize_t send_checked(int sock, const struct sockaddr *addr,
                             socklen_t addrlen, const uint8_t *pkt, size_t len) {
-  uint8_t buf[PKT_CKSUM_MAX];
-  if (len + 1 > sizeof(buf)) {
+  uint8_t raw[PKT_CKSUM_MAX];
+  uint8_t buf[PKT_CKSUM_MAX + PKT_CKSUM_MAX / 254 + 2];
+  if (len + 1 > sizeof(raw)) {
     return -1;
   }
-  memcpy(buf, pkt, len);
+  memcpy(raw, pkt, len);
   uint8_t sum = 0;
   for (size_t i = 0; i < len; i++) {
     sum = (uint8_t)(sum + pkt[i]);
   }
-  buf[len] = sum;
-  ssize_t n = sendto(sock, buf, len + 1, 0, addr, addrlen);
-  /* Report the payload length callers passed in, not the wire length: the
-     checksum is transport, and every call site checks the result against the
-     size of the packet it built. */
-  return (n == (ssize_t)(len + 1)) ? (ssize_t)len : -1;
+  raw[len] = sum;
+  size_t enc = cobs_encode(raw, len + 1, buf);
+  buf[enc++] = 0x00; /* frame delimiter */
+  ssize_t n = sendto(sock, buf, enc, 0, addr, addrlen);
+  /* Report the payload length callers passed in, not the wire length: framing
+     is transport, and every call site checks the result against the size of the
+     packet it built. */
+  return (n == (ssize_t)enc) ? (ssize_t)len : -1;
 }
 
 static void broadcast_packet(int sock, struct client_slot *clients,

@@ -24,6 +24,29 @@ sleep 1
 
 python3 - <<'PY' "${PORT}"
 import socket
+
+
+def cobs_decode(pkt):
+    """Server frames are COBS encoded with a trailing $00 delimiter."""
+    if not pkt or pkt[-1] != 0:
+        return b""
+    frame = pkt[:-1]
+    out = bytearray()
+    rd = 0
+    while rd < len(frame):
+        code = frame[rd]
+        rd += 1
+        if code == 0:
+            return b""
+        for _ in range(code - 1):
+            if rd >= len(frame):
+                return b""
+            out.append(frame[rd])
+            rd += 1
+        if code != 0xFF and rd < len(frame):
+            out.append(0)
+    return bytes(out)
+
 import sys
 import time
 
@@ -33,7 +56,7 @@ port = int(sys.argv[1])
 def expect_snapshot(sock, expected_slot, expected_ack):
     deadline = time.time() + 5.0
     while time.time() < deadline:
-        packet = sock.recv(256)
+        packet = cobs_decode(sock.recv(256))
         if len(packet) < 20 or packet[0] != 0x40:
             continue
         flags = packet[2]

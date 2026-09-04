@@ -56,6 +56,29 @@ sleep 1
 
 python3 - "$PORT" <<'PY'
 import collections
+
+
+def cobs_decode(pkt):
+    """Server frames are COBS encoded with a trailing $00 delimiter."""
+    if not pkt or pkt[-1] != 0:
+        return b""
+    frame = pkt[:-1]
+    out = bytearray()
+    rd = 0
+    while rd < len(frame):
+        code = frame[rd]
+        rd += 1
+        if code == 0:
+            return b""
+        for _ in range(code - 1):
+            if rd >= len(frame):
+                return b""
+            out.append(frame[rd])
+            rd += 1
+        if code != 0xFF and rd < len(frame):
+            out.append(0)
+    return bytes(out)
+
 import socket
 import sys
 import time
@@ -126,7 +149,7 @@ class Client:
         deadline = time.time() + duration
         while time.time() < deadline:
             try:
-                packet = self.sock.recv(256)
+                packet = cobs_decode(self.sock.recv(256))
             except socket.timeout:
                 continue
             self.handle(packet)

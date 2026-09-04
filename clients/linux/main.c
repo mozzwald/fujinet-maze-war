@@ -55,6 +55,33 @@ static uint64_t now_ms(void) {
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
+/* Server frames are COBS-encoded with a trailing zero delimiter, so a byte
+   lost on the Atari's SIO link cannot desynchronise its parser. Datagrams keep
+   frame boundaries for us here, so decoding is all that is needed; the trailing
+   checksum byte is left in place and simply ignored by the length checks. */
+static ssize_t cobs_decode_inplace(uint8_t *buf, ssize_t n) {
+  if (n <= 0) {
+    return n;
+  }
+  if (buf[n - 1] == 0) {
+    n--; /* drop the delimiter */
+  }
+  ssize_t rd = 0, wr = 0;
+  while (rd < n) {
+    uint8_t code = buf[rd++];
+    if (code == 0) {
+      return -1;
+    }
+    for (uint8_t i = 1; i < code && rd < n; i++) {
+      buf[wr++] = buf[rd++];
+    }
+    if (code != 0xFF && rd < n) {
+      buf[wr++] = 0;
+    }
+  }
+  return wr;
+}
+
 static uint8_t pack_joy(uint8_t stick, uint8_t trig) {
   uint8_t joy = stick & 0x0F;
   if (trig) {
@@ -317,6 +344,7 @@ int main(int argc, char **argv) {
     if (pfds[0].revents & POLLIN) {
       uint8_t buf[256];
       ssize_t n = recvfrom(sock, buf, sizeof(buf), 0, NULL, NULL);
+      n = cobs_decode_inplace(buf, n);
       if (n >= 3 && buf[0] == PKT_BRICK_FULL && n >= 51) {
         memcpy(bricks, &buf[3], 48);
       } else if (n >= 4 && buf[0] == PKT_BRICK_DELTA) {
