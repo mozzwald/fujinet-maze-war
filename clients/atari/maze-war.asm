@@ -1717,6 +1717,13 @@ NFCP_X	LDA	NET_FRAME_SAV
 	RTS
 ;
 ; Hand the decoded frame to the collector buffer its apply path already reads.
+; The whole frame is copied, payload plus the trailing checksum, so each of
+; those buffers is declared one byte longer than its payload. They were sized
+; before the checksum existed, and the overflow landed on the variable that
+; happened to follow: NET_NAME_PKT wrote over NET_NAMES[0], so the first
+; character of the first name changed once a second as the server rotated
+; through them; NET_SHOT_PKT wrote over NET_SHOT_SEQ; NET_BRICK_BUF over
+; NET_BRICK_DONE; NET_SNAP_BUF over NET_SHOT_IDX ten times a second.
 NET_FRAME_DISPATCH
 	LDA	NET_FRAME_BUF
 	CMP	#$40
@@ -5390,8 +5397,17 @@ ERASHOT	LDA	SHOTLO,X	;SET POINTER TO
 	STA	(POINTR0),Y
 	LDA	SHOTMST,X	;MOVE STAT=0?
 	BEQ	ERSHXIT	;YES. DONE
-	LDA	SHOTDIR,X	;ADD A LINE
-	AND	#$01	;IF UP/DOWN
+	; The erase has to cover exactly what the draw covered. Right and down are
+	; drawn as four characters, trailing forward, so their second pair is
+	; cleared here too. Left and up are drawn on the shot cell alone -- their
+	; trailing pair would fall back onto the shooter, one cell behind or one row
+	; beneath -- so clearing a second pair for them blanks the wizard. That is
+	; the head vanishing on an up shot, and why it took until the shot had
+	; travelled and was retired for it to show.
+	LDA	SHOTDIR,X
+	CMP	#2
+	BCS	ERSHXIT	;left/up: the shot cell is all there is
+	AND	#$01	;down spans the row beneath, right the pair beside it
 	BEQ	ERSHOT2
 	LDY	#$27
 	LDA	#0
@@ -6071,24 +6087,24 @@ NET_NAME_PEND	.DS	1	;our name is queued for transmission
 NET_NAME_TMR	.DS	1	;frames until the next name retry check
 HOST_COL	.DS	1	;TXT_DRAW screen column
 HOST_SRC	.DS	1	;TXT_DRAW buffer index
-NET_NAME_PKT	.DS	NAME_PKT_LEN	;name packet staging
+NET_NAME_PKT	.DS	NAME_PKT_LEN+1	;name packet staging + trailing checksum
 NET_NAMES	.DS	4*NAME_LEN	;per-slot display name, all spaces/0 = unnamed
 NET_SCORE_PEND	.DS	1	;request HUD role-label refresh
 NET_GAME_SHOW	.DS	1	;0 until first full-map + snapshot commit is ready to display
 NET_SNAP_IDX	.DS	1	;snapshot / brick-delta collector index
-NET_SNAP_BUF	.DS	20	;snapshot staging buffer
+NET_SNAP_BUF	.DS	21	;snapshot staging buffer + trailing checksum
 NET_SHOT_IDX	.DS	1	;shot collector index
-NET_SHOT_PKT	.DS	6	;single incoming shot packet staging
+NET_SHOT_PKT	.DS	7	;incoming shot packet staging + trailing checksum
 NET_SHOT_SEQ	.DS	4	;per-slot odd/even publish sequence from mainline RX
 NET_SHOT_APPLYSEQ	.DS	4	;last fully applied shot publish sequence
 NET_RESP_IDX	.DS	1	;respawn collector index
-NET_RESP_PKT	.DS	6	;respawn staging buffer
+NET_RESP_PKT	.DS	7	;respawn staging buffer + trailing checksum
 NET_RESP_BUF	.DS	24	;4 * 6-byte latest-respawn cache
 NET_RESP_SEQ	.DS	4	;per-slot odd/even publish sequence from mainline RX
 NET_RESP_APPLYSEQ	.DS	4	;last fully applied respawn publish sequence
 NET_RESP_WRK	.DS	6	;working copy passed to NET_RESP_APPLY_WRK
 NET_BRICK_IDX	.DS	1	;brick-full collector index
-NET_BRICK_BUF	.DS	51	;brick-full staging buffer
+NET_BRICK_BUF	.DS	52	;brick-full staging buffer + trailing checksum
 NET_BRICK_DONE	.DS	1	;set after first full-map sync
 NET_BRICK_RESYNC	.DS	1	;this BRICK_FULL is a repair, not the first sync
 NET_BRICK_GLYPH	.DS	1	;screen glyph staged for the cell being applied
