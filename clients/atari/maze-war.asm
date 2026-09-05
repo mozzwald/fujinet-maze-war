@@ -189,14 +189,14 @@ MASKL	.BYTE	3,3,3,63,51
 	.BYTE	3,3,15	;COALESCE MASKS
 MASKR	.BYTE	192,192,15,252
 	.BYTE	192,192,48,60
-PL0CHR	.BYTE	0,0,0,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,0
+PL0CHR	.BYTE	128,176,176,176,178,186,171,63
+	.BYTE	2,10,42,174,170,254,194,0
+	.BYTE	42,207,192,194,202,235,234,207
+	.BYTE	168,235,175,190,240,192,168,255
+	.BYTE	10,43,175,170,175,40,10,3
+	.BYTE	0,0,0,0,126,126,0,0
+	.BYTE	0,0,0,0,0,0,48,48
+	.BYTE	0,192,0,0,192,0,0,192
 	.BYTE	0,126,102,102,102
 	.BYTE	102,126,0	;NUMBERS 0
 	.BYTE	0,24,24,24
@@ -239,16 +239,16 @@ OUTWALL	.BYTE	94,91,94,85,229
 	.BYTE	102,102,102,252	;D
 	.BYTE	0,254,102,96
 	.BYTE	120,96,102,254	;E
-	.BYTE	128,176,176,176,178
-	.BYTE	186,171,63	;TITLE CHAR
+	.BYTE	0,254,102,96,120
+	.BYTE	96,96,240	;TITLE CHAR
 	.BYTE	0,126,198,192
 	.BYTE	206,198,198,126	;G
-	.BYTE	2,10,42,174,170
-	.BYTE	254,194,0	;TITLE CHAR
+	.BYTE	0,231,102,102,126
+	.BYTE	102,102,231	;TITLE CHAR
 	.BYTE	0,60,24,24
 	.BYTE	24,24,24,60	;I
-	.BYTE	42,207,192,194,202
-	.BYTE	235,234,207	;TITLE CHAR
+	.BYTE	0,30,12,12,12
+	.BYTE	12,204,120	;TITLE CHAR
 	.BYTE	0,206,216,240
 	.BYTE	252,204,204,206	;K
 	.BYTE	0,240,96,96
@@ -261,8 +261,8 @@ OUTWALL	.BYTE	94,91,94,85,229
 	.BYTE	198,198,198,124	;O
 	.BYTE	0,252,102,102
 	.BYTE	124,96,96,240	;P
-	.BYTE	168,235,175,190,240
-	.BYTE	192,168,255	;TITLE CHAR
+	.BYTE	0,124,198,198,198
+	.BYTE	214,204,123	;TITLE CHAR
 	.BYTE	0,252,102,102
 	.BYTE	124,108,108,230	;R
 	.BYTE	0,126,198,192
@@ -271,12 +271,12 @@ OUTWALL	.BYTE	94,91,94,85,229
 	.BYTE	24,24,24,60	;T
 	.BYTE	0,231,102,102
 	.BYTE	102,102,102,60	;U
-	.BYTE	10,43,175,170
-	.BYTE	175,40,10,3	;TITLE CHAR
+	.BYTE	0,231,102,102
+	.BYTE	102,102,60,24	;TITLE CHAR
 	.BYTE	0,99,99,99
 	.BYTE	107,127,119,99	;W
-	.BYTE	0,192,0,0
-	.BYTE	192,0,0,192	;TITLE CHAR
+	.BYTE	0,231,102,60
+	.BYTE	24,60,102,231	;TITLE CHAR
 	.BYTE	0,231,102,60
 	.BYTE	24,24,24,60	;Y
 	.BYTE	0,254,204,24
@@ -423,21 +423,21 @@ WINPLYR	.BYTE	0,0,0,124,24,24,20,0
 ;
 ;EVAPORATION DATA
 ;
-SMOKE	.BYTE	$1C,$66,$75,$1C
-	.BYTE	$0C,$18,$0C,0
-	.BYTE	$38,$6E,$D7,$FE
-	.BYTE	$18,$10,$18,0
-	.BYTE	$3C,$7E,$FF,$FF
-	.BYTE	$DB,$18,$18,$18
-	.BYTE	$3C,$7E,$FF,$FF
-	.BYTE	$FF,$3C,$3C,$3C
-	.BYTE	0,$3C,$7E,$7E
-	.BYTE	$7E,$3C,$3C,$7E
+SMOKE	.BYTE	28,102,117,28
+	.BYTE	12,24,12,0
+	.BYTE	56,110,215,254
+	.BYTE	24,16,24,0
+	.BYTE	60,126,255,255
+	.BYTE	219,24,24,24
+	.BYTE	60,126,255,255
+	.BYTE	255,60,60,60
+	.BYTE	0,60,126,126
+	.BYTE	126,60,60,126
 ;
 ;COLOR DATA
 ;
-COLTBL	.BYTE	$C8,$86,$58,$28
-	.BYTE	$96,$2A,$00,$34
+COLTBL	.BYTE	200,134,88,40
+	.BYTE	150,42,0,52
 ;
 ;
 ;******************
@@ -3873,10 +3873,33 @@ HOST_SCUP	CMP	#$20
 	BCS	HOST_SCSP
 	SEC
 	SBC	#$40	;$60-$7F -> $20-$3F
-	RTS
+	JMP	HOST_SCART
 HOST_SCL0	SEC
 	SBC	#$20	;$20-$5F -> $00-$3F
-	RTS
+;
+; Not every screen code this conversion can produce is a character.  The font
+; is the original game's, and slots its own text never needed hold title-screen
+; artwork: $1E and $1F (">?"), $3B-$3F ("[\]^_") and now $08-$0C and $0F, where
+; the logo pieces displaced from F, H, J, Q, V and X went.  Reaching one of
+; those from a name painted part of the logo into the scoreboard, which is the
+; bug that made MOZZXL draw three dots.  Pass only what the font really draws:
+; space, '-' and '.' for host names, $10-$1D (digits and ':' ';' '<' '='), and
+; the letters.  Everything else becomes a space.
+HOST_SCART
+	BEQ	HSC_OK		;space
+	CMP	#$0D		;'-'
+	BEQ	HSC_OK
+	CMP	#$0E		;'.'
+	BEQ	HSC_OK
+	CMP	#$10
+	BCC	HOST_SCSP
+	CMP	#$1E		;digits, ':' ';' '<' '='
+	BCC	HSC_OK
+	CMP	#$21
+	BCC	HOST_SCSP	;'>' '?' '@' are artwork or unused
+	CMP	#$3B
+	BCS	HOST_SCSP	;'[\]^_' are artwork
+HSC_OK	RTS
 HOST_SCSP	LDA	#$00
 	RTS
 ;
@@ -5909,7 +5932,11 @@ TITLES	.BYTE	0,0,0,0,0,0,0,0,96
 	.BYTE	"                "
 	.BYTE	$F0,$F2,$E5,$F3,$E5,$EE,$F4,$F3,$80,$80,$80
 	.BYTE	"                "
-	.BYTE	$9E,$9F,$A6,$A8,$AA,$B1,$B6,$B8,$80,$BB,$BC,$BD,$BE,$BF
+	; Six of the glyphs this row named sat in the F, H, J, Q, V and X slots,
+	; which is why a player name containing any of those letters drew a piece
+	; of this logo instead.  They moved to $08-$0C and $0F, whose characters
+	; -- ( ) * + , / -- a name has no use for and HOST_SCR now folds away.
+	.BYTE	$9E,$9F,$88,$89,$8A,$8B,$8C,$8F,$80,$BB,$BC,$BD,$BE,$BF
 	.BYTE	"                "
 	.BYTE	"BY  MARK PRICE   "
 WLKLINE	.BYTE	"                    "
