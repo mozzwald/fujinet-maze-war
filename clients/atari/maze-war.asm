@@ -1238,6 +1238,8 @@ NP_TICK
 	LDA	NET_TX_STATE
 	BNE	NET_PLSND
 	JSR	NET_TX_BUILD_DELTA
+	LDA	#1		;a delta went out: the prediction may now begin one
+	STA	NET_MOVE_DUE	;cell, so cells predicted and inputs sent stay 1:1
 NET_PLSND
 	JSR	NET_TX_STEP
 	JSR	NS_AVAIL
@@ -4064,8 +4066,14 @@ SETIME	LDA	MOVRATE,X	;RESET MOVE
 STRTMOV	CPX	NET_LOCAL_PID
 	BNE	STM_REMOTE	;non-local slots follow authoritative targets
 	LDA	NET_GLIDE_ON	;a correction outstanding on our own slot is walked
-	BEQ	PLRMVE		;off, not teleported; otherwise predict as normal
+	BEQ	STM_DUE		;off, not teleported; otherwise predict as normal
 	JMP	LOCAL_FOLLOW
+STM_DUE	LDA	NET_MOVE_DUE	;MOVCLOK and NET_FRAME_DIV are the same rate but
+	BNE	STM_GO		;free-run in phase, so a cell could start on either
+	JMP	CHKSHOT		;side of the slot that describes it.  Wait for it.
+STM_GO	LDA	#0		;one grant, one cell: a second grant arriving mid
+	STA	NET_MOVE_DUE	;animation collapses rather than banking a step
+	JMP	PLRMVE
 STM_REMOTE
 	JMP	REMOTE_FOLLOW	;via normal move animation
 ;
@@ -6080,6 +6088,8 @@ NET_DIAG_CNT	.DS	4	;per-path counts: staged, idle, vbi, remote
 NET_IDLE_FRAMES	.DS	1	;consecutive frames with the stick centred
 NET_GLIDE_TMP	.DS	1	;VBI-safe scratch for the glide distance test
 NET_GLIDE_ON	.DS	1	;local correction being walked off
+NET_MOVE_DUE	.DS	1	;permission to begin one predicted cell, granted
+			;by the transmit slot and consumed by STRTMOV
 NET_SNAPLOG_IDX	.DS	1	;write cursor into NET_SNAPLOG
 NET_SNAPLOG	.DS	128	;16 x 8: bit,locx,locy,px,py,dir,stick,pend
 NET_NAME_IDX	.DS	1	;name collector index

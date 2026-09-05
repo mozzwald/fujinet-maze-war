@@ -61,4 +61,25 @@ if ! grep -A12 -E "^NTB_TRIGUP" "$ATARI_SRC" | grep -F "NET_TRIG_LATCH" >/dev/nu
     exit 1
 fi
 
+# The grant must be raised at the transmit slot itself, not merely somewhere in
+# the poll loop: only a DELTA that actually left the machine may license a cell.
+# NET_TX_BUILD_DELTA is skipped when the transmitter is busy, so the store has
+# to sit after the JSR to inherit that skip.
+if ! grep -A3 -E "JSR${TAB}+NET_TX_BUILD_DELTA" "$ATARI_SRC" | grep -qE "STA${TAB}+NET_MOVE_DUE"; then
+    echo "FAIL: the transmit slot does not grant NET_MOVE_DUE. Without the" \
+         "grant the local move decision can never run, or -- if the grant" \
+         "moved earlier -- a skipped send still licenses a predicted cell" >&2
+    exit 1
+fi
+
+# And consumed by the local move decision, which is what keeps the two clocks
+# in phase. NET_FRAME_DIV and the MOVRATE cell period are the same rate but
+# free-run independently; the gate is the only thing tying their phase.
+if ! sed -n '/^STRTMOV[[:space:]]/,/^PLRMVE[[:space:]]/p' "$ATARI_SRC" \
+     | grep -qE "LDA${TAB}+NET_MOVE_DUE"; then
+    echo "FAIL: the local move decision no longer consumes NET_MOVE_DUE;" \
+         "move decisions and transmit slots are free-running in phase again" >&2
+    exit 1
+fi
+
 echo "input send cadence smoke passed"
