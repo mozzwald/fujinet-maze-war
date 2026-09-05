@@ -146,7 +146,12 @@ MAZE_OK   = {0x00, 0xA0, 0xFD, 0xFE, 0xFF}      # blank, space, brick/border
 ACTOR_OK  = set(range(0xC0, 0xE0))              # wizard shapes
 SHOT_OK   = {0x81, 0x82, 0x83, 0x84, 0x85}      # bullets
 EXPL_OK   = {0x9B, 0x9C, 0x9D}                  # shrapnel
-LEGAL = MAZE_OK | ACTOR_OK | SHOT_OK | EXPL_OK
+# $08-$0F are PL0CHR, the per-player coalesce tiles SETFUZZ rewrites at
+# runtime, drawn on the playfield as a wizard materialises. Calling these
+# illegal produced a false "illegal-glyph code $0A" report on a perfectly
+# healthy coalescing player.
+COALESCE_OK = set(range(0x08, 0x10)) | set(range(0x88, 0x90))
+LEGAL = MAZE_OK | ACTOR_OK | SHOT_OK | EXPL_OK | COALESCE_OK
 
 CHARSET = 0x4000
 

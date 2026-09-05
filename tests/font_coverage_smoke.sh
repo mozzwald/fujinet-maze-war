@@ -8,8 +8,10 @@
 # letters, which is why the name MOZZXL drew three dots for the X on real
 # hardware. That was safe until names became arbitrary user input.
 #
-# The six letters now have letterforms and the artwork moved into slots
-# whose characters a name has no use for: ( ) * + , and /. Five more artwork slots ($1E, $1F and $3B-$3F) are still
+# The six letters now have letterforms in their own slots. The logo they
+# displaced draws wrong, which costs nothing because TITLDISP is never
+# installed. An attempt to relocate the logo into $08-$0F failed badly: those
+# are PL0CHR, eight per-player coalesce tiles SETFUZZ rewrites at runtime. Five more artwork slots ($1E, $1F and $3B-$3F) are still
 # reachable from HOST_SCR as ">?" and "[\]^_", and have no letter to be, so
 # HOST_SCR folds them to a space.
 #
@@ -90,8 +92,10 @@ def host_scr(c):
     if c < 0x20 or c >= 0x80:
         return 0x00
     c = c - 0x40 if c >= 0x60 else c - 0x20
-    # the whitelist: space, '-', '.', $10-$1D, and the letters
-    if c == 0x00 or c == 0x0D or c == 0x0E:
+    # the whitelist: space, $10-$1D, and the letters. '-' and '.' are NOT
+    # here: their glyph slots ($0D, $0E) are PL0CHR coalesce tiles the game
+    # rewrites at runtime, so they cannot carry letterforms.
+    if c == 0x00:
         return c
     if c < 0x10:
         return 0x00
@@ -115,12 +119,19 @@ if not art:
 reachable = {host_scr(c) for c in range(256)}
 reachable.discard(0x00)
 
-# 1. a name must never be able to paint artwork
-overlap = sorted(reachable & art)
-if overlap:
-    fail("screen codes %s are reachable from a name AND used as title artwork; "
-         "a name containing them would draw part of the logo"
-         % ", ".join("$%02X" % c for c in overlap))
+# 1. The title logo may share slots with letters ONLY because its display list
+#    is never installed. RESTART jumps straight to START, so TITLDISP is dead
+#    code in the net client. If that ever changes, six of the logo's glyphs are
+#    letterforms now and it will draw wrong -- so pin the thing that makes the
+#    sharing safe, rather than the sharing itself.
+src_asm = open(root + "/clients/atari/maze-war.asm").read()
+installs = [l for l in src_asm.split('\n')
+            if 'TITLDISP' in l and not l.startswith('TITLDISP')
+            and '.WORD' not in l and ';' not in l.split('TITLDISP')[0]]
+if installs:
+    fail("TITLDISP looks reachable again (%s). Six of the title logo's glyphs "
+         "are letterforms now, so the title screen would draw wrong; give the "
+         "logo its own slots before showing it." % installs[0].strip())
 
 # 2. every reachable glyph must actually be drawn
 for c in sorted(reachable):
@@ -137,20 +148,50 @@ for c in sorted(reachable):
         fail("screen codes $%02X and $%02X render identically" % (seen[g], c))
     seen[g] = c
 
-# 4. the six repaired letters specifically must not have reverted to the
-#    artwork they used to be, which now lives at $08-$0D
+# 4. the six repaired letters must still be letterforms
 letters = {0x26: 'F', 0x28: 'H', 0x2A: 'J', 0x31: 'Q', 0x36: 'V', 0x38: 'X'}
-moved = [0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0F]
 for code, name in letters.items():
     if code not in reachable:
         fail("%s ($%02X) is no longer reachable from a name" % (name, code))
-    if glyph(code) in {glyph(a) for a in moved}:
-        fail("%s ($%02X) is artwork again, not a letterform" % (name, code))
+    if glyph(code) == bytes(8):
+        fail("%s ($%02X) is blank again" % (name, code))
+
+# 5. $08-$0F belong to the GAME, not to the font.
+#
+# PL0CHR is at CHRSET+$40, i.e. glyph $08, and SETFUZZ writes glyph $08+slot
+# and $0C+slot as it animates a coalescing wizard -- eight per-player scratch
+# tiles that are blank in the assembled font only because the game fills them
+# at runtime. They were mistaken for free slots once; title artwork and '-'
+# and '.' were moved into them, and the wizard's own image fought the
+# letterforms for the same bytes. Nothing addressable as text may live there,
+# and no name may reach them.
+pl0 = None
+for line in open(root + "/build/maze-war.lab"):
+    f = line.split()
+    if len(f) >= 3 and f[2] == 'PL0CHR':
+        pl0 = int(f[1], 16)
+if pl0 is None:
+    fail("PL0CHR not found in the label file")
+first = (pl0 - 0x4000) // 8
+scratch = set(range(first, first + 8))
+if scratch != set(range(0x08, 0x10)):
+    print("  note: PL0CHR moved; scratch tiles are now "
+          + ",".join("$%02X" % g for g in sorted(scratch)))
+clash = sorted(reachable & scratch)
+if clash:
+    fail("screen codes %s are reachable from a name but are PL0CHR coalesce "
+         "tiles that SETFUZZ overwrites at runtime; text there fights the "
+         "wizard's own image" % ", ".join("$%02X" % c for c in clash))
+for g in sorted(scratch):
+    if glyph(g) != bytes(8):
+        fail("glyph $%02X is a PL0CHR scratch tile but carries artwork in the "
+             "assembled font; the game owns those bytes" % g)
 
 print("  %d screen codes reachable from a name, all distinct letterforms"
       % len(reachable))
-print("  %d artwork glyphs, none of them reachable"
-      % len(art | set(moved)))
+print("  %d title-logo glyphs (unreachable display list), "
+      "%d PL0CHR scratch tiles left to the game"
+      % (len(art), len(scratch)))
 PYEOF
 
 echo "font coverage smoke passed"

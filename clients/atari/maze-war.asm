@@ -189,14 +189,14 @@ MASKL	.BYTE	3,3,3,63,51
 	.BYTE	3,3,15	;COALESCE MASKS
 MASKR	.BYTE	192,192,15,252
 	.BYTE	192,192,48,60
-PL0CHR	.BYTE	128,176,176,176,178,186,171,63
-	.BYTE	2,10,42,174,170,254,194,0
-	.BYTE	42,207,192,194,202,235,234,207
-	.BYTE	168,235,175,190,240,192,168,255
-	.BYTE	10,43,175,170,175,40,10,3
-	.BYTE	0,0,0,0,126,126,0,0
-	.BYTE	0,0,0,0,0,0,48,48
-	.BYTE	0,192,0,0,192,0,0,192
+PL0CHR	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
+	.BYTE	0,0,0,0,0,0,0,0
 	.BYTE	0,126,102,102,102
 	.BYTE	102,126,0	;NUMBERS 0
 	.BYTE	0,24,24,24
@@ -3932,14 +3932,13 @@ HOST_SCL0	SEC
 ; the logo pieces displaced from F, H, J, Q, V and X went.  Reaching one of
 ; those from a name painted part of the logo into the scoreboard, which is the
 ; bug that made MOZZXL draw three dots.  Pass only what the font really draws:
-; space, '-' and '.' for host names, $10-$1D (digits and ':' ';' '<' '='), and
-; the letters.  Everything else becomes a space.
+; space, $10-$1D (digits and ':' ';' '<' '=') and the letters.  Everything
+; else becomes a space -- including '-' and '.', whose glyph slots ($0D,
+; $0E) are two of the eight PL0CHR coalesce tiles the game rewrites at
+; runtime.  They were blank before and drew nothing; putting letterforms
+; there fought SETFUZZ for the wizard's own image.
 HOST_SCART
 	BEQ	HSC_OK		;space
-	CMP	#$0D		;'-'
-	BEQ	HSC_OK
-	CMP	#$0E		;'.'
-	BEQ	HSC_OK
 	CMP	#$10
 	BCC	HOST_SCSP
 	CMP	#$1E		;digits, ':' ';' '<' '='
@@ -5985,11 +5984,14 @@ TITLES	.BYTE	0,0,0,0,0,0,0,0,96
 	.BYTE	"                "
 	.BYTE	$F0,$F2,$E5,$F3,$E5,$EE,$F4,$F3,$80,$80,$80
 	.BYTE	"                "
-	; Six of the glyphs this row named sat in the F, H, J, Q, V and X slots,
-	; which is why a player name containing any of those letters drew a piece
-	; of this logo instead.  They moved to $08-$0C and $0F, whose characters
-	; -- ( ) * + , / -- a name has no use for and HOST_SCR now folds away.
-	.BYTE	$9E,$9F,$88,$89,$8A,$8B,$8C,$8F,$80,$BB,$BC,$BD,$BE,$BF
+	; Six glyphs this row names ($A6 $A8 $AA $B1 $B6 $B8) are the F, H, J, Q,
+	; V and X slots, which now hold real letterforms so that player names
+	; render.  The logo is drawn wrong as a result, which costs nothing: this
+	; display list is never installed -- RESTART goes straight to START -- so
+	; the title screen is unreachable in the net client.  They were briefly
+	; relocated to $08-$0F; those are PL0CHR, the per-player coalesce tiles
+	; SETFUZZ rewrites at runtime, and taking them corrupted the wizard.
+	.BYTE	$9E,$9F,$A6,$A8,$AA,$B1,$B6,$B8,$80,$BB,$BC,$BD,$BE,$BF
 	.BYTE	"                "
 	.BYTE	"BY  MARK PRICE   "
 WLKLINE	.BYTE	"                    "
