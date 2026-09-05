@@ -35,11 +35,13 @@ grep -qE "^RNDY[[:space:]]+\.DS[[:space:]]+4" "$ATARI_SRC" \
 # RENDER_CHASE is deliberately absent: it is the bridge between the two and
 # must read both.
 for r in NET_AHEAD_FREE CKMV_AOK NLRC_IDLE RF_NEEDS; do
+    # stop at the routine separator, or the body runs on into whatever
+    # routine happens to follow and the check reports on the wrong code
     body=$(awk -v r="$r" '
-        $1==r {on=1}
+        $1==r {on=1; next}
+        on && /^;$/ {exit}
         on {print}
-        on && /RTS|^[[:space:]]*JMP/ {n++; if (n>40) exit}
-    ' "$ATARI_SRC" | head -40)
+    ' "$ATARI_SRC" | head -60)
     if printf '%s' "$body" | grep -qE "RND[XY],"; then
         fail "$r reads render state; gameplay must decide on LOCX/LOCY"
     fi
@@ -157,5 +159,16 @@ printf '%s' "$chase" | grep -qE "STA[[:space:]]+NET_RCHASE_STEP" \
   || fail "RENDER_CHASE does not mark its step as render-only"
 printf '%s' "$chase" | grep -qE "CMP[[:space:]]+LOCX,X" \
   || fail "RENDER_CHASE does not chase the simulation cell"
+
+# The walk must respect bricks. Nothing collides with the render position, but
+# ERASMAN blanks the characters it walks onto and the map only repaints on a
+# server delta, so a chase across a brick erases it from the screen while it
+# goes on stopping the player.
+printf '%s' "$chase" | grep -qE "JSR[[:space:]]+NET_AHEAD_FREE_RND" \
+  || fail "RENDER_CHASE does not test for bricks; the walk would erase any it \
+crosses and leave an invisible wall"
+grep -qE "^NET_AHEAD_FREE_RND" "$ATARI_SRC" \
+  || fail "NET_AHEAD_FREE_RND is gone; the chase would have to test from the \
+simulation cell, which is not where it is walking"
 
 echo "render state separation smoke passed"

@@ -3580,6 +3580,25 @@ NET_AHEAD_FREE
 	STA	NET_AHEAD_X
 	LDA	LOCY,X
 	STA	NET_AHEAD_Y
+	JMP	NAF_DIR
+;
+; The same test seeded from the drawn position instead of the simulation cell,
+; for the render chase.  The walk has to respect bricks even though nothing
+; collides with the render position, because ERASMAN blanks the two characters
+; it walks onto and the map is only repainted on a server delta -- so a chase
+; through a brick erased it from the screen while it went on stopping the
+; player, which is exactly what a walk-through-walls report looks like.
+NET_AHEAD_FREE_RND
+	STX	NET_AHEAD_ID
+	LDA	COUNT
+	PHA
+	LDA	HOLDIT
+	PHA
+	LDA	RNDX,X
+	STA	NET_AHEAD_X
+	LDA	RNDY,X
+	STA	NET_AHEAD_Y
+NAF_DIR
 	LDA	DIR,X
 	BEQ	NAF_XP
 	CMP	#1
@@ -4289,6 +4308,10 @@ RC_YAXIS
 	BNE	RC_GO
 RC_UP	LDA	#3		;...above
 RC_GO	STA	DIR,X
+	JSR	NET_AHEAD_FREE_RND	;never walk the picture through a brick
+	BEQ	RC_STEP
+	JMP	RC_SNAP		;blocked: take the correction straight instead
+RC_STEP
 	LDA	#1		;the simulation is already there: this animation
 	STA	NET_RCHASE_STEP	;is allowed to move the picture only
 	JMP	INITMOVE
