@@ -460,12 +460,36 @@ STWIDTH	STA	SIZEP0,X	;SET WIDTHS
 	DEX
 	BPL	STWIDTH
 	STA	COLOR4	;COLOR 4=BLACK
+;
+; PMAREA and the player pages are .DS, which reserves without emitting, so on
+; real hardware they hold power-up RAM until something writes them.  Emulation
+; zeroes memory, which is why the dotted column this produced was only ever
+; visible on hardware.  Clear the whole 2K PM area BEFORE the DMA registers
+; below are programmed -- doing it merely "early in START" would not do, the
+; ordering against PMBASE/DMACTL/GRACTL is the point.
+PM_CLEAR
+	LDA	#0
+	TAY
+PMCLR_LP
+	STA	PMAREA,Y
+	STA	PMAREA+$100,Y
+	STA	PMAREA+$200,Y
+	STA	PMAREA+$300,Y
+	STA	PL0,Y
+	STA	PL1,Y
+	STA	PL2,Y
+	STA	PL3,Y
+	INY
+	BNE	PMCLR_LP
+;
 	LDA	# >PMAREA	;SET PMBASE,
 	STA	PMBASE	; DMACTL, GRACTL,
 	LDA	#$3E	; AND GPRIOR
 	STA	DMACTL
-	LDA	#$03
-	STA	GRACTL
+	LDA	#$02	;players only.  Bit 0 used to enable missile DMA as
+	STA	GRACTL	;well, but the client never writes HPOSM0-3 or any
+			;missile graphics, so that DMA only ever fetched
+			;whatever happened to be at PMBASE+$300.
 	LDA	HOST_DONE	;AUDCTL/SKCTL BELONG TO THE
 	BNE	INITPSK	;NETSTREAM HANDLER AFTER FIRST
 	LDA	#0	;NET INIT; COLD START ONLY
@@ -1053,6 +1077,10 @@ NET_HOSTRET
 	STA	GRACTL	;OTHERWISE HANG OVER THE PROMPT SCREEN
 	LDX	#0
 NHR_PMCLR
+	STA	PMAREA,X	;the missile quarter as well: START does not
+	STA	PMAREA+$100,X	;reprogram PMBASE and this path re-enables
+	STA	PMAREA+$200,X	;output below
+	STA	PMAREA+$300,X
 	STA	PL0,X
 	STA	PL1,X
 	STA	PL2,X
@@ -1060,8 +1088,10 @@ NHR_PMCLR
 	INX
 	BNE	NHR_PMCLR
 	JSR	HOST_BOOT	;RE-PROMPT, SHOWING HOST_MSG
-	LDA	#$03	;START DOES NOT REPROGRAM GRACTL, SO RESTORE
-	STA	GRACTL	;PLAYER/MISSILE OUTPUT BEFORE PLAY RESUMES
+	LDA	#$02	;START DOES NOT REPROGRAM GRACTL, SO RESTORE
+	STA	GRACTL	;PLAYER OUTPUT BEFORE PLAY RESUMES.  Players only,
+			;matching INITPLR: enabling missiles here too was
+			;what brought the artefact back on the resume path.
 	JMP	START
 ;
 ;SILENCE WATCHDOG (ONE CALL PER FRAME FROM NET_POLL)
