@@ -317,6 +317,34 @@ blanks the cell every move commit before redrawing, so a one-frame blank is
 normal and only a sustained run means a real clip. Successive refinements of
 that measurement accused a different direction each run.
 
+### Hardware presentation defects found 2026-09-04 (planned as 04-04, 04-05)
+
+Screenshot: `ref/screenshots/IMG_20260904_201638.jpg`. The game functions
+correctly and all 5.1 fixes hold; these are display faults only.
+
+**Vertical dotted line in the player's column** (04-04). `PMAREA .DS $0400` at
+`$3800` is uninitialised, and `ERASMAN` clears only the four player pages at
+`$3C00`-`$3FFF`. The missile region at `PMBASE+$300` = `$3B00` is never cleared,
+and `GRACTL` is set to `$03`, which enables missile DMA — while the client never
+writes `HPOSM0`-`HPOSM3` or any missile graphics register anywhere (verified by
+grep). So missiles are enabled, unpositioned and fed power-up RAM. Invisible on
+emulation because the emulator zeroes RAM — the same blind spot that hid the
+net-state bug. Caveat recorded in the plan: uninitialised missile data alone
+does not explain dots that *track* the player, so re-check on hardware after the
+clear rather than assuming it is fully explained.
+
+**Wrong glyphs for some letters** (04-05). Dumping the embedded charset at
+`$4000` against the screen codes `HOST_SCR` produces: `X` (`$38`) is three
+isolated dots — exactly the reported `MOZZXL` artefact — `V` (`$36`) is a
+checkerboard, and `F`, `J`, `Q` are likewise artwork. `S`, `C`, `G`, `K` and the
+rest of A-Z and 0-9 are proper letters, which is why `WIZARD` and `ZOMBIE` have
+always looked right. Those five are exactly the letters the original game's own
+text never used, so their slots were reused for artwork — safe while all text
+was compile-time constants, unsafe once player names became user input. Note the
+prompt screen switches `CHBASE` to ROM (`HOST_BOOT` writes `#$E0`) while the
+scoreboard uses the embedded font, so the charset-selection path needs checking
+too, not just the glyphs.
+
 ### Known gaps (not addressed)
 
 - ~~`combat_world_authority_smoke.sh` flakiness~~ FIXED 2026-09-03. Two causes,

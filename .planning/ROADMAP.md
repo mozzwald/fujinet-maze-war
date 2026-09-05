@@ -89,11 +89,14 @@ Plans:
   1. Remote wizards and AI zombies move smoothly on the Atari display without being treated as locally predicted actors.
   2. Local smoothing and remote interpolation never create fake gameplay positions that alter bullets, collision checks, or slot state.
   3. The Atari client can present smoother actor motion while keeping authoritative simulation state and predicted-local simulation state inspectably distinct.
-**Plans**: 3 plans
+  4. No display artefact originates from memory the client never initialised, and any character a player can enter renders as itself.
+**Plans**: 5 plans
 Plans:
 - [ ] `04-01` — Lock the movement decision to the transmit tick so one delta always equals exactly one predicted cell, removing the phase slip between `MOVCLOK` and `NET_FRAME_DIV` that still produces corrections. Gameplay-truth work; must land before smoothing so smoothing is not hiding a live desync.
 - [ ] `04-02` — Introduce render-only actor position distinct from `LOCX/LOCY`, so collision, shot origin and slot state keep reading authoritative/predicted cells while the display reads a separate interpolated position. Retire the `LOCAL_FOLLOW` glide stopgap in favour of it.
 - [ ] `04-03` — Interpolate remote actors and zombies from authoritative targets through the render state, and prove with counters that no smoothed value ever reaches a gameplay decision.
+- [ ] `04-04` — Clear all player-missile memory before PM DMA is enabled, and stop enabling missile DMA the game never uses. Hardware-only artefact: `PMAREA` is uninitialised `.DS`, nothing clears the missile region at `$3B00`, and `GRACTL` is set to `$03` while no missile register is ever written. Independent of smoothing; can run in parallel with 04-01.
+- [ ] `04-05` — Complete the embedded font for characters text can use. `F`, `J`, `Q`, `V` and `X` hold maze artwork rather than letterforms, which was safe while all text was compile-time constants and stopped being safe when player names became user input. Independent of smoothing; can run in parallel with 04-01.
 
 **Status note (2026-09-04)**: Two prerequisites are already done and should not be
 re-derived. Prediction now runs on the input actually transmitted
