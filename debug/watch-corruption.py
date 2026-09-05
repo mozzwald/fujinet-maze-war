@@ -141,33 +141,100 @@ def actor_cells():
     return live
 
 
-MAZE_OK = {0x00, 0xA0, 0xFD, 0xFE, 0xFF}
+# Codes the playfield is ever supposed to contain.
+MAZE_OK   = {0x00, 0xA0, 0xFD, 0xFE, 0xFF}      # blank, space, brick/border
+ACTOR_OK  = set(range(0xC0, 0xE0))              # wizard shapes
+SHOT_OK   = {0x81, 0x82, 0x83, 0x84, 0x85}      # bullets
+EXPL_OK   = {0x9B, 0x9C, 0x9D}                  # shrapnel
+LEGAL = MAZE_OK | ACTOR_OK | SHOT_OK | EXPL_OK
+
+CHARSET = 0x4000
+
+
+def build_charset():
+    """the font as assembled, to compare the live one against"""
+    d = open(os.path.join(REPO, 'build', 'maze-war.xex'), 'rb').read()
+    i = 2 if d[:2] == b'\xff\xff' else 0
+    segs = []
+    while i + 4 <= len(d):
+        a = d[i] | (d[i+1] << 8); e = d[i+2] | (d[i+3] << 8)
+        if a == 0xFFFF:
+            i += 2; continue
+        n = e - a + 1
+        segs.append((a, e, d[i+4:i+4+n])); i += 4 + n
+    for a, e, b in segs:
+        if a <= CHARSET and CHARSET + 1023 <= e:
+            return list(b[CHARSET-a:CHARSET-a+1024])
+    return None
+
+
+REF_FONT = build_charset()
 
 
 def check(s):
-    """return a list of (kind, detail) anomalies"""
+    """anomalies as (kind, detail, urgent) -- urgent ones skip the persistence
+    filter because the thing they describe moves and would never sit still"""
     out = []
-    # a border cell gone blank
-    for col in range(20):
-        for row in (0, 18):
-            if s[row * 40 + col * 2] == 0 and s[row * 40 + col * 2 + 1] == 0:
-                out.append(("border-blank", f"col{col} row{row}"))
-    for row in range(19):
-        for col in (0, 19):
-            if s[row * 40 + col * 2] == 0 and s[row * 40 + col * 2 + 1] == 0:
-                out.append(("border-blank", f"col{col} row{row}"))
-    # actor glyphs stranded away from any actor
-    live = actor_cells()
+
+    # 1. an illegal glyph code anywhere on the playfield. Bullets move, so this
+    #    is reported at once; waiting for it to persist is why the previous
+    #    version of this tool saw nothing while bullets rendered as letters.
     for idx, c in enumerate(s):
-        if 0xC0 <= c <= 0xDF and idx not in live:
-            out.append(("stray-actor-glyph", f"col{idx%40//2} row{idx//40} $%02X" % c))
-        elif c not in MAZE_OK and not (0xC0 <= c <= 0xDF) and idx not in live:
-            out.append(("stray-glyph", f"col{idx%40//2} row{idx//40} $%02X" % c))
-    # player-missile residue: more than one 8-row band lit in a page
+        if c not in LEGAL:
+            out.append(("illegal-glyph",
+                        "col%d row%d code $%02X" % (idx % 40 // 2, idx // 40, c),
+                        True))
+
+    # 2. the font itself being rewritten under the game
+    if REF_FONT:
+        live = []
+        for off in range(0, 1024, 256):
+            live += pk(CHARSET + off, 256)
+        bad = sorted({j // 8 for j in range(1024) if live[j] != REF_FONT[j]})
+        if bad:
+            out.append(("charset-modified",
+                        "glyph slots " + ",".join("$%02X" % g for g in bad[:12]),
+                        True))
+
+    # 3. shot state out of range: SHOTDIR indexes a 4-entry table, and the
+    #    shape offsets into SHOTSHP are deliberately unaligned, so a bad
+    #    direction reads whatever follows the table as screen codes
+    sd, sm = pk(S('SHOTDIR'), 4), pk(S('SHOTMST'), 4)
+    for i in range(4):
+        if sd[i] > 3:
+            out.append(("shotdir-range", f"slot{i} SHOTDIR={sd[i]}", True))
+        if sm[i] > 3:
+            out.append(("shotmst-range", f"slot{i} SHOTMST={sm[i]}", True))
+
+    # 4. a slot flagged as firing with no bullet drawn anywhere -- the
+    #    "bullets stopped appearing" symptom, which is an ABSENCE and so was
+    #    invisible to a detector that only looked for stray graphics
+    act = pk(S('ACTFLAG'), 4)
+    drawn = any(c in SHOT_OK for c in s)
+    for i in range(4):
+        if act[i] & 0x80 and not drawn:
+            out.append(("shot-invisible",
+                        f"slot{i} ACTFLAG=$%02X but no bullet glyph on screen"
+                        % act[i], False))
+
+    # 5. actor-missing: a live, non-evaporating slot whose drawn cell is blank
+    rx, ry = pk(S('RNDX'), 4), pk(S('RNDY'), 4)
+    dead = pk(S('NET_DEAD_MASK'), 1)[0]
+    for i in range(4):
+        if dead & (1 << i) or (act[i] & 0x03):
+            continue
+        if not (1 <= rx[i] <= 18 and 1 <= ry[i] <= 17):
+            continue
+        base = ry[i] * 40 + rx[i] * 2
+        if s[base] == 0 and s[base+1] == 0:
+            out.append(("actor-not-drawn",
+                        f"slot{i} at ({rx[i]},{ry[i]}) draws blank", False))
+
+    # 6. player-missile residue
     for i, nz in enumerate(pm_pages()):
         bands = sorted({j // 8 for j in nz})
         if len(bands) > 2:
-            out.append(("pm-residue", f"PL{i} bands {bands}"))
+            out.append(("pm-residue", f"PL{i} bands {bands}", False))
     return out
 
 
@@ -193,16 +260,30 @@ while True:
     fails = 0
     if pk(S('LOCX'), 4) == [1, 1, 1, 1]:
         time.sleep(args.interval); continue      # not joined yet
-    now = {(k, d) for k, d in check(s)}
+    found = check(s)
+    now = {(k, d) for k, d, _ in found}
+    urgent = {(k, d) for k, d, u in found if u}
     if base is None:
-        base = now                               # ignore anything already true
-        print(f"baseline captured ({len(base)} pre-existing); "
-              f"an anomaly must persist {NEED} samples to report\n")
+        base = now
+        # Do not swallow these. If the watcher is started after the trouble
+        # begins -- or the game is already damaged -- silently baselining the
+        # damage makes the tool report a clean bill of health on a broken game,
+        # which is the worst thing it could do.
+        if base:
+            print(f"ALREADY WRONG at startup ({len(base)}):")
+            for k, d in sorted(base):
+                print(f"   {k}: {d}")
+            print("   (these are not repeated below)\n")
+        else:
+            print("baseline clean\n")
+        print(f"an anomaly must persist {NEED} samples to report "
+              f"(urgent kinds report at once)\n")
     for key in list(pending):
         if key not in now: del pending[key]
     for key in now:
         if key in base or key in seen: continue
-        pending[key] = pending.get(key, 0) + 1
+        # urgent kinds fire on first sight; the rest must persist
+        pending[key] = pending.get(key, 0) + (NEED if key in urgent else 1)
     for key, n in list(pending.items()):
         if n < NEED: continue
         kind, detail = key
