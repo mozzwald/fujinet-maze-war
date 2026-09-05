@@ -1,3 +1,4 @@
-/ref
-/build
-/AGENTS.md
+ref/
+build/
+AGENTS.md
+.planning/
