@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready
-stopped_at: Phases 3, 3.1 and 5 complete and human-approved. Next is Phase 6 minimal validation, then Phase 4 render smoothing.
-last_updated: "2026-09-03T00:00:00.000Z"
+stopped_at: Phases 3, 3.1, 5 and 5.1 complete and human-approved. Phase 4 render-state separation is next and is now the only substantial work left before Phase 6.
+last_updated: "2026-09-04T00:00:00.000Z"
 progress:
-  total_phases: 7
-  completed_phases: 5
-  total_plans: 14
-  completed_plans: 14
+  total_phases: 8
+  completed_phases: 6
+  total_plans: 15
+  completed_plans: 15
 ---
 
 # Project State
@@ -25,9 +25,10 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 Phase: 03 (combat-and-world-authority) — COMPLETE 2026-09-03. Human mixed-session checkpoint approved.
 Phase: 03.1 (handler-refresh-pokey-isolation) — COMPLETE 2026-09-02. All four success criteria verified; see "Phase 3.1 verification" below.
-Phase: 05 (slot-lifecycle-and-zombie-handoff) — CODE COMPLETE 2026-09-02 (LIFE-01..04 addressed), full smoke suite green including the new `slot_lifecycle_smoke.sh`. Human confirmation of a live join/leave handoff still wanted.
+Phase: 05 (slot-lifecycle-and-zombie-handoff) — COMPLETE. Code 2026-09-02 (LIFE-01..04 addressed), smoke suite green including `slot_lifecycle_smoke.sh`. Human confirmation of live join/leave handoff received 2026-09-04; human testing continues alongside each change from here.
+Phase: 05.1 (link-integrity-and-frame-resync) — COMPLETE 2026-09-04. Unplanned, driven by real-hardware symptoms. See "Phase 5.1" below.
 
-Execution order going forward: Phase 3 human checkpoint -> 6 (minimal) -> 4 -> 6 (full). See ROADMAP.md Progress section.
+Execution order going forward: 4 -> 6 (minimal) -> 6 (full). Phases 3, 3.1, 5 and 5.1 are closed and human-approved.
 
 ## Performance Metrics
 
@@ -87,9 +88,9 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
+- Phase 4 render-state separation. See "Phase 4 starting notes" and "Phase 4 investigation log" below; both were written before the 5.1 work and are partly superseded — read the 5.1 section first.
 - Phase 6 minimal validation: scripted emulator sessions including join/leave handoff.
-- Phase 4 render-state separation. See "Phase 4 starting notes" below before planning it.
-- Update `.planning/REQUIREMENTS.md` if the Phase 3.1 invariant should become a tracked requirement ID.
+- Update `.planning/REQUIREMENTS.md` if the Phase 3.1 invariant and the 5.1 link-integrity invariant should become tracked requirement IDs.
 
 ### Phase 3.1 implementation notes (2026-07-19)
 
@@ -202,8 +203,119 @@ Do NOT start smoothing before this reads back from real hardware. Interpolation
 turns a wrong teleport into a wrong slide; if the drift is a genuine desync,
 smoothing hides the symptom and makes the cause harder to find.
 
+**That gate is now satisfied (2026-09-04).** The counters were read back from
+real hardware and drove the whole of Phase 5.1. The desyncs they exposed were
+link-integrity faults, not smoothing faults, and they are fixed. Two further
+causes were found and fixed on the client side and are worth knowing before
+planning Phase 4:
+
+- Prediction ran on a different input than it sent. `PLRMVE` chose the
+  direction for the next cell from the live `NET_RX_STICK` while the delta
+  carried the stick sampled at the periodic transmit slot -- two samples of the
+  same joystick, differing exactly while turning. Predicting from
+  `NET_TX_LAST_STICK` made both sides replay an identical input sequence.
+  Measured over three 40s scripted cornering runs: 12/13/9 corrections before,
+  2/5/2 after (`b8d80d2`).
+- Local corrections are no longer a teleport. `LOCAL_FOLLOW` walks the gap off
+  one cell per move tick using the normal move animation -- the same path remote
+  slots have always used -- with the hard snap kept as a guard rail for
+  distances no walk should cover. This is a stopgap inside gameplay state, not
+  render separation, and Phase 4 should supersede it.
+
+Residual corrections still occur at roughly 3 per 40s of hard cornering. The
+cause is known and is what Phase 4 exists to fix: the movement clock (`MOVCLOK`,
+6 frames) and the transmit clock (`NET_FRAME_DIV`, 6 frames) are the same rate
+but free-run in phase, and the phase re-randomises on every stop, turn or block.
+When they slip, one send window contains two move decisions or none.
+
 `--lag-ms N` was added to the server as a test aid for reproducing a
 pending-input backlog locally.
+
+### Phase 5.1: Link integrity and frame resynchronisation (2026-09-04, INSERTED)
+
+Unplanned. Real hardware (Atari XL, 256K, FujiNet) showed bricks appearing and
+vanishing at random, remote actors hopping a cell and back, scores flickering
+0-1-0, the local player jumping while standing still, and movement not
+appearing for many seconds. Emulation was clean throughout, because loopback
+never loses a byte.
+
+One root cause: nothing verified packet integrity. The Atari receives over SIO
+as a byte stream, so a dropped or duplicated byte shifted framing and payload
+bytes began to be read as packet type markers. Bounds checks were the only
+defence. The worst amplifier was the snapshot sequence window, which accepts
+any forward jump of 1..127: one corrupt sequence byte parked the client ~100
+ticks in the future, so every genuine snapshot after it was dropped as stale
+for up to twelve seconds.
+
+What landed:
+
+- **Checksum** (`99d8303`): every server->client packet carries a trailing sum
+  byte. Makes a corrupt frame fail closed.
+- **COBS framing** (`9f36f28`): frames are COBS encoded with a `$00` delimiter,
+  so no zero can appear inside a frame and the next delimiter always realigns
+  the parser. The checksum alone could not resync -- the parser stayed
+  misaligned until a payload byte happened to look like a type marker, which is
+  why the resync-junk counter kept climbing on hardware even with every packet
+  checksummed. The Atari receive path was rewritten around the delimiter; the
+  old type-marker scanner and the six fixed-length collectors are gone.
+  `tests/cobs_resync_smoke.sh` carries a literal transcription of the 6502
+  decoder and proves the property: a byte deleted, inserted or flipped costs
+  exactly one frame.
+- **Actor-state validation** (`99d8303`): the playfield interior is x 1..18,
+  y 1..17. The snapshot test rejected x>=19 and y>=18 but let zero through, so
+  a garbage position could place an actor on the border where the erase pass
+  blanked it -- the missing left-hand border boxes. RESPAWN had no validation at
+  all: the slot index went straight from the packet into an index over
+  four-entry arrays.
+- **Boot order** (`99d8303`): the net runtime block is all `.DS` and holds
+  power-up RAM until net init runs, but `NET_ACTIVE`/`NET_GAME_SHOW` are read by
+  the poll loop during the host prompt. Cleared at START now. START also called
+  `ERASMAN` before `SETALLP` had built the screen pointers, and erased only two
+  of the four slots.
+- **Border protection** (`5ba6051`): `NET_AUTH_REPOS` refuses to move an actor
+  onto a non-interior cell, and `ERASMAN` refuses to blank characters outside
+  that range. Same class as the validation above but from a locally generated
+  coordinate -- net init zeroes `NET_PX`, so any reposition before the first
+  snapshot parked an actor on (0,0).
+- **Display list alignment** (`2a1813b`): the three display lists landed wherever
+  preceding code ended. Trimming the on-screen counters shrank the code enough
+  to push the GAME list across the 1K boundary at $6C00; ANTIC only increments
+  the low 10 bits of the DL counter, so it wrapped and executed garbage. The
+  block is aligned to 1K now, which fixes the class -- any code-size change
+  could have triggered it.
+- **RX buffer sizing** (`e83e449`): the COBS dispatcher copies the whole decoded
+  frame, payload plus checksum, into buffers sized before the checksum existed.
+  Each copy wrote one byte past the end onto the next variable:
+  `NET_NAME_PKT`->`NET_NAMES[0]` (the first character of the first scoreboard
+  name changed once a second as the server rotated names -- reported and now
+  fixed), `NET_SHOT_PKT`->`NET_SHOT_SEQ`, `NET_BRICK_BUF`->`NET_BRICK_DONE`,
+  `NET_SNAP_BUF`->`NET_SHOT_IDX` ten times a second.
+- **Shot draw/erase symmetry** (`c1c72a4`, `e83e449`): `SHOTSHP` entries are
+  asymmetric -- right and down carry their glyphs in bytes 2,3 and trail blanks
+  forward; left and up carry them in bytes 0,1 and trail `$00,$00`. Their shot
+  sits one cell back or one row up, so `SETMOVE`'s third and fourth characters
+  landed on the shooter. `ERASHOT` had the mirror problem, clearing a second
+  pair that fell back onto the shooter. Both now draw and erase only the shot
+  cell for left and up. This was the "head disappears when firing up or left"
+  report; confirmed fixed on 2026-09-04.
+
+On-screen diagnostics are trimmed to one pair: frames rejected by checksum or
+framing, in the fourth scoreboard row's free columns. Reads 00 on a healthy
+link. The counters that found all of this (serial error latch, resync bytes,
+map repairs, cells rewritten, brick deltas) are still maintained in RAM for
+peeking via `build/maze-war.lab`, just no longer drawn.
+
+Human-confirmed 2026-09-04: shots correct in all four directions, no head clip,
+no stuck shots, name stable, border intact, corner intact.
+
+**Method note for the next session.** Two diagnoses in this phase were built on
+reading the wrong address -- `ACTFLAG` was read at 176 when it lives at `$90`,
+which produced a confident and entirely false "stuck evaporate flag" story. Look
+symbols up in `build/maze-war.lab` rather than guessing. Separately, sampling a
+single screen cell is not a reliable oracle for "is the sprite drawn": `ERASMAN`
+blanks the cell every move commit before redrawing, so a one-frame blank is
+normal and only a sustained run means a real clip. Successive refinements of
+that measurement accused a different direction each run.
 
 ### Known gaps (not addressed)
 
@@ -220,6 +332,13 @@ pending-input backlog locally.
 
 ## Session Continuity
 
-Last session: 2026-09-02
-Stopped at: Phase 3.1 closed; Phase 5 implemented and smoke-covered. Next: Phase 3 human mixed-session checkpoint.
+Last session: 2026-09-04
+Stopped at: Phase 5.1 (link integrity and frame resynchronisation) closed and human-confirmed; Phase 5 human handoff confirmation received. Next: Phase 4 render-state separation.
 Resume file: .planning/ROADMAP.md
+
+Test suite is 17 smokes, all green. Emulator workflow note: start FujiNet-PC
+*first* on a non-default NetSIO port, then the emulator on that same port
+(`fujinet_start netsio_port: N` then `atari_start netsio: true, netsio_port: N`);
+starting the emulator first makes it bind the port so the sidecar cannot. The
+game server must also hold UDP 9000 before any client opens a stream, or
+FujiNet-PC takes it.

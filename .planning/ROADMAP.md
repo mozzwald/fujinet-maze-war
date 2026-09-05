@@ -14,8 +14,9 @@ This roadmap follows the dependency chain identified in research: normalize tran
 - [x] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded. Final real-Atari verification approved the cadence/fire-direction replay fix and closed RECN-01 through RECN-04.
 - [x] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients. Human mixed-session checkpoint approved 2026-09-03.
 - [x] **Phase 3.1: Netstream Handler Refresh and POKEY Channel Isolation (INSERTED)** - Update to the latest netstream handler (built from source) and remap all sound to POKEY channels 1+2 so the game can never corrupt the handler's channel 3+4 baud timer. See `ref/net-fix-plan.md` for full analysis. Completed 2026-09-02; all four criteria verified (see STATE.md).
-- [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors. Reordered after Phase 5: presentation polish, needed for release but not for reliable play.
-- [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff still wanted.
+- [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors. Reordered after Phase 5: presentation polish, needed for release but not for reliable play. Now the only substantial work left before Phase 6; 3 plans drafted 2026-09-04.
+- [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff received 2026-09-04.
+- [x] **Phase 5.1: Link Integrity and Frame Resynchronisation (INSERTED)** - Make the Atari receive path robust to a lossy SIO byte stream: per-packet checksum, COBS framing with a zero delimiter so the parser always realigns, actor-state validation, and the boot/render faults these exposed. Unplanned; driven by real-hardware symptoms that emulation could not reproduce. Completed and human-confirmed 2026-09-04. See STATE.md "Phase 5.1".
 - [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow. A minimal validation pass (scripted emulator sessions including join/leave handoff) runs after Phase 5; full hardening runs after Phase 4.
 
 ## Phase Details
@@ -88,7 +89,20 @@ Plans:
   1. Remote wizards and AI zombies move smoothly on the Atari display without being treated as locally predicted actors.
   2. Local smoothing and remote interpolation never create fake gameplay positions that alter bullets, collision checks, or slot state.
   3. The Atari client can present smoother actor motion while keeping authoritative simulation state and predicted-local simulation state inspectably distinct.
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] `04-01` — Lock the movement decision to the transmit tick so one delta always equals exactly one predicted cell, removing the phase slip between `MOVCLOK` and `NET_FRAME_DIV` that still produces corrections. Gameplay-truth work; must land before smoothing so smoothing is not hiding a live desync.
+- [ ] `04-02` — Introduce render-only actor position distinct from `LOCX/LOCY`, so collision, shot origin and slot state keep reading authoritative/predicted cells while the display reads a separate interpolated position. Retire the `LOCAL_FOLLOW` glide stopgap in favour of it.
+- [ ] `04-03` — Interpolate remote actors and zombies from authoritative targets through the render state, and prove with counters that no smoothed value ever reaches a gameplay decision.
+
+**Status note (2026-09-04)**: Two prerequisites are already done and should not be
+re-derived. Prediction now runs on the input actually transmitted
+(`NET_TX_LAST_STICK`), which cut corrections from ~11 to ~3 per 40s of scripted
+cornering; and local corrections walk the gap off one cell at a time
+(`LOCAL_FOLLOW`) instead of teleporting. The second is a stopgap living inside
+gameplay state — `04-02` should replace it. The residual ~3 corrections per 40s
+are the clock phase slip that `04-01` targets. See STATE.md "Phase 4 starting
+notes" and "Phase 4 investigation log".
 
 ### Phase 5: Slot Lifecycle and Zombie Handoff
 **Goal**: The match always maintains four valid wizard slots, with clean zombie backfill and clean human takeover or disconnect recovery.
@@ -103,7 +117,18 @@ Plans:
 Plans:
 - [x] `05-01` — Reset per-slot gameplay state on both handoff directions server-side, shorten the client timeout so a reconnecting player is not stranded beside their own ghost, clear the matching per-slot latches on the Atari client when a role or local pid changes, document the slot contract, and cover it with `slot_lifecycle_smoke.sh`. Implemented 2026-09-02.
 
-**Status note**: LIFE-02/03/04 are addressed. LIFE-01 is satisfied at `--zombies 3`; lower values intentionally leave seats open for more humans, and an empty seat still renders as a motionless wizard. That is documented in `doc/protocol.md` rather than changed, since it is a decision about what `--zombies` means.
+**Status note**: Human confirmation of a live join/leave handoff received 2026-09-04; human testing continues alongside each change. LIFE-02/03/04 are addressed. LIFE-01 is satisfied at `--zombies 3`; lower values intentionally leave seats open for more humans, and an empty seat still renders as a motionless wizard. That is documented in `doc/protocol.md` rather than changed, since it is a decision about what `--zombies` means.
+
+### Phase 5.1: Link Integrity and Frame Resynchronisation (INSERTED)
+**Goal**: The Atari client cannot be desynchronised by a damaged or misframed byte on the SIO link.
+**Depends on**: Phase 5 (inserted after it; driven by real-hardware symptoms)
+**Requirements**: none tracked yet — candidate IDs noted in STATE.md pending todos
+**Success Criteria** (what must be TRUE):
+  1. A byte lost, gained or flipped on the link costs at most one frame and the parser realigns on the next delimiter. — verified by `tests/cobs_resync_smoke.sh`
+  2. A corrupt frame is discarded whole rather than partially applied; no packet can place an actor outside the playfield interior or index past a four-slot array. — verified by `tests/packet_checksum_smoke.sh` and source guards
+  3. The client boots to a readable prompt and a correct playfield from cold power-up RAM. — verified on emulator
+  4. Real hardware plays without the brick flicker, actor hopping, score flicker, name corruption or multi-second movement stalls that motivated the phase. — human-confirmed 2026-09-04
+**Plans**: 0 (unplanned; executed directly from hardware symptoms, recorded retrospectively in STATE.md)
 
 ### Phase 6: Mixed-Session Validation and Hardening
 **Goal**: The target live session is repeatably validated in the supported Atari/FujiNet workflow with deterministic checks for the known failure cases.
