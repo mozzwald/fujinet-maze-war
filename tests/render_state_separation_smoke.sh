@@ -32,7 +32,9 @@ grep -qE "^RNDY[[:space:]]+\.DS[[:space:]]+4" "$ATARI_SRC" \
 # --- gameplay decisions read simulation state only ---------------------
 # If any of these ever reads RNDX/RNDY it is deciding on a position that is a
 # cell off for part of every move, which is the bug this split removes.
-for r in NET_AHEAD_FREE CKMV_AOK NLRC_IDLE LF_ALIGN LF_WORK RF_NEEDS; do
+# RENDER_CHASE is deliberately absent: it is the bridge between the two and
+# must read both.
+for r in NET_AHEAD_FREE CKMV_AOK NLRC_IDLE RF_NEEDS; do
     body=$(awk -v r="$r" '
         $1==r {on=1}
         on {print}
@@ -119,5 +121,41 @@ udt=$(awk '$1=="UDTLOCS"{on=1} on{print} on&&/MOVSND/{exit}' "$ATARI_SRC")
 printf '%s' "$udt" | grep -qE "LOC[XY],X" \
   && fail "UDTLOCS still moves the simulation position at the end of the \
 animation; the whole step belongs at INITMVE, where the server applies it"
+
+# --- the correction mechanism itself ------------------------------------
+# LOCAL_FOLLOW walked LOCX/LOCY toward authority one cell per tick, which meant
+# collision, occupancy and shot origin were all knowingly wrong for several
+# ticks so the picture could catch up gently. With a render position to walk
+# instead, that trade is gone and neither the walk nor its latch should remain.
+# (The name still appears in a comment explaining the history; only code
+# references are a failure.)
+if grep -nE "^LOCAL_FOLLOW|JMP[[:space:]]+LOCAL_FOLLOW|JSR[[:space:]]+LOCAL_FOLLOW" \
+     "$ATARI_SRC" >/dev/null; then
+    fail "LOCAL_FOLLOW is still reachable; the simulation still walks to authority"
+fi
+grep -qE "NET_GLIDE_ON" "$ATARI_SRC" \
+  && fail "NET_GLIDE_ON survives; the old glide latch is still live"
+
+# The correction must land on the simulation immediately...
+arm=$(awk '$1=="NET_RCHASE_ARM"{on=1} on{print} on&&/^NRA_X/{exit}' "$ATARI_SRC")
+printf '%s' "$arm" | grep -qE "STA[[:space:]]+LOCX,X" \
+  || fail "NET_RCHASE_ARM does not put the authoritative cell into the simulation"
+printf '%s' "$arm" | grep -qE "RND[XY],X" \
+  && fail "NET_RCHASE_ARM touches the render position; the actor would jump on \
+screen, which is the snap this whole phase exists to remove"
+
+# ...and the walk that follows must move the picture only. INITMVE has to
+# honour that, or a chase step would advance the simulation a second time and
+# march the actor away from authority one cell per tick.
+initmve2=$(awk '$1=="INITMVE"{on=1} on{print} on&&/MOVEST,X/{exit}' "$ATARI_SRC")
+printf '%s' "$initmve2" | grep -qE "LDA[[:space:]]+NET_RCHASE_STEP" \
+  || fail "INITMVE does not honour NET_RCHASE_STEP; a render-chase step would \
+step the simulation again"
+
+chase=$(awk '$1=="RENDER_CHASE"{on=1} on{print} on&&/^RC_SNAP/{exit}' "$ATARI_SRC")
+printf '%s' "$chase" | grep -qE "STA[[:space:]]+NET_RCHASE_STEP" \
+  || fail "RENDER_CHASE does not mark its step as render-only"
+printf '%s' "$chase" | grep -qE "CMP[[:space:]]+LOCX,X" \
+  || fail "RENDER_CHASE does not chase the simulation cell"
 
 echo "render state separation smoke passed"

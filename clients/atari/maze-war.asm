@@ -2441,8 +2441,7 @@ NLRC_DY	CLC
 	ADC	NET_GLIDE_TMP
 	CMP	#NET_GLIDE_MAX
 	BCS	NLRC_FAR
-	LDA	#1		;arm the walk; it runs to alignment on its own latch
-	STA	NET_GLIDE_ON
+	JSR	NET_RCHASE_ARM	;simulation takes it now; the picture walks in
 	RTS
 NLRC_FAR
 	JSR	NET_LOCAL_REPLAY_PENDING
@@ -2491,7 +2490,7 @@ NRR_NX
 ; already mutates the pending ring through NET_LOCAL_ACK_DISCARD.
 NET_LOCAL_PID_RESET
 	LDA	#0
-	STA	NET_GLIDE_ON
+	STA	NET_RCHASE
 	STA	NET_PEND_HEAD
 	STA	NET_PEND_COUNT
 	STA	NET_PRED_TTL
@@ -4064,8 +4063,7 @@ CKMV_L2
 	BNE	CKMVCK
 	LDA	#$04		;VBI drift threshold
 	JSR	NET_DIAG_BUMP
-	LDA	#1		;walk it off rather than repositioning
-	STA	NET_GLIDE_ON
+	JSR	NET_RCHASE_ARM	;simulation takes it now; the picture walks in
 	JMP	CKMVCK
 CKMVAP	LDA	#$08		;remote hard snap
 	JSR	NET_DIAG_BUMP
@@ -4101,9 +4099,9 @@ SETIME	LDA	MOVRATE,X	;RESET MOVE
 ; --- STRTMOV net-only dispatch ---
 STRTMOV	CPX	NET_LOCAL_PID
 	BNE	STM_REMOTE	;non-local slots follow authoritative targets
-	LDA	NET_GLIDE_ON	;a correction outstanding on our own slot is walked
-	BEQ	STM_DUE		;off, not teleported; otherwise predict as normal
-	JMP	LOCAL_FOLLOW
+	LDA	NET_RCHASE	;a correction outstanding on our own slot is walked
+	BEQ	STM_DUE		;off by the picture; the simulation already took it
+	JMP	RENDER_CHASE
 STM_DUE	LDA	NET_MOVE_DUE	;MOVCLOK and NET_FRAME_DIV are the same rate but
 	BNE	STM_GO		;free-run in phase, so a cell could start on either
 	JMP	CHKSHOT		;side of the slot that describes it.  Wait for it.
@@ -4163,121 +4161,115 @@ CHKTRG_BLK
 	JSR	SETSTIL	;NONE. POINT 'IM
 	JMP	CHKSHOT	;AND DO SHOTS
 ;
-; LOCAL CORRECTION GLIDE
-; ---------------------
-; A correction on the local slot used to be NET_AUTH_REPOS plus SETSTIL: the
-; actor jumped to the authoritative cell and its walk pose reset. That jump is
-; the snap the player sees. Remote slots have always closed the same gap with
-; the normal move animation, so the local slot now does too -- one cell per
-; move tick toward authority, with the hard snap kept only for distances no
-; walk should cover (respawn, join) and for a walk that cannot make progress.
+; LOCAL CORRECTION AS RENDER MOTION
+; --------------------------------
+; A correction on the local slot used to move gameplay state.  First it was
+; NET_AUTH_REPOS plus SETSTIL -- the actor jumped to the authoritative cell --
+; and then LOCAL_FOLLOW walked LOCX/LOCY one cell per move tick instead, which
+; looked better only because the simulation agreed to be wrong for several
+; ticks: collision, occupancy and shot origin all trailed the server so the
+; picture could catch up gently.
 ;
-; Entered from STRTMOV with X = local pid and NET_P_PENDING set.
-LOCAL_FOLLOW
+; Now that the drawn position is its own state, neither is necessary.
+; NET_RCHASE_ARM puts the authoritative cell into LOCX/LOCY at once, so every
+; gameplay decision is correct from that instant, and leaves RNDX/RNDY exactly
+; where it is.  What is left is purely a picture problem, and this walks the
+; picture in through the ordinary move animation.
+;
+; Entered from STRTMOV with X = local pid and NET_RCHASE set.
+RENDER_CHASE
 	LDA	ACTFLAG,X	;evaporating or coalescing: leave the actor alone
 	AND	#$03
-	BEQ	LF_ALIGN
+	BEQ	RC_ALIGN
 	JMP	CHKSHOT
-LF_ALIGN
-	LDA	LOCX,X
-	CMP	NET_PX_X,X
-	BNE	LF_WORK
-	LDA	LOCY,X
-	CMP	NET_PX_Y,X
-	BNE	LF_WORK
-	LDA	#0		;caught up: hand control back to the player
-	STA	NET_GLIDE_ON
+RC_ALIGN
+	LDA	RNDX,X		;caught up when the picture agrees with the cell
+	CMP	LOCX,X
+	BNE	RC_BUSY
+	LDA	RNDY,X
+	CMP	LOCY,X
+	BNE	RC_BUSY
+	LDA	#0		;hand control back to the player
+	STA	NET_RCHASE
 	STA	NET_P_PENDING,X
 	STA	NET_DESYNC_CNT,X
 	JMP	PLRMVE
-LF_WORK
-	LDA	LOCX,X
+RC_BUSY
+	LDA	MOVEST,X	;one chase step at a time, like any other move
+	BEQ	RC_DIST
+	JMP	CHKSHOT
+RC_DIST
+	LDA	RNDX,X
 	SEC
-	SBC	NET_PX_X,X
-	BCS	LF_DXP
+	SBC	LOCX,X
+	BCS	RC_DXP
 	EOR	#$FF
 	CLC
 	ADC	#1
-LF_DXP	STA	COUNT		;abs dx
-	LDA	LOCY,X
+RC_DXP	STA	COUNT		;abs dx
+	LDA	RNDY,X
 	SEC
-	SBC	NET_PX_Y,X
-	BCS	LF_DYP
+	SBC	LOCY,X
+	BCS	RC_DYP
 	EOR	#$FF
 	CLC
 	ADC	#1
-LF_DYP	STA	HOLDIT		;abs dy
+RC_DYP	STA	HOLDIT		;abs dy
 	CLC
 	ADC	COUNT
-	CMP	#NET_GLIDE_MAX	;too far to be drift: that is a teleport
-	BCC	LF_NEAR
-	JMP	LF_SNAP
-LF_NEAR
-	LDA	COUNT		;close the longer axis first
-	CMP	HOLDIT
-	BCS	LF_TRYX
-LF_TRYY
-	LDA	HOLDIT
-	BEQ	LF_TRYX
-	JSR	LF_SETY
-	JSR	NET_AHEAD_FREE
-	BEQ	LF_STEP
-	LDA	COUNT		;blocked: the other axis may still close the gap
-	BEQ	LF_MISS
-	JSR	LF_SETX
-	JSR	NET_AHEAD_FREE
-	BEQ	LF_STEP
-	BNE	LF_MISS
-LF_TRYX
-	LDA	COUNT
-	BEQ	LF_TRYY2
-	JSR	LF_SETX
-	JSR	NET_AHEAD_FREE
-	BEQ	LF_STEP
-LF_TRYY2
-	LDA	HOLDIT
-	BEQ	LF_MISS
-	JSR	LF_SETY
-	JSR	NET_AHEAD_FREE
-	BNE	LF_MISS
-LF_STEP
-	LDA	#0
-	STA	NET_DESYNC_CNT,X
-	JMP	INITMOVE	;walk the cell with the normal animation
-LF_MISS
-	INC	NET_DESYNC_CNT,X	;walled in on both axes; give it a few tries
-	LDA	NET_DESYNC_CNT,X	;before conceding and snapping
-	CMP	#NET_DESYNC_MAX
-	BCC	LF_OUT
-LF_SNAP
-	LDA	MOVEST,X	;never reposition mid-step
-	BNE	LF_OUT
-	JSR	NET_AUTH_REPOS
-	JSR	SETSTIL
-	LDA	#0
-	STA	NET_GLIDE_ON
+	CMP	#NET_GLIDE_MAX	;too far to be drift: walking that in would only
+	BCS	RC_SNAP		;draw a long slide, so take the picture straight
+	LDA	COUNT		;close X first, then Y
+	BEQ	RC_YAXIS
+	LDA	LOCX,X
+	CMP	RNDX,X
+	BCC	RC_LEFT
+	LDA	#0		;the cell lies to the right
+	BEQ	RC_GO
+RC_LEFT	LDA	#2		;...to the left
+	BNE	RC_GO
+RC_YAXIS
+	LDA	LOCY,X
+	CMP	RNDY,X
+	BCC	RC_UP
+	LDA	#1		;...below
+	BNE	RC_GO
+RC_UP	LDA	#3		;...above
+RC_GO	STA	DIR,X
+	LDA	#1		;the simulation is already there: this animation
+	STA	NET_RCHASE_STEP	;is allowed to move the picture only
+	JMP	INITMOVE
+;
+; The walk is not worth drawing: erase where the actor is shown, put the
+; picture on the simulation cell and repose it.
+RC_SNAP
+	JSR	NET_AUTH_REPOS	;LOCX/LOCY already hold this cell, so this just
+	JSR	SETSTIL		;brings the picture to it: erase, both positions,
+	LDA	#0		;screen pointer and pose, all through one path
+	STA	NET_RCHASE
 	STA	NET_P_PENDING,X
 	STA	NET_DESYNC_CNT,X
-LF_OUT	JMP	CHKSHOT
+	JMP	CHKSHOT
 ;
-LF_SETX	LDA	NET_PX_X,X
-	CMP	LOCX,X
-	BCC	LF_SXL
-	LDA	#0		;authority lies to the right
-	STA	DIR,X
-	RTS
-LF_SXL	LDA	#2		;authority lies to the left
-	STA	DIR,X
-	RTS
-LF_SETY	LDA	NET_PX_Y,X
-	CMP	LOCY,X
-	BCC	LF_SYU
-	LDA	#1		;authority lies below
-	STA	DIR,X
-	RTS
-LF_SYU	LDA	#3		;authority lies above
-	STA	DIR,X
-	RTS
+; Take the authoritative cell into the simulation now, and leave the drawn
+; position alone for RENDER_CHASE to walk in.  Deliberately no erase and no
+; redraw: the actor must stay exactly where it is on screen.
+NET_RCHASE_ARM
+	LDA	NET_PX_X,X	;the same interior bounds NET_AUTH_REPOS applies:
+	BEQ	NRA_X		;a corrupt or pre-snapshot coordinate must never
+	CMP	#19		;become simulation truth
+	BCS	NRA_X
+	LDA	NET_PX_Y,X
+	BEQ	NRA_X
+	CMP	#18
+	BCS	NRA_X
+	LDA	NET_PX_X,X
+	STA	LOCX,X
+	LDA	NET_PX_Y,X
+	STA	LOCY,X
+	LDA	#1
+	STA	NET_RCHASE
+NRA_X	RTS
 ;
 ; --- REMOTE_Z1_MOVE ---
 REMOTE_Z1_MOVE	LDA	NET_Z1_PENDING
@@ -5143,7 +5135,12 @@ INITMVE	LDY	DIR,X	;ADD ON THE
 	CLC
 	ADC	PRVYADD,Y
 	STA	RNDY,X
-	LDA	LOCX,X	;the simulation enters the new cell whole, here,
+	LDA	NET_RCHASE_STEP	;a render-chase step walks the picture toward a
+	BEQ	IMV_SIM		;cell the simulation already occupies, so it
+	LDA	#0		;must not step the simulation again
+	STA	NET_RCHASE_STEP
+	BEQ	IMV_MST
+IMV_SIM	LDA	LOCX,X	;the simulation enters the new cell whole, here,
 	CLC		;at the moment the server applies the same input.
 	ADC	DIRXADD,Y	;Only the render position is staggered across
 	STA	LOCX,X	;the four animation phases, which is why LOCX
@@ -5151,7 +5148,7 @@ INITMVE	LDY	DIR,X	;ADD ON THE
 	CLC		;and the end of a right/down one.
 	ADC	DIRYADD,Y
 	STA	LOCY,X
-	TYA		;INIT MOVE STATUS
+IMV_MST	TYA		;INIT MOVE STATUS
 	AND	#$02
 	ASL
 	STA	MOVEST,X
@@ -6139,7 +6136,8 @@ NET_DIAG_YSAV	.DS	1	;NET_DIAG_BUMP saved Y
 NET_DIAG_CNT	.DS	4	;per-path counts: staged, idle, vbi, remote
 NET_IDLE_FRAMES	.DS	1	;consecutive frames with the stick centred
 NET_GLIDE_TMP	.DS	1	;VBI-safe scratch for the glide distance test
-NET_GLIDE_ON	.DS	1	;local correction being walked off
+NET_RCHASE	.DS	1	;a correction is being walked off by the picture
+NET_RCHASE_STEP	.DS	1	;this INITMVE moves the render position only
 NET_MOVE_DUE	.DS	1	;permission to begin one predicted cell, granted
 			;by the transmit slot and consumed by STRTMOV
 NET_SNAPLOG_IDX	.DS	1	;write cursor into NET_SNAPLOG
