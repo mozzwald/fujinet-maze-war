@@ -12,14 +12,59 @@ catch the moment it happens.
 
 Prints a line per event and keeps running. Ctrl-C to stop.
 """
-import argparse, glob, json, socket, sys, time
+import argparse, glob, json, os, socket, sys, time
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--sock", default=None)
+ap.add_argument("--sock", default=None, help="path to the atari800-ai socket")
 ap.add_argument("--interval", type=float, default=0.5)
 args = ap.parse_args()
 
-SOCK = args.sock or sorted(glob.glob('/tmp/atari800-mcp/*/ai.sock'))[-1]
+
+def find_sockets():
+    """Ask the running emulators where their sockets are.
+
+    Do not guess from a fixed path: an MCP-managed emulator puts its socket
+    under /tmp/atari800-mcp/<session>/, while a hand-started atari800-ai puts
+    it wherever -ai-socket said. Reading the command line covers both.
+    """
+    found = []
+    for pid in os.listdir('/proc'):
+        if not pid.isdigit():
+            continue
+        try:
+            argv = open(f'/proc/{pid}/cmdline', 'rb').read().split(b'\0')
+        except OSError:
+            continue
+        argv = [a.decode('utf-8', 'replace') for a in argv if a]
+        if not argv or 'atari800' not in argv[0]:
+            continue
+        for i, a in enumerate(argv):
+            if a == '-ai-socket' and i + 1 < len(argv):
+                found.append((int(pid), argv[i + 1]))
+    # anything left lying around, in case the process list missed it
+    for g in ('/tmp/*.sock', '/tmp/atari800*/ai.sock',
+              '/tmp/atari800-mcp/*/ai.sock', '/tmp/*/ai.sock'):
+        for path in glob.glob(g):
+            if os.path.exists(path) and path not in [p for _, p in found]:
+                found.append((None, path))
+    return found
+
+
+if args.sock:
+    SOCK = args.sock
+else:
+    cands = find_sockets()
+    live = [(pid, p) for pid, p in cands if pid and os.path.exists(p)]
+    if not live and not cands:
+        sys.exit("no atari800 -ai socket found. Start the emulator first, or "
+                 "pass --sock /path/to/ai.sock")
+    pick = live or cands
+    if len(pick) > 1:
+        print("more than one emulator socket is present:")
+        for pid, p in pick:
+            print(f"   {p}" + (f"   (pid {pid})" if pid else "   (stale?)"))
+        sys.exit("pass --sock to say which one to watch")
+    SOCK = pick[0][1]
 
 
 def cmd(c):
@@ -36,9 +81,25 @@ def cmd(c):
 def pk(a, n=1): return cmd({"cmd": "peek", "addr": a, "len": n})["data"]
 
 
+# Fail at once on a socket that is not there or not answering. Retrying
+# silently forever looks identical to "playing but nothing is wrong", which is
+# exactly the failure this tool exists to avoid.
+if not os.path.exists(SOCK):
+    sys.exit(f"{SOCK} does not exist -- is the emulator running?")
+try:
+    if cmd({"cmd": "ping"}).get("msg") != "pong":
+        sys.exit(f"{SOCK} answered but not as an atari800-ai socket")
+except Exception as e:
+    sys.exit(f"cannot talk to {SOCK}: {e}")
+
+
 GAMESCR = 0x73C0
 SYMS = {}
-for line in open(__file__.rsplit('/', 2)[0] + '/build/maze-war.lab'):
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LAB = os.path.join(REPO, 'build', 'maze-war.lab')
+if not os.path.exists(LAB):
+    sys.exit(f"{LAB} not found -- build the client first (make)")
+for line in open(LAB):
     f = line.split()
     if len(f) >= 3: SYMS[f[2]] = int(f[1], 16)
 S = SYMS.get
@@ -115,6 +176,7 @@ print("play normally; anomalies print here with the state that produced them\n")
 seen = set()
 base = None
 pending = {}
+fails = 0
 # Every reported symptom is PERSISTENT -- bricks that never came back, dots that
 # accumulate, a head that stays clipped. Shots and explosions are legitimately
 # on the playfield for a few frames and would otherwise swamp the output, so
@@ -124,7 +186,11 @@ while True:
     try:
         s = screen()
     except Exception as e:
+        fails += 1
+        if fails > 10:
+            sys.exit(f"lost the emulator after 10 failed reads: {e}")
         print("read failed:", e); time.sleep(2); continue
+    fails = 0
     if pk(S('LOCX'), 4) == [1, 1, 1, 1]:
         time.sleep(args.interval); continue      # not joined yet
     now = {(k, d) for k, d in check(s)}
