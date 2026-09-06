@@ -59,4 +59,24 @@ if bad:
 print("  %d packet-pid load sites, all bounded before indexing" % len(sites))
 PYEOF
 
+# --- mainline RX must not borrow gameplay zero page ----------------------
+# The VBI is an NMI: it interrupts any instruction and draws through POINTER,
+# aiming it at SHAPES (MOVEIM) and SUITS (SETSUIT). NET_FRAME_COPY used to
+# save POINTER, aim it at its destination, copy, and restore -- so a VBI
+# landing inside the copy loop left POINTER on one of those tables and the
+# rest of the packet was written into the shape and sprite data, permanently.
+# Mainline RX helpers use self-modifying absolute,Y stores for this reason.
+copy=$(awk '$1=="NET_FRAME_COPY"{on=1} on{print} on&&/^NFCP_X/{exit}' "$ATARI_SRC")
+if printf '%s' "$copy" | grep -qE "(POINTER|POINTR0|SCRPTR)"; then
+    echo "FAIL: NET_FRAME_COPY touches gameplay zero page again. It runs on the \
+mainline; a VBI landing mid-copy repoints it at SHAPES or SUITS and the packet \
+is written into the shape tables." >&2
+    exit 1
+fi
+printf '%s' "$copy" | grep -qE "^NFCP_I[[:space:]]+STA[[:space:]]+\\\$FFFF,Y" || {
+    echo "FAIL: NET_FRAME_COPY no longer uses the self-modifying store the other \
+mainline RX helpers use" >&2
+    exit 1
+}
+
 echo "packet index bounds smoke passed"

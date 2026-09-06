@@ -1728,29 +1728,30 @@ NFL_OK	CLC
 ; A/X = destination pointer low/high. Indirect indexed needs a zero page
 ; pointer, and POINTER is mainline scratch the caller may still want, so it is
 ; borrowed and put back.
+; This runs on the mainline and must not borrow POINTER.
+;
+; It used to save POINTER, aim it at the destination, copy, and restore. The
+; VBI is an NMI and interrupts any instruction: it draws through POINTER --
+; MOVEIM aims it at SHAPES, SETSUIT at SUITS -- so a VBI landing inside the
+; copy loop left POINTER on one of those tables, and the remaining
+; STA (POINTER),Y wrote packet bytes straight into the shape and sprite data.
+; That is the corrupted bullet and wizard glyphs: payload bytes, which is why
+; the values read like coordinates, landing in SHOTSHP and SUITS and staying
+; there for the rest of the game.
+;
+; Use the same self-modifying absolute,Y store the other mainline RX helpers
+; use, so no shared zero page is touched and the VBI cannot disturb it.
 NET_FRAME_COPY
-	STA	NET_FRAME_DST
-	STX	NET_FRAME_DST+1
-	LDA	POINTER
-	STA	NET_FRAME_SAV
-	LDA	POINTER+1
-	STA	NET_FRAME_SAV+1
-	LDA	NET_FRAME_DST
-	STA	POINTER
-	LDA	NET_FRAME_DST+1
-	STA	POINTER+1
+	STA	NFCP_I+1
+	STX	NFCP_I+2
 	LDY	#0
 NFCP_LP	CPY	NET_FRAME_LEN
 	BCS	NFCP_X
 	LDA	NET_FRAME_BUF,Y
-	STA	(POINTER),Y
+NFCP_I	STA	$FFFF,Y
 	INY
 	BNE	NFCP_LP
-NFCP_X	LDA	NET_FRAME_SAV
-	STA	POINTER
-	LDA	NET_FRAME_SAV+1
-	STA	POINTER+1
-	RTS
+NFCP_X	RTS
 ;
 ; Hand the decoded frame to the collector buffer its apply path already reads.
 ; The whole frame is copied, payload plus the trailing checksum, so each of
@@ -6188,8 +6189,6 @@ NET_COBS_RD	.DS	1	;COBS decode read cursor
 NET_COBS_WR	.DS	1	;COBS decode write cursor
 NET_COBS_CODE	.DS	1	;current COBS group code
 NET_COBS_N	.DS	1	;bytes copied from the current group
-NET_FRAME_DST	.DS	2	;frame copy destination
-NET_FRAME_SAV	.DS	2	;POINTER saved across a frame copy
 NET_FRAME_BUF	.DS	NET_FRAME_MAX	;COBS frame, decoded in place
 SND_CH2_PID	.DS	1	;remote slot currently owning shared sound channel 2
 NET_PRED_TTL	.DS	1	;frames until predicted local shot self-clears
