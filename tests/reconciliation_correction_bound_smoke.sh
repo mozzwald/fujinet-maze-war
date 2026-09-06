@@ -10,6 +10,26 @@ asm=clients/atari/maze-war.asm
 grep -Eq 'NET_RECON_P0' "$asm"
 grep -Eq 'JSR[[:space:]]+NET_LOCAL_REPLAY_PENDING' "$asm"
 grep -Eq 'NET_LOCAL_REPLAY_STEP' "$asm"
+
+# The staged-drift test must discount the lead the client is entitled to.
+#
+# The client predicts one cell per transmitted input, so with inputs un-acked
+# it is legitimately ahead of the position a snapshot carries. Comparing the
+# raw gap against NET_RECON_P0 flags a steadily walking player as drifting and
+# yanks them back -- observed in play as constant walk-backs, while the VBI
+# path (same threshold, but gated on NET_PEND_COUNT == 0) fired zero times.
+snap=$(awk '/^NSNAP_LDYP/{on=1} on{print} on&&/^NSNAP_PSET/{exit}' "$asm")
+if ! printf '%s' "$snap" | grep -Eq 'SBC[[:space:]]+NET_PEND_COUNT'; then
+    echo "FAIL: the staged drift test no longer subtracts NET_PEND_COUNT, so a
+client that is merely ahead by its own un-acked inputs is treated as drifting" >&2
+    exit 1
+fi
+# and it must floor at zero rather than wrap
+if ! printf '%s' "$snap" | grep -Eq 'BCS[[:space:]]+NSNAP_LEADOK'; then
+    echo "FAIL: the lead subtraction has no underflow guard; a lead larger than
+the gap would wrap to ~255 and suppress every correction forever" >&2
+    exit 1
+fi
 grep -Eq '^NET_AUTH_REPOS$' "$asm"
 grep -Eq 'INITMOVE_STEP' "$asm"
 grep -Eq 'INITMOVE' "$asm"

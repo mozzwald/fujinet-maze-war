@@ -2062,6 +2062,30 @@ NSNAP_LDXP
 NSNAP_LDYP
 	CLC
 	ADC	NET_RX_COUNT
+;
+; Subtract the lead the client is ENTITLED to before calling this drift.
+;
+; The client predicts one cell per transmitted input (04-01 made that exactly
+; one), so with inputs still un-acked it is legitimately ahead of the position
+; this snapshot carries -- by about one cell each. Comparing the raw gap
+; against NET_RECON_P0 therefore flags a steadily walking player as drifting
+; the moment two or three deltas are in flight, and yanks them back. That is
+; the walk-back felt while crossing open maze: not divergence, just latency
+; being mistaken for it.
+;
+; The VBI path next door already requires NET_PEND_COUNT to be zero, and it is
+; the evidence for this: over a play session it fired zero times while this
+; path fired repeatedly. Same threshold, same positions -- the only difference
+; was that one of them accounted for outstanding input and the other did not.
+;
+; Over-subtracting only makes this path more patient. Genuine divergence is
+; still caught: the VBI path sees it once the queue drains, and the idle path
+; sees it at a standstill.
+	SEC
+	SBC	NET_PEND_COUNT
+	BCS	NSNAP_LEADOK
+	LDA	#0		;lead exceeds the gap: nothing to correct
+NSNAP_LEADOK
 	CMP	#NET_RECON_P0
 	BCC	NSNAP_PCLR
 	BNE	NSNAP_PSET
