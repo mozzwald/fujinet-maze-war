@@ -73,7 +73,18 @@ NET_BAUD_LO	=	$00	;57600
 NET_BAUD_HI	=	$E1
 NET_PORT_LO	=	$23	;swap16(9000) -> $2823
 NET_PORT_HI	=	$28
-NET_FRAME_DIV	=	6	;~10 Hz @ 60 FPS (matches server tick)
+NET_FRAME_DIV	=	7	;~8.6 Hz @ 60 FPS -- deliberately SLOWER than the
+			;server's 10 Hz tick.  The server applies exactly one
+			;queued input per tick and cannot catch up: its drain
+			;sets joy and step_players moves once from it, so a
+			;backlog never clears.  At 6 frames the client produced
+			;one input per 100ms against a 100ms tick -- exactly
+			;1:1 with no slack, so any jitter that landed two in a
+			;tick left the server permanently one input behind.
+			;That is a turn registering a column early: the server
+			;turned before it had applied the last step, into a
+			;brick, while the client walked on down a clear column.
+			;Seven frames gives the queue margin to drain.
 NET_RECON_P0	=	3	;local player reconcile threshold (manhattan cells)
 NET_IDLE_SETTLE	=	20	;frames of held-neutral before idle convergence
 NET_RECON_P1	=	10	;remote catastrophic hard-snap guard

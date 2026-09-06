@@ -27,9 +27,22 @@ TAB=$(printf '\t')
 # NET_FRAME_DIV == (4 - 1) * MOVRATE.
 frame_div=$(grep -E "^NET_FRAME_DIV${TAB}+=" "$ATARI_SRC" | awk '{print $3}')
 movrate=$(grep -B1 -E "STA${TAB}+MOVRATE,X" "$ATARI_SRC" | grep -E "LDA${TAB}+#" | head -1 | sed 's/.*#//' | awk '{print $1}')
-if [ "$frame_div" != "6" ] || [ "$movrate" != "2" ]; then
-    echo "FAIL: cadence changed (NET_FRAME_DIV=$frame_div MOVRATE=$movrate);" \
-         "sends are no longer one per predicted cell" >&2
+# The cell animation is (4-1)*MOVRATE frames. The send gate must be at least
+# that long, or a cell would be gated before it finished drawing -- and it must
+# be STRICTLY longer than the server's 10Hz tick in frame terms (6 at 60fps),
+# because the server drains exactly one input per tick with no catch-up. At
+# equal rates the queue never drains and the server ends up permanently an
+# input behind, which shows up as a turn registering a column early.
+anim=$(( (4 - 1) * movrate ))
+if [ "$frame_div" -lt "$anim" ]; then
+    echo "FAIL: NET_FRAME_DIV=$frame_div is shorter than the $anim-frame cell" \
+         "animation; a cell would be gated before it finished" >&2
+    exit 1
+fi
+if [ "$frame_div" -le 6 ]; then
+    echo "FAIL: NET_FRAME_DIV=$frame_div gives the server no drain margin." \
+         "It applies one input per 100ms tick and cannot catch up, so a client" \
+         "sending at or faster than that leaves it permanently behind" >&2
     exit 1
 fi
 
