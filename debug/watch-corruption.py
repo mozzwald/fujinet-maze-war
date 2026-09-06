@@ -174,6 +174,63 @@ def build_charset():
 
 
 REF_FONT = build_charset()
+if REF_FONT is None:
+    print('WARNING: could not read the charset from build/maze-war.xex; '
+          'the font check is DISABLED')
+
+
+# The program image and its data tables live in RAM and nothing should ever
+# write to them. A stray write into SHAPES, SHOTSHP, SUITS or the font is
+# invisible to every screen-level check but corrupts one walk direction, or one
+# name, permanently -- which is what "it looked like that for the rest of the
+# game" describes. Snapshot them once the game is running and watch for change.
+STATIC_RANGES = [(0x4000, 0x6AE4), (0x6C00, 0x6FCF)]
+# except the eight per-player coalesce tiles, which SETFUZZ rewrites by design,
+# and the operand bytes of the RX parser's self-modifying absolute,Y accesses
+# (labels ending _I; NET_RX_LDA_PTR patches NRLP_I+1 and +2). Both are the
+# program legitimately writing its own image.
+MUTABLE = set(range(0x4040, 0x4080))
+for _n, _a in SYMS.items():
+    if _n.endswith('_I'):
+        MUTABLE |= {_a + 1, _a + 2}
+static_ref = None
+static_tick = 0
+
+
+def read_block(a, n):
+    out = []
+    while n > 0:
+        c = min(256, n)
+        out += pk(a, c)
+        a += c; n -= c
+    return out
+
+
+def static_image():
+    img = {}
+    for a, e in STATIC_RANGES:
+        img[a] = read_block(a, e - a + 1)
+    return img
+
+
+def check_static():
+    """compare the immutable image against its baseline"""
+    global static_ref
+    cur = static_image()
+    if static_ref is None:
+        static_ref = cur
+        return []
+    out = []
+    for a, block in cur.items():
+        ref = static_ref[a]
+        for i, v in enumerate(block):
+            if v != ref[i] and (a + i) not in MUTABLE:
+                out.append(("static-memory-written",
+                            "$%04X was $%02X now $%02X" % (a + i, ref[i], v),
+                            True))
+                if len(out) > 8:
+                    return out
+    return out
 
 
 def check(s):
@@ -249,6 +306,7 @@ seen = set()
 base = None
 pending = {}
 fails = 0
+static_tick = 0
 # Every reported symptom is PERSISTENT -- bricks that never came back, dots that
 # accumulate, a head that stays clipped. Shots and explosions are legitimately
 # on the playfield for a few frames and would otherwise swamp the output, so
@@ -266,6 +324,9 @@ while True:
     if pk(S('LOCX'), 4) == [1, 1, 1, 1]:
         time.sleep(args.interval); continue      # not joined yet
     found = check(s)
+    static_tick += 1
+    if static_tick % 4 == 0:
+        found += check_static()
     now = {(k, d) for k, d, _ in found}
     urgent = {(k, d) for k, d, u in found if u}
     if base is None:
