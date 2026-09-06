@@ -369,3 +369,19 @@ if [ $status -ne 0 ]; then
 fi
 
 echo "slot lifecycle smoke passed"
+
+# A diverged REMOTE actor must still be recoverable while it is firing.
+#
+# RF_SNAP is the only path that puts a remote wizard back on its authoritative
+# cell. It used to refuse whenever ACTFLAG was non-zero at all -- but ACTFLAG
+# carries the shooting flag ($80) and backlash bits as well as coalesce and
+# evaporate ($03). A remote that diverged while shooting could therefore never
+# be repositioned: observed as another player's wizard walking off down the
+# wrong column and staying stuck there while they moved normally on their own
+# machine. Only $03 genuinely means "not on the board".
+snap=$(awk '/^RF_SNAP/{on=1} on{print} on&&/^RF_DONE/{exit}' clients/atari/maze-war.asm)
+if ! printf '%s' "$snap" | grep -qE 'AND[[:space:]]+#\$03'; then
+    echo "FAIL: RF_SNAP tests the whole of ACTFLAG again, so a remote actor that
+diverges while firing can never be put back" >&2
+    exit 1
+fi

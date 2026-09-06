@@ -4538,10 +4538,14 @@ RF_FAIL
 	CMP	#NET_DESYNC_MAX
 	BCC	RF_DONE
 RF_SNAP
-	LDA	ACTFLAG,X
-	BNE	RF_DONE
-	LDA	MOVEST,X
-	BNE	RF_DONE
+	LDA	ACTFLAG,X	;only evaporating or coalescing genuinely precludes a
+	AND	#$03		;reposition.  Testing the whole byte also refused it
+	BNE	RF_DONE		;while the actor was shooting ($80) or under
+	LDA	MOVEST,X	;backlash, so a remote that diverged while firing --
+	BNE	RF_DONE		;or whose shoot flag stuck -- could never be
+			;recovered and stayed wrong for the rest of the
+			;game.  Every other site that means "leave this
+			;actor alone" masks $03; RENDER_CHASE does too.
 	JSR	NET_AUTH_REPOS
 	JSR	SETSTIL
 	LDA	#0
