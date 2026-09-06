@@ -2844,8 +2844,10 @@ NSQ_CP
 	INY
 	CPX	#6
 	BCC	NSQ_CP
-	LDX	NET_SHOT_PKT+2
-	INC	NET_SHOT_SEQ,X
+	LDX	NET_SHOT_PKT+2	;the apply path bounds this pid before using it as
+	CPX	#4		;an index; this publish path did not, so a wire byte
+	BCS	NSQ_X		;could INC up to 255 bytes past a 4-entry array --
+	INC	NET_SHOT_SEQ,X	;NET_PX_X and the rest of net state sit in range
 NSQ_X	RTS
 
 ; --- NET respawn apply (type 0x52, 6 bytes) ---
@@ -2894,7 +2896,9 @@ NRESP_CP
 	INY
 	CPX	#6
 	BCC	NRESP_CP
-	LDX	NET_RESP_PKT+2
+	LDX	NET_RESP_PKT+2	;same unbounded index as the shot publish path
+	CPX	#4
+	BCS	NRESP_X
 	INC	NET_RESP_SEQ,X
 NRESP_X	RTS
 

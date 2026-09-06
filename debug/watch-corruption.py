@@ -124,6 +124,13 @@ def state():
         DEAD=pk(S('NET_DEAD_MASK'), 1)[0],
         ERASE=pk(S('NET_ERASE_MASK'), 1)[0],
         CKBAD=pk(S('NET_CK_BAD'), 1)[0],
+        # ACTIVE is the actor-loop bound and PLYRS the slot count. SETSUIT and
+        # DOEVAP build their player-missile page as X+$3C, so an X of 8 writes
+        # into SUITS at $4400 instead of a PM page -- which is exactly the
+        # nine-byte corruption seen at $446C. If either of these is not 3 and 4,
+        # that is where the bad index came from.
+        ACTIVE=pk(S('ACTIVE'), 1)[0],
+        PLYRS=pk(S('PLYRS'), 1)[0],
     )
 
 
