@@ -2293,7 +2293,7 @@ NND_LP
 	ADC	COUNT
 	TAX
 	LDA	NET_NAMES,X
-	JSR	HOST_SCR	;ASCII -> screen code (same routine the prompt uses)
+	JSR	NAME_SCR	;ASCII -> screen code, filtered for the embedded font
 	ORA	HOLDIT
 	STA	(SCRPTR),Y
 	INY
@@ -3927,33 +3927,37 @@ HOST_SCUP	CMP	#$20
 	BCS	HOST_SCSP
 	SEC
 	SBC	#$40	;$60-$7F -> $20-$3F
-	JMP	HOST_SCART
+	RTS
 HOST_SCL0	SEC
 	SBC	#$20	;$20-$5F -> $00-$3F
-;
-; Not every screen code this conversion can produce is a character.  The font
-; is the original game's, and slots its own text never needed hold title-screen
-; artwork: $1E and $1F (">?"), $3B-$3F ("[\]^_") and now $08-$0C and $0F, where
-; the logo pieces displaced from F, H, J, Q, V and X went.  Reaching one of
-; those from a name painted part of the logo into the scoreboard, which is the
-; bug that made MOZZXL draw three dots.  Pass only what the font really draws:
-; space, $10-$1D (digits and ':' ';' '<' '=') and the letters.  Everything
-; else becomes a space -- including '-' and '.', whose glyph slots ($0D,
-; $0E) are two of the eight PL0CHR coalesce tiles the game rewrites at
-; runtime.  They were blank before and drew nothing; putting letterforms
-; there fought SETFUZZ for the wizard's own image.
-HOST_SCART
-	BEQ	HSC_OK		;space
-	CMP	#$10
-	BCC	HOST_SCSP
-	CMP	#$1E		;digits, ':' ';' '<' '='
-	BCC	HSC_OK
-	CMP	#$21
-	BCC	HOST_SCSP	;'>' '?' '@' are artwork or unused
-	CMP	#$3B
-	BCS	HOST_SCSP	;'[\]^_' are artwork
-HSC_OK	RTS
+	RTS
 HOST_SCSP	LDA	#$00
+	RTS
+;
+; Same conversion, then filtered for the EMBEDDED font.
+;
+; Several screen codes are not characters there: $08-$0F are PL0CHR, the
+; per-player coalesce tiles SETFUZZ rewrites at runtime, and $1E, $1F and
+; $3B-$3F hold title artwork.  A name reaching one of those paints a piece of
+; the logo, or fights the wizard's own image, in the scoreboard.
+;
+; The filter belongs here and not in HOST_SCR.  The host prompt runs on the ROM
+; charset -- HOST_BOOT switches CHBASE to $E0 -- where every one of those codes
+; is a perfectly good glyph.  Filtering in the shared routine blanked the '.'
+; in a typed IP address on a screen that renders it fine.
+NAME_SCR
+	JSR	HOST_SCR
+	BEQ	NMSC_OK		;space
+	CMP	#$10
+	BCC	NMSC_SP		;$01-$0F: mask tables and coalesce tiles
+	CMP	#$1E
+	BCC	NMSC_OK		;digits, ':' ';' '<' '='
+	CMP	#$21
+	BCC	NMSC_SP		;'>' '?' '@'
+	CMP	#$3B
+	BCS	NMSC_SP		;'[\]^_' are title artwork
+NMSC_OK	RTS
+NMSC_SP	LDA	#$00
 	RTS
 ;
 HOST_BOOT	LDA	#$40	;DISABLE DLI

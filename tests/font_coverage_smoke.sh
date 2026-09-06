@@ -30,29 +30,29 @@ TAB=$(printf '\t')
 # routine losing its fold. Pin the fold in the source as well, or the
 # transcription drifts from the code it claims to model and every assertion
 # after it becomes decoration.
-scr=$(awk '$1=="HOST_SCR"{on=1} on{print} on&&/^HOST_SCSP/{exit}' "$ATARI_SRC")
-printf '%s' "$scr" | grep -qE "^HOST_SCART" \
-  || { echo "FAIL: HOST_SCR has no HOST_SCART fold; artwork slots are reachable \
-from a name again" >&2; exit 1; }
-printf '%s' "$scr" | grep -qE "JMP${TAB}+HOST_SCART" \
-  || { echo "FAIL: the \$60-\$7F branch of HOST_SCR bypasses the fold" >&2; exit 1; }
-for bound in '#\$3B' '#\$21' '#\$10'; do
+scr=$(awk '$1=="NAME_SCR"{on=1} on{print} on&&/^NMSC_SP/{exit}' "$ATARI_SRC")
+printf '%s' "$scr" | grep -qE "^NAME_SCR" \
+  || { echo "FAIL: NAME_SCR is gone; names would be drawn straight from \
+HOST_SCR, which passes codes the embedded font uses for coalesce tiles and \
+title artwork" >&2; exit 1; }
+for bound in '#\$3B' '#\$21' '#\$10' '#\$1E'; do
     printf '%s' "$scr" | grep -qE "CMP${TAB}+$bound" \
-      || { echo "FAIL: HOST_SCR is missing its $bound whitelist bound" >&2; exit 1; }
+      || { echo "FAIL: NAME_SCR is missing its $bound bound" >&2; exit 1; }
 done
-# HOST_SCL0 must fall through into the fold, not return before it, and the
-# fold's own body must be reachable -- a single early RTS anywhere inside it
-# would let every code through while leaving the comparisons in place for a
-# grep to find.
-if printf '%s' "$scr" | awk '/^HOST_SCL0/{on=1} on&&/^HOST_SCART/{exit} on' \
+if printf '%s' "$scr" | awk '/^NAME_SCR/{on=1} on&&/^NMSC_OK/{exit} on' \
      | grep -qE "^${TAB}+RTS"; then
-    echo "FAIL: HOST_SCL0 returns before reaching the fold" >&2; exit 1
+    echo "FAIL: NAME_SCR returns before its filter runs" >&2; exit 1
 fi
-if printf '%s' "$scr" | awk '/^HOST_SCART/{on=1} on&&/^HSC_OK/{exit} on' \
-     | grep -qE "^${TAB}+RTS"; then
-    echo "FAIL: HOST_SCR folds nothing -- an RTS inside HOST_SCART returns \
-before the whitelist is applied" >&2; exit 1
-fi
+# and the scoreboard must actually use it
+awk '$1=="NET_NAME_DRAW"{on=1} on{print} on&&/^NND_SP/{exit}' "$ATARI_SRC" \
+  | grep -qE "JSR${TAB}+NAME_SCR" \
+  || { echo "FAIL: the name draw path does not call NAME_SCR" >&2; exit 1; }
+# HOST_SCR itself must stay permissive: the prompt runs on the ROM charset and
+# filtering there blanked '.' in a typed IP address
+host=$(awk '$1=="HOST_SCR"{on=1} on{print} on&&/^HOST_SCSP/{exit}' "$ATARI_SRC")
+printf '%s' "$host" | grep -qE "CMP${TAB}+#\$3B" \
+  && { echo "FAIL: HOST_SCR filters again; that blanks '.' and '-' on the host \
+prompt, which renders them fine from the ROM charset" >&2; exit 1; }
 
 python3 - "$ROOT_DIR" <<'PYEOF'
 import re, sys
@@ -86,22 +86,24 @@ def fail(m):
 # --- HOST_SCR, transcribed ----------------------------------------------
 # Kept in step with clients/atari/maze-war.asm by hand. The fold at the end is
 # what keeps artwork slots unreachable.
-def host_scr(c):
+def name_scr(c):
+    """HOST_SCR, then NAME_SCR's filter -- what a NAME can put on screen.
+
+    The host prompt is deliberately NOT filtered: it runs on the ROM charset
+    where all of these codes are real glyphs.
+    """
     if ord('a') <= c <= ord('z'):
         c -= 0x20
     if c < 0x20 or c >= 0x80:
         return 0x00
     c = c - 0x40 if c >= 0x60 else c - 0x20
-    # the whitelist: space, $10-$1D, and the letters. '-' and '.' are NOT
-    # here: their glyph slots ($0D, $0E) are PL0CHR coalesce tiles the game
-    # rewrites at runtime, so they cannot carry letterforms.
     if c == 0x00:
         return c
-    if c < 0x10:
+    if c < 0x10:            # mask tables and PL0CHR coalesce tiles
         return 0x00
-    if c < 0x1E:
+    if c < 0x1E:            # digits, ':' ';' '<' '='
         return c
-    if c < 0x21 or c >= 0x3B:
+    if c < 0x21 or c >= 0x3B:   # '>' '?' '@' and '[\]^_'
         return 0x00
     return c
 
@@ -116,7 +118,7 @@ art.discard(0x00)
 if not art:
     fail("title artwork row parsed as empty")
 
-reachable = {host_scr(c) for c in range(256)}
+reachable = {name_scr(c) for c in range(256)}
 reachable.discard(0x00)
 
 # 1. The title logo may share slots with letters ONLY because its display list
