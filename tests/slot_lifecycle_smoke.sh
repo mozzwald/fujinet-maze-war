@@ -385,3 +385,26 @@ if ! printf '%s' "$snap" | grep -qE 'AND[[:space:]]+#\$03'; then
 diverges while firing can never be put back" >&2
     exit 1
 fi
+
+# A remote actor must be able to WALK off a gap of more than one cell.
+#
+# RF_SYNCCHK used to act only on an exact one-cell divergence; a gap of two --
+# one missed snapshot while that player was moving -- failed, counted up and
+# snapped. Remote wizards visibly jumped instead of walking. It now steps for
+# anything below the snap threshold, while still snapping if a two-cell gap
+# persists (trailing at the remote's own speed never closes).
+sync=$(awk '/^RF_SYNCCHK/{on=1} on{print} on&&/^RF_FAIL/{exit}' clients/atari/maze-war.asm)
+if printf '%s' "$sync" | grep -qE 'CMP[[:space:]]+#1[[:space:]]*$'; then
+    echo "FAIL: RF_SYNCCHK only walks an exact one-cell gap again, so a remote
+that falls two behind snaps instead of walking" >&2
+    exit 1
+fi
+printf '%s' "$sync" | grep -qE 'CMP[[:space:]]+#NET_RECOVER_P1' || {
+    echo "FAIL: RF_SYNCCHK no longer bounds its walk by NET_RECOVER_P1" >&2
+    exit 1
+}
+printf '%s' "$sync" | grep -qE '^RF_STEPFAR' || {
+    echo "FAIL: no persistent-trail guard; a remote could follow two cells
+behind indefinitely without ever being corrected" >&2
+    exit 1
+}

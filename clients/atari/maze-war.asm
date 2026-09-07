@@ -4514,8 +4514,12 @@ RF_DYPOS
 	CLC
 	ADC	HOLDIT
 	STA	NET_RX_TMP	;manhattan divergence
-	CMP	#1
-	BNE	RF_FAIL
+	CMP	#NET_RECOVER_P1	;walk off anything short of the snap threshold.
+	BCS	RF_FAIL		;Only an exact one-cell gap used to be walked, so
+			;a remote that got two ahead -- one missed
+			;snapshot while it was moving -- could never be
+			;followed at all: it failed, counted up and
+			;snapped.  That is the frequent remote snapping.
 	LDA	NET_PX_X,X
 	CMP	LOCX,X
 	BEQ	RF_1Y
@@ -4537,8 +4541,17 @@ RF_1SET
 	STA	DIR,X
 	JSR	NET_AHEAD_FREE
 	BNE	RF_FAIL
-	LDA	#0
-	STA	NET_DESYNC_CNT,X
+	LDA	NET_RX_TMP	;stepped successfully.  Only call it recovered when
+	CMP	#2		;we were within one cell; a gap of two that keeps
+	BCS	RF_STEPFAR	;coming back means we are trailing at the remote's
+	LDA	#0		;own speed and will never close it, so keep the
+	STA	NET_DESYNC_CNT,X	;counter running and snap rather than follow
+	JMP	INITMOVE	;two cells behind forever.
+RF_STEPFAR
+	INC	NET_DESYNC_CNT,X
+	LDA	NET_DESYNC_CNT,X
+	CMP	#NET_DESYNC_MAX
+	BCS	RF_SNAP
 	JMP	INITMOVE
 RF_FAIL
 	INC	NET_DESYNC_CNT,X
