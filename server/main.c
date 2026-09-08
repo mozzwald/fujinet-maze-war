@@ -609,19 +609,39 @@ static int packet_has_bad_joy_for_slot(const uint8_t *pkt, size_t len,
   return 0;
 }
 
+/* Slots that actually have someone in them: a connected client or a zombie.
+   File scope for the same reason the brick echo queue is -- single-threaded,
+   one game -- and because slot_on_board() is consulted from collision, fire
+   evaluation and shot stepping, which would otherwise all have to thread it
+   through. Refreshed once per tick at the top of step_players(). Starts full so
+   nothing before the first tick behaves differently than it used to. */
+static uint8_t g_occupied_mask = 0x0F;
+
+/* True when slot i is a thing you can walk into or shoot.
+
+   Two ways to be off the board. A player awaiting respawn: its coordinates
+   still hold the cell it died in, and clients hide it, so counting it turned
+   the death cell into an invisible wall for the whole respawn delay -- and you
+   are usually walking straight at someone when you kill them. And an empty
+   slot: with `--zombies` below 3 the server still keeps a spawn position for
+   slots nobody holds, and those were solid too. Clients draw nothing there, so
+   the client walked through while the server refused the move; the drift then
+   crossed the reconcile threshold about three cells later and yanked the player
+   back. That is the "snap back walking through nothing" report. */
+static int slot_on_board(const struct player_state *players, int i) {
+  if (!(g_occupied_mask & (1u << i))) {
+    return 0;
+  }
+  return players[i].respawn_at_ms == 0;
+}
+
 static int is_player_at(const struct player_state *players, int x, int y,
                          int ignore_idx) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (i == ignore_idx) {
       continue;
     }
-    /* A player awaiting respawn is not on the board. Its coordinates still hold
-       the cell it died in, and clients hide it, so counting it here turned the
-       death cell into an invisible wall for the whole respawn delay -- and you
-       are usually walking straight at someone when you kill them. Every other
-       subsystem (zombie targeting, fire evaluation, shot hits) already skips
-       respawning players; movement collision was the one that did not. */
-    if (players[i].respawn_at_ms != 0) {
+    if (!slot_on_board(players, i)) {
       continue;
     }
     if (players[i].x == (uint8_t)x && players[i].y == (uint8_t)y) {
@@ -1198,7 +1218,7 @@ static void start_shot(int shooter, struct player_state *players,
       if (p == shooter) {
         continue;
       }
-      if (players[p].respawn_at_ms != 0) {
+      if (!slot_on_board(players, p)) {
         continue;
       }
       if (players[p].x == (uint8_t)sx && players[p].y == (uint8_t)sy) {
@@ -1288,7 +1308,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
       if (p == i) {
         continue;
       }
-      if (players[p].respawn_at_ms != 0) {
+      if (!slot_on_board(players, p)) {
         continue;
       }
       if (players[p].x == (uint8_t)nx && players[p].y == (uint8_t)ny) {
@@ -1418,6 +1438,14 @@ static void step_players(struct player_state *players, struct shot_state *shots,
     }
     human_mask[i] = 1;
   }
+  /* Everything downstream this tick -- collision, fire evaluation, shot hits,
+     respawn placement -- asks slot_on_board() rather than the two masks. */
+  g_occupied_mask = 0;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (zombie_mask[i] || human_mask[i]) {
+      g_occupied_mask |= (uint8_t)(1u << i);
+    }
+  }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (players[i].respawn_at_ms != 0 &&
         now >= players[i].respawn_at_ms) {
@@ -1446,7 +1474,27 @@ static void step_players(struct player_state *players, struct shot_state *shots,
     }
   }
   for (int i = 0; i < MAX_PLAYERS; i++) {
-    if (!zombie_mask[i]) {
+    /* Only for a slot with no client left in it. While a client is connected
+       apply_queued_input() is the sole authority on this slot's joy: it sets
+       the queued direction, and neutral when the queue is empty. Applying a
+       wall-clock staleness test on top of that raced with the queue drain and
+       silently threw away real inputs.
+
+       `last_input_ms` is stamped when a DELTA *arrives*, but an input is
+       applied one per tick, so an entry that waits two ticks is already
+       INPUT_STALE_MS old when its turn comes: the direction was set and then
+       neutralised again a few statements later, in the same tick, before the
+       move. The client had been acked for it, so it dropped the input from its
+       pending ring and never replayed it -- an acked-but-discarded input, which
+       is the snap-back signature. At the 4 Hz the combat smokes use, two ticks
+       is exactly 500 ms, which is why combat_world_authority_smoke failed
+       roughly four runs in ten. At the 10 Hz the Atari runs it needs a burst to
+       bite, but nothing prevented it.
+
+       Kept for a slot whose client is gone: it is not in apply_queued_input()'s
+       loop at all, so without this its actor would keep walking on the last joy
+       it was given for the whole reap grace window. */
+    if (!zombie_mask[i] && !clients[i].in_use) {
       if (last_input_ms[i] == 0 || (now - last_input_ms[i]) > INPUT_STALE_MS) {
         players[i].joy = 0x0F;
       }
@@ -1479,7 +1527,11 @@ static void step_players(struct player_state *players, struct shot_state *shots,
         uint8_t before_x = players[i].x;
         uint8_t before_y = players[i].y;
         apply_move_if_free(&players[i], bricks, players, i);
-        if (debug) {
+        /* Only when a direction was actually asked for. A neutral stick moves
+           nobody, and reporting that as "blocked" made every idle actor log a
+           blocked move on every tick -- the log said four players were pinned
+           against a wall when nothing was happening at all. */
+        if (debug && stick != 0x0F) {
           char detail[96];
           if (players[i].x != before_x || players[i].y != before_y) {
             snprintf(detail, sizeof(detail), "to=%u,%u",

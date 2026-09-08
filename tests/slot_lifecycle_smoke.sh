@@ -261,10 +261,12 @@ fi
 
 # A player awaiting respawn must not block movement. Its coordinates still hold
 # the cell it died in and clients hide it, so counting it in collision turned
-# the death cell into an invisible wall for the whole respawn delay.
+# the death cell into an invisible wall for the whole respawn delay. The test is
+# now one step removed: collision asks slot_on_board(), which covers both a
+# respawning player and an empty slot (see vacant_slot_collision_smoke.sh).
 SERVER_SRC="$ROOT_DIR/server/main.c"
 sed -n '/^static int is_player_at/,/^}/p' "$SERVER_SRC" \
-    | grep -F "respawn_at_ms != 0" >/dev/null || {
+    | grep -F "slot_on_board(players, i)" >/dev/null || {
     echo "FAIL: is_player_at counts respawning players, walling off death cells" >&2
     exit 1
 }

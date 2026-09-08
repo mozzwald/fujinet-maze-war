@@ -2382,8 +2382,9 @@ NSH_NO	LDA	#0
 ; re-hide and re-erase exactly once. Erasing on every pass instead would fight
 ; the map repair, since a vacant actor's stale cell may now hold a brick.
 ;
-; Runs from the VBI beside NET_SCORELBL, which owns these masks, and ahead of
-; the move loop that performs the erase.
+; Runs every VBI, which owns these masks, ahead of the move loop that both
+; performs the erase and draws. Cheap: four slots, and an already-hidden slot
+; costs two loads and a branch.
 NET_VACANT_UPDATE
 	LDX	#0
 NVU_LP
@@ -4230,8 +4231,13 @@ VBI_SHOW_OK
 	LDA	#0
 	STA	NET_SCORE_PEND
 	JSR	NET_SCORELBL
-	JSR	NET_VACANT_UPDATE	;before the move loop, which runs the erase
 VBI_SCR_OK
+	; Every frame, not just when the HUD is refreshed. Anything that clears a
+	; dead bit -- the first-snapshot NET_BOOT_HIDE reveal above all -- would
+	; otherwise leave a vacant slot's wizard on screen until the next SEATS or
+	; role change, which is the sprite that flashed up at boot. Running it here,
+	; ahead of the move loop, means the actor is hidden before it is ever drawn.
+	JSR	NET_VACANT_UPDATE
 	LDX	ACTIVE	;INIT LOOP COUNT
 CKMVLP	TXA
 	TAY

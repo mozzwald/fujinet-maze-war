@@ -192,10 +192,9 @@ grep -A24 -E "^NET_VACANT_UPDATE" "$ATARI_SRC" | grep -F "NET_ERASE_MASK" >/dev/
 # genuinely awaiting respawn
 grep -E "^NET_VACANT_MASK" "$ATARI_SRC" >/dev/null || {
     echo "FAIL: no record of which slots were hidden as vacant" >&2; exit 1; }
-# and it runs from the VBI ahead of the move loop that performs the erase
-grep -A2 -E "JSR[$TAB ]+NET_SCORELBL" "$ATARI_SRC" \
-    | grep -E "JSR[$TAB ]+NET_VACANT_UPDATE" >/dev/null || {
-    echo "FAIL: vacancy is not refreshed with the HUD labels" >&2; exit 1; }
+# It runs every VBI, ahead of the move loop that performs the erase -- not only
+# on a HUD refresh. See vacant_slot_collision_smoke.sh, which pins the placement
+# and the sprite flash that gating it on NET_SCORE_PEND caused.
 
 # Both Linux clients honour the same mask.
 for c in "$ROOT_DIR/clients/linux/main.c" "$ROOT_DIR/clients/linux/sdl_main.c"; do

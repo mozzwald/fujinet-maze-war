@@ -118,6 +118,7 @@ class Client:
         self.pid = None
         self.seq = 1
         self.players = {}
+        self.ack = None
         self.bricks = None
         self.shots = []
         self.respawns = []
@@ -129,6 +130,8 @@ class Client:
             return
         if len(packet) >= 20 and packet[0] == PKT_SNAPSHOT:
             self.pid = (packet[2] >> 1) & 0x03
+            if packet[2] & 0x80:
+                self.ack = packet[19]
             for idx in range(4):
                 self.players[idx] = {
                     "x": packet[3 + idx * 2],
@@ -168,12 +171,35 @@ class Client:
     def send_delta(self, joy):
         if self.pid is None:
             raise SystemExit("pid unknown")
-        packet = bytes([0x41, self.seq & 0xFF, self.pid & 0xFF, joy & 0xFF])
+        used = self.seq & 0xFF
+        packet = bytes([0x41, used, self.pid & 0xFF, joy & 0xFF])
         self.seq = (self.seq + 1) & 0xFF
         self.sock.send(packet)
+        return used
 
     def send_neutral(self):
-        self.send_delta(0x0F)
+        return self.send_delta(0x0F)
+
+    def drain(self, seq, timeout=6.0):
+        """Wait until the server has applied everything up to `seq`.
+
+        The server applies one queued input per tick, and the walker sends two
+        per step (a direction and a neutral), so without this the harness runs
+        ahead of the simulation: a two or three entry backlog builds up, the
+        position the walker reads belongs to an older input, and it plans its
+        next step from a cell the actor has already left. That is what the
+        re-plan budget was really being spent on -- the walk oscillated between
+        cells while the server was working correctly the whole time.
+
+        The ack names the last sequence actually applied, so waiting for it puts
+        the two back in lockstep.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.pump(0.02)
+            if self.ack == seq:
+                return True
+        return False
 
     # Waits are generous on purpose. These assert ORDERING, not latency, and
     # the suite is often run alongside an emulator and a FujiNet sidecar on the
@@ -187,7 +213,7 @@ class Client:
                 return
         raise SystemExit(f"timed out waiting for pid {pid} at {pos}")
 
-    def try_change(self, pid, start, timeout=1.5):
+    def try_change(self, pid, start, timeout=3.0):
         """Wait for a move, returning None instead of raising if it never comes."""
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -307,21 +333,25 @@ def walk(client, pid, path):
         return
     goal = path[-1]
     current = (client.players[pid]["x"], client.players[pid]["y"])
-    replans = 0
+    stalls = 0
     while path:
         step = path[0]
         _dir_id, joy = joy_for_step(current, step)
         client.send_delta(joy)
         actual = client.try_change(pid, current)
-        client.send_neutral()
-        if actual is not None:
-            client.wait_snapshot_pos(pid, actual)
+        # Drain to the neutral before reading position again, so the actor is
+        # standing still and nothing is left queued to move it afterwards.
+        client.drain(client.send_neutral())
+        if client.players.get(pid):
+            current = (client.players[pid]["x"], client.players[pid]["y"])
+        elif actual is not None:
             current = actual
-        if actual == step:
+        if current == step:
             path = path[1:]
+            stalls = 0   # budget is for consecutive stalls, not for the walk
             continue
-        replans += 1
-        if replans > 8:
+        stalls += 1
+        if stalls > 8:
             raise SystemExit(
                 f"pid {pid} stuck at {current} trying to reach {goal}")
         path = bfs(bricks, current, goal, occupied_now(client, pid))

@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready
-stopped_at: HUD seat occupancy (0x44 SEATS) landed 2026-09-08, awaiting the human Atari check. Phases 3, 3.1, 5 and 5.1 complete and human-approved. Phase 4 render-state separation is next.
+stopped_at: HUD seat occupancy (0x44 SEATS) landed 2026-09-08, extended to hide the sprite and drop the collision for an empty slot; both combat smoke flakes fixed. Awaiting the human Atari check. Phases 3, 3.1, 5 and 5.1 complete and human-approved. Phase 4 render-state separation is next.
 last_updated: "2026-09-08T00:00:00.000Z"
 progress:
   total_phases: 8
@@ -389,6 +389,27 @@ rotation, and a vacant actor's stale cell may now hold a brick, so a repeated
 `ERASMAN` would fight the map repair. Both Linux clients gate the HUD row and
 the sprite through one `slot_in_play()` so the two cannot diverge.
 
+Follow-up 2026-09-08 (hardware report): hiding the HUD row was not enough --
+the wizard sprite still appeared, and the empty slot was still solid.
+
+- The flash. `NET_VACANT_UPDATE` was called only when `NET_SCORE_PEND` fired, so
+  the first-snapshot `NET_BOOT_HIDE` reveal drew all four actors and the vacant
+  ones stayed on screen until the next SEATS or role change. It now runs every
+  VBI, ahead of the move loop that both erases and draws, so a vacant actor is
+  never drawn at all. Cheap: four slots, and an already-hidden slot costs two
+  loads and a branch.
+- The collision. The server counted an empty slot's stale spawn position in
+  movement collision, fire evaluation and shot hits. The client walks through it
+  (its own occupancy test already skips `NET_DEAD_MASK` slots), the server
+  refused the move, and about three cells later the drift crossed
+  `NET_RECON_P0` and yanked the player back -- "I can walk through them, then I
+  snap back". One predicate now answers "is this slot a thing you can walk into
+  or shoot": `slot_on_board()`, covering both a respawning player and an empty
+  slot, reading a `g_occupied_mask` rebuilt from that tick's zombie and human
+  masks. `tests/vacant_slot_collision_smoke.sh` walks a client onto an empty
+  slot's cell on an open map -- no pathfinding needed -- and fails at exactly
+  that cell without the fix.
+
 Display-list check after the ~105 bytes of growth: `TITLDISP` `$6C00`,
 `HOSTDISP` `$6DAE`, `GAME` `$6DCE`, block ends `$6FD0` before `HOSTSCR` at
 `$7000` -- all three lists still inside one 1K page (the Phase 5.1 trap).
@@ -404,16 +425,60 @@ run out.
 Not yet verified on the Atari: the emulator rig could not be brought up this
 session (see Session Continuity).
 
+### Combat smoke flakiness: two real bugs (2026-09-08)
+
+Both combat smokes had been failing intermittently. Measured before touching
+anything: `combat_world_authority_smoke` 4/10 on master, `combat_ordering_smoke`
+0/8 standalone but failing inside back-to-back suite runs. Neither was test
+noise.
+
+**1. The server threw away inputs it had already acked** (the world-authority
+flake, and a real gameplay bug). `last_input_ms` is stamped when a DELTA
+*arrives*, but inputs are applied one per tick in order, so an entry that waits
+its turn is already older than `INPUT_STALE_MS` when it runs. `step_players`
+then ran a wall-clock staleness test over the top of the queue and reset `joy`
+to neutral in the same tick that `apply_queued_input` had set the direction --
+after acking it. The client dropped it from its pending ring and never replayed
+it: an acked-but-discarded input, which is exactly the snap-back signature
+Phase 4 has been chasing. At the 4 Hz the smokes use, two ticks is *exactly*
+`INPUT_STALE_MS`, hence the coin-flip failure rate.
+
+Fix: the staleness reset applies only to a slot with no client left in it. While
+a client is connected `apply_queued_input()` is the sole authority on that
+slot's joy -- it already sets neutral when the queue is empty, which is the same
+intent expressed precisely instead of on a wall clock. The reset is still needed
+for a departed client's slot, which is not in that function's loop at all.
+0/12 after the fix. `tests/input_stale_apply_smoke.sh` pins it using `--lag-ms`
+to reproduce the backlog deterministically.
+
+At 10 Hz the Atari needs a burst of queued input to hit this, but nothing
+prevented it -- worth remembering as a possible contributor to the residual
+corrections noted under Phase 4.
+
+**2. The walker ran ahead of the simulation** (the ordering flake, a harness
+bug). `walk()` sends two inputs per step (direction, then neutral) while the
+server applies one per tick, so a two-to-three entry backlog built up. The
+position it then read belonged to an older input, so it planned the next step
+from a cell the actor had already left, and the walk oscillated. Its re-plan
+budget was cumulative over the whole path rather than per stall, so a long walk
+exhausted it while making steady progress; `try_change`'s 1.5 s window was also
+under the backlog's 500-750 ms plus a tick.
+
+Fix, all inside the test: track the ack, `drain()` to the neutral's sequence
+after each step so the harness and the server are in lockstep, reset the stall
+budget on progress, and widen `try_change` to 3 s. 0/16 after the fix.
+
+Method note: the server's `move-blocked` debug line was logged for a *neutral*
+stick too, so every idle actor reported a blocked move on every tick and the log
+read as though four players were pinned against walls when nothing was
+happening. That cost real time during this diagnosis. It now logs only when a
+direction was actually asked for.
+
 ### Known gaps (not addressed)
 
-- `combat_world_authority_smoke.sh` is flaky again as of 2026-09-08: measured
-  4/10 failures on master and 3/10 on the seat-occupancy branch, so it is
-  pre-existing and not caused by that work. It always fails the same way, a
-  `wait_snapshot_change` timeout on a move that never lands. Nothing in the
-  suite was changed to chase it. `combat_ordering_smoke.sh` measured 0/8 on
-  both, but failed once inside a back-to-back suite run, so treat both as
-  load-sensitive: a suite failure confined to these two is worth re-running
-  before believing.
+- ~~`combat_world_authority_smoke.sh` and `combat_ordering_smoke.sh` flakiness~~
+  FIXED 2026-09-08, and both causes were real bugs rather than test noise. See
+  "Combat smoke flakiness" above.
 
   Also fixed 2026-09-08: `seat_occupancy_smoke.sh` was first written on
   PORT=9161, which `input_queue_smoke.sh` already uses. Moved to 9171. Check
@@ -434,8 +499,10 @@ session (see Session Continuity).
 
 Last session: 2026-09-08
 Stopped at: HUD seat occupancy (`0x44 SEATS`) implemented on the server, the
-Atari client and both Linux clients; full smoke suite green. Awaiting the human
-Atari check. Next: Phase 4 render-state separation.
+Atari client and both Linux clients, extended to hide the sprite and drop the
+collision for an empty slot; both combat smoke flakes root-caused and fixed, one
+of them a real server bug. Awaiting the human Atari check. Next: Phase 4
+render-state separation.
 Resume file: .planning/ROADMAP.md
 
 **Emulator rig did not come up on 2026-09-08.** `atari_load` of
@@ -448,7 +515,7 @@ rather than `atari_load`. Two smaller traps: the MCP key table has no `.` key
 (poke the address into `HOSTBUF`, `$7E54`, instead) and the prompt ignores
 backspace from the MCP key path.
 
-Test suite is 23 smokes, all green. Emulator workflow note: start FujiNet-PC
+Test suite is 25 smokes, all green (four consecutive full-suite runs). Emulator workflow note: start FujiNet-PC
 *first* on a non-default NetSIO port, then the emulator on that same port
 (`fujinet_start netsio_port: N` then `atari_start netsio: true, netsio_port: N`);
 starting the emulator first makes it bind the port so the sidecar cannot. The
