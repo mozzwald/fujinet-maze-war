@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready
-stopped_at: HUD seat occupancy (0x44 SEATS) landed 2026-09-08, extended to hide the sprite and drop the collision for an empty slot; both combat smoke flakes fixed. Awaiting the human Atari check. Phases 3, 3.1, 5 and 5.1 complete and human-approved. Phase 4 render-state separation is next.
+stopped_at: 2026-09-08 - slot-0 corpse and clipped far-left cells fixed (ERASMAN clobbered Y), death smoke animation restored, display-list layout anchored and tested. Awaiting the human check; lag investigation is next. Phases 3, 3.1, 5 and 5.1 complete and human-approved. Phase 4 render-state separation is next.
 last_updated: "2026-09-08T00:00:00.000Z"
 progress:
   total_phases: 8
@@ -535,14 +535,86 @@ per row, two bytes per cell.
 
 Two further defects it found, **not fixed, no repro case written yet**:
 
-- Actors standing on adjacent cells erase each other. `ERASMAN` blanks the
-  neighbouring cell too when `MOVEST != 0` (correct for the actor's own
-  animation) but nothing repaints whoever else was standing there, and a
-  stationary actor is not redrawn until it next moves. Observed directly: slots
-  1 and 2 at `(15,17)` and `(14,17)`, both flagged visible, both unpainted.
-- A stale painted cell was seen at `(9,10)` with no actor on it. Only observed
-  under the distorting `run_until` single-step regime, so it may be an artefact
-  of that; recorded rather than trusted.
+- ~~Actors standing on adjacent cells erase each other~~ and ~~a stale painted
+  cell at `(9,10)`~~: both re-tested after the `ERASMAN` Y fix below. The
+  adjacent case does not reproduce at all; the stale cell does, and is recorded
+  there as the one still-open rendering leak.
+
+### One clobbered register behind both hardware reports (2026-09-08, later)
+
+The RESPAWN echo was not the death-sprite bug. Two much better clues arrived:
+the corpse follows **slot 0**, not a machine (real hardware as player 1 leaves a
+corpse; the same hardware moved to player 2 does not), and two cells in the
+far-left column clip any sprite standing on them.
+
+Both are `ERASMAN` returning with `Y = 0`. Its player-missile clear loop ends
+when Y wraps to zero, and two callers reload the slot's mask bit *through Y
+after the call*: `CKMV_NEV` clears `NET_ERASE_MASK` and `NET_AUTH_REPOS` clears
+`NET_DEAD_MASK` and `NET_ERASE_MASK`. Every one of them was clearing bit 0,
+whatever slot had actually been erased.
+
+- **The clipped cells.** Slots 1..3 never got their erase bit cleared, so a
+  hidden slot was re-erased *every frame*. An unoccupied slot sits at its
+  placeholder `(1, slot+1)` -- set in START and never replaced, because nothing
+  repositions a hidden actor -- so `(1,2)`, `(1,3)` and `(1,4)` were being
+  blanked 50 times a second. A live player standing there lost its characters
+  and rendered as the sliver in `ref/screenshots/2026-09-08 15-44-36`. The
+  user's guess ("player 3 and 4 are hidden in those spots") was exactly right.
+- **The slot 0 corpse.** The move loop runs 3 down to 0, so any other slot's
+  erase cleared bit 0 *before* slot 0 was reached. With fewer than four
+  participants some slot is always hidden, so slot 0's erase request was always
+  destroyed and its corpse always stayed. Slot 1's bit was never touched by
+  anything, which is why the same machine in seat 2 was fine.
+
+Fix: `ERASMAN` saves and restores Y. One instruction pair at each end.
+
+Measured on the emulator before and after: `NET_ERASE_MASK` was stuck at `1110`
+and `(1,2)`/`(1,3)` held no characters with a player standing on them; after, it
+reads `0000` and the player's characters are present at `(1,1)`..`(1,4)`. Then
+12 deaths of slot 0 across 110 s with a hunting bot: zero corpses. The
+"adjacent actors erase each other" note above did not reproduce either -- 19548
+samples with a bot walking into the player and firing, zero unpainted visible
+actors -- so it was most likely the same cause seen from another angle.
+
+**Death animation, restored (asked for in the same report).** `EVAPRTE` and its
+smoke were still in the source but unreachable: the only path to them hung off
+`CHKSHOT`, and the net client short-circuits `CHKSHOT` straight to `DONXTMN`
+because shots are server-authoritative now. So a death the client detected
+itself (`MNHTCHK`) puffed into smoke and a death the server reported just
+blinked out. `NRW_PEND` now does what `STALLEV` does -- erase, set `ACTFLAG`
+bit 1, `MOVEST = 9` -- and the move loop drives `EVAPRTE` on the `RTCLOK` every
+other frame that `COLESCE` used. Nine steps at 30 Hz is about a third of a
+second, well inside the two-second respawn.
+
+It deliberately does **not** set `NET_DEAD_MASK`: the dead branch skips the
+effects entirely, so hiding the actor there would cancel the smoke before its
+first frame. `ENDEVAP` sets the hide when the smoke clears, as the original did.
+A final respawn and a slot handoff both end a running evaporate so it cannot
+follow the actor to a new cell or a new occupant, and `NAF_OCCLP` treats an
+evaporating actor as off the board so local prediction agrees with the server
+for those ten frames. Verified live: `ACTFLAG` bit 1 set with `MOVEST` counting
+9 -> 8 -> 6.
+
+**The display-list trap fired again, and is now closed properly.** Adding this
+code pushed the 1K-aligned data block past its page; `.ALIGN $0400` moved it to
+`$7000`, directly on top of `HOSTSCR`. The three display lists are now kept
+together at the top of the block, and the block is anchored at `ORG $8000`
+instead of drifting up behind the code: under 256 bytes from a page boundary
+cannot cross a 1K boundary, whatever the code does. `tests/memory_layout_smoke.sh`
+checks that, checks no loaded segment reaches into the `.DS` display buffers,
+checks the buffers stay inside one 4K ANTIC page, and checks no two segments
+overlap. It fails on the old `.ALIGN $0400`.
+
+**Still open, with a repro.** A stale half of a move animation can be left on a
+cell an actor walked out of -- observed at `(1,4)` as `$DA,$DB`, the trailing
+pair of an up-move shape, persisting indefinitely. This is pre-existing, not new:
+those three placeholder cells used to be scrubbed every frame by the bug above,
+which was hiding it there, and the same residue was seen at `(9,10)` earlier.
+The 3 s `BRICK_FULL` resync does not clear it because the repair only repaints
+cells whose brick state changed. Repro: walk an actor across a cell and
+interrupt the move; scan `GAMESCR` for painted cells no visible actor accounts
+for. Likely fix: have the map repair blank a floor cell that holds characters no
+actor is standing on.
 
 ### Remote-actor lag: investigation only, nothing changed (2026-09-08)
 
@@ -611,11 +683,11 @@ Two things worth checking before any smoothing work, in this order:
 ## Session Continuity
 
 Last session: 2026-09-08
-Stopped at: HUD seat occupancy (`0x44 SEATS`) implemented on the server, the
-Atari client and both Linux clients, extended to hide the sprite and drop the
-collision for an empty slot; both combat smoke flakes root-caused and fixed, one
-of them a real server bug. Awaiting the human Atari check. Next: Phase 4
-render-state separation.
+Stopped at: the slot-0 corpse and the clipped far-left cells both fixed (one
+clobbered register in `ERASMAN`), the death smoke animation restored on the
+server's death notice, and the display-list layout anchored and tested. Awaiting
+the human check on all three. Then: the remote-actor lag investigation below,
+which the user wants planned and fixed next.
 Resume file: .planning/ROADMAP.md
 
 **Emulator rig did not come up on 2026-09-08.** `atari_load` of
@@ -628,7 +700,7 @@ rather than `atari_load`. Two smaller traps: the MCP key table has no `.` key
 (poke the address into `HOSTBUF`, `$7E54`, instead) and the prompt ignores
 backspace from the MCP key path.
 
-Test suite is 26 smokes, all green (two consecutive full-suite runs). Emulator workflow note: start FujiNet-PC
+Test suite is 28 smokes, all green (two consecutive full-suite runs). Emulator workflow note: start FujiNet-PC
 *first* on a non-default NetSIO port, then the emulator on that same port
 (`fujinet_start netsio_port: N` then `atari_start netsio: true, netsio_port: N`);
 starting the emulator first makes it bind the port so the sidecar cannot. The

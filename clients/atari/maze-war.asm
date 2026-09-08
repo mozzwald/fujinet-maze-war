@@ -2704,6 +2704,10 @@ NRR_LP
 	STA	NET_DESYNC_CNT,X	;divergence was the old actor's, not this one's
 	STA	NET_P_PENDING,X		;so is any queued reconcile
 	STA	NET_STAGE_PENDING,X
+	STA	MOVEST,X		;and any evaporate the old occupant was mid-way
+	LDA	ACTFLAG,X		;through, which would otherwise play out on
+	AND	#$FD			;whoever takes the seat
+	STA	ACTFLAG,X
 	JSR	NET_NAME_CLR		;and the previous occupant's display name
 	CPX	SND_CH2_PID		;release a sound claim held by the old actor
 	BNE	NRR_NX
@@ -2987,6 +2991,11 @@ NRW_BADPOS
 NRW_POSOK
 	TXA
 	TAY
+	LDA	ACTFLAG,X	;a respawn ends any evaporate still running, so a
+	AND	#$FD		;half-played one cannot follow the actor to its
+	STA	ACTFLAG,X	;new cell
+	LDA	#0
+	STA	MOVEST,X
 	LDA	NET_GUARD_MASK
 	ORA	PLRMSK,Y
 	STA	NET_GUARD_MASK
@@ -3001,18 +3010,36 @@ NRW_POSOK
 	LDA	#30
 	STA	NET_DIAG_HOLD
 NRAW_X	RTS
+; Pending respawn: the server says this actor has been killed.
+;
+; Play the evaporate the original game plays. It was still here and still
+; wired into the effects chain, but only MNHTCHK reached it -- the client's own
+; hit detection -- so a death you were told about by the server just blinked out
+; while a death you detected yourself puffed into smoke. Same event, two
+; appearances, depending on who noticed. Now every death animates.
+;
+; Deliberately does NOT set NET_DEAD_MASK: the dead branch in the move loop
+; skips the effects chain entirely, so hiding the actor here would cancel the
+; animation before its first frame. ENDEVAP sets the hide when the smoke
+; clears, which is where the original put it too.
 NRW_PEND
 	LDA	NET_RX_TMP0
 	AND	#$01
 	BEQ	NRW_X
 	TXA
 	TAY
-	LDA	NET_DEAD_MASK
-	ORA	PLRMSK,Y
-	STA	NET_DEAD_MASK
-	LDA	NET_ERASE_MASK
-	ORA	PLRMSK,Y
-	STA	NET_ERASE_MASK
+	LDA	NET_DEAD_MASK	;already hidden: this death is done with
+	AND	PLRMSK,Y
+	BNE	NRW_X
+	LDA	ACTFLAG,X	;already evaporating -- our own hit detection got
+	AND	#$02		;here first, or this is an echoed RESPAWN
+	BNE	NRW_X
+	JSR	ERASMAN		;wizard off the board, then smoke in its place
+	LDA	ACTFLAG,X
+	ORA	#$02
+	STA	ACTFLAG,X
+	LDA	#9		;evaporate counter, as STALLEV sets it
+	STA	MOVEST,X
 	LDA	#0
 	STA	NET_DESYNC_CNT,X
 NRW_X	RTS
@@ -3846,6 +3873,9 @@ NAF_OLP
 	LDA	NET_DEAD_MASK	;predicting otherwise here would make us refuse a
 	AND	PLRMSK,Y	;move the server allows, drift, and then snap.
 	BNE	NAF_ONX
+	LDA	ACTFLAG,X	;same while it is evaporating: the server took it
+	AND	#$02		;off the board when it sent the hit, and the smoke
+	BNE	NAF_ONX		;is just the animation catching up
 	LDA	LOCX,X
 	CMP	NET_AHEAD_X
 	BNE	NAF_ONX
@@ -4254,6 +4284,28 @@ CKMV_NGU
 		; net-only: always run dead-mask handling path
 		TXA
 		TAY
+	; Evaporating: run the smoke and nothing else for this slot.
+	;
+	; The original reached EVAPRTE through the special-effects chain hanging
+	; off CHKSHOT, and the net client short-circuits CHKSHOT straight to
+	; DONXTMN -- all shots are server-authoritative now -- so that whole chain,
+	; EVAPRTE included, became unreachable. Driving it from here is what makes
+	; a death animate again.
+	;
+	; RTCLOK gate: COLESCE ran the effects every other frame, so keep that
+	; cadence. Nine steps at 30 Hz is about a third of a second, well inside
+	; the server's two-second respawn delay. ENDEVAP sets NET_DEAD_MASK when
+	; the smoke clears, which is the point the actor is really off the board.
+	LDA	ACTFLAG,X
+	AND	#$02
+	BEQ	CKMV_NEV
+	LDA	RTCLOK
+	AND	#$01
+	BNE	CKMV_EVSK
+	JSR	EVAPRTE
+CKMV_EVSK
+	JMP	DONXTMN
+CKMV_NEV
 	LDA	NET_DEAD_MASK
 	AND	PLRMSK,Y
 	BEQ	CKMVP0
@@ -5783,7 +5835,25 @@ ERSHXIT	JSR	SND_OFF	;TURN OFF SOUND
 ; Blanking two characters there ate the top-left border block, and the map paint
 ; had already run, so nothing put it back. The player-missile erase below is
 ; unconditional -- it is bounded to the actor's own PM page and always safe.
-ERASMAN	LDA	RNDX,X
+; Erase an actor: its characters, then its whole player-missile page.
+;
+; Y IS PRESERVED. It used to come back as 0, from the page-clear loop below,
+; and two callers reload the slot's mask bit through Y *after* the call:
+; CKMV_NGU clears NET_ERASE_MASK and NET_AUTH_REPOS clears NET_DEAD_MASK and
+; NET_ERASE_MASK. Both were therefore always clearing bit 0, whatever slot had
+; actually been erased.
+;
+; That is one bug with two faces. Slots 1..3 never got their erase bit cleared,
+; so once a slot was hidden it was re-erased every single frame -- and an
+; unoccupied slot sits at its placeholder cell (1, slot+1) forever, so a live
+; player standing on (1,2), (1,3) or (1,4) had its characters blanked every
+; frame and rendered as a sliver. And slot 0's erase request was destroyed by
+; any other slot's erase earlier in the same pass -- the pass runs 3 down to 0 --
+; so when slot 0 died with any other slot hidden, which with fewer than four
+; participants is always, its erase never ran and the corpse stayed put.
+ERASMAN	TYA
+	PHA
+	LDA	RNDX,X
 	BEQ	ERMNXIT
 	CMP	#19
 	BCS	ERMNXIT
@@ -5822,6 +5892,8 @@ ERMNXIT	TXA		;ERASE PLAYER'S
 ERSUTLP	STA	(POINTR0),Y
 	DEY
 	BNE	ERSUTLP
+	PLA
+	TAY
 	RTS
 ;
 ;COLLISION DETECTION
@@ -6186,17 +6258,49 @@ EXPLSHP	.BYTE	$00,$9B,$9C,$9C	;R&D0
 ;
 ; ANTIC only increments the low 10 bits of the display list counter, so a list
 ; that crosses a 1K boundary wraps to the start of its own 1K page and executes
-; garbage. Nothing otherwise pins these three lists down -- they land wherever
-; the preceding code happens to end -- so any change to code size can push one
-; across a boundary and corrupt the display. Aligning the block to 1K puts all
-; three (about 490 bytes) inside a single page for good.
-	.ALIGN	$0400
+; garbage. Nothing otherwise pins these lists down -- they land wherever the
+; preceding code happens to end -- so any change to code size can push one
+; across a boundary and corrupt the display.
+;
+; The three lists are therefore kept together, ahead of the bulk data they used
+; to be scattered through, and the group starts on a page boundary. Under 256
+; bytes from a page boundary cannot cross a 1K boundary, whatever the code
+; before it does.
+;
+; This replaces a 1K alignment of the whole ~1KB data block, which was one
+; growth spurt away from disaster and duly took it: the block outgrew its page,
+; ALIGN pushed it to $7000, and it landed on top of HOSTSCR -- the screen
+; buffers are ORG'd there, so the display lists and the screen came to occupy
+; the same memory. Anchoring the block above the net state instead of letting it
+; drift up behind the code gives it about 7K of headroom and makes the position
+; a decision rather than an accident. tests/memory_layout_smoke.sh checks both
+; properties against the built binary.
+	ORG	$8000
 TITLDISP	.BYTE	$70,$70,$70,$70,$70,$42
 	.WORD	TITLES
 	.BYTE	2,2,$70,6,$70,$70,5,$70
 	.BYTE	$70,6,$70,4,4,4,$70,6,6
 	.BYTE	$70,2,$41
 	.WORD	TITLDISP
+;
+;HOST INPUT DISPLAY LIST (40x24 text)
+;
+HOSTDISP	.BYTE	$70,$70,$70,$42
+	.WORD	HOSTSCR
+	.BYTE	2,2,2,2,2,2,2,2,2,2,2,2
+	.BYTE	2,2,2,2,2,2,2,2,2,2,2
+	.BYTE	$41
+	.WORD	HOSTDISP
+;
+;GAME DISPLAY LIST
+;
+GAME	.BYTE	$70,$70,$70,$44
+	.WORD	GAMESCR
+	.BYTE	4,4,4,4,4,4,4,4,4,4,4
+	.BYTE	4,4,4,4,4,4,4,$F0,$46
+	.WORD	BOTSCRN
+	.BYTE	6,6,6,$41
+	.WORD	GAME
 ;
 ;TITLE SCREEN DISPLAY DATA
 ;
@@ -6256,22 +6360,7 @@ ZOMSPD	.BYTE	"5            "
 ;
 ;HOST INPUT DISPLAY LIST (40x24 text)
 ;
-HOSTDISP	.BYTE	$70,$70,$70,$42
-	.WORD	HOSTSCR
-	.BYTE	2,2,2,2,2,2,2,2,2,2,2,2
-	.BYTE	2,2,2,2,2,2,2,2,2,2,2
-	.BYTE	$41
-	.WORD	HOSTDISP
 ;
-;DISPLAY LIST
-;
-GAME	.BYTE	$70,$70,$70,$44
-	.WORD	GAMESCR
-	.BYTE	4,4,4,4,4,4,4,4,4,4,4
-	.BYTE	4,4,4,4,4,4,4,$F0,$46
-	.WORD	BOTSCRN
-	.BYTE	6,6,6,$41
-	.WORD	GAME
 ;
 ;MAZE DATA
 ;
