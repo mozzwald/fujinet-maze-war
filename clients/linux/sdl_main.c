@@ -275,6 +275,14 @@ static void fill_rect(SDL_Surface *screen, int x, int y, int w, int h, Uint32 co
   SDL_FillRect(screen, &r, color);
 }
 
+/* A slot with neither a client nor a zombie in it is not in the game: it gets
+   no HUD line and no sprite on the board. Our own slot always counts, so the
+   view is right before the first SEATS packet arrives. */
+static int slot_in_play(const struct game_state *g, int i) {
+  return (g->zombie_mask & (1u << i)) || (g->seat_mask & (1u << i)) ||
+         i == g->local_pid;
+}
+
 /* A slot the server has no name for shows the role label instead. */
 static int name_is_set(const uint8_t *name) {
   int i;
@@ -691,7 +699,7 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
     float gy;
     int px;
     int py;
-    if (!g->panim[i].known || g->panim[i].dead) {
+    if (!g->panim[i].known || g->panim[i].dead || !slot_in_play(g, i)) {
       continue;
     }
     interp_player(&g->panim[i], now, &gx, &gy);
@@ -711,8 +719,7 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
     char label[NAME_LEN + 1];
     const char *role;
     Uint32 color = theme->player_colors[i];
-    if (!(g->zombie_mask & (1u << i)) && !(g->seat_mask & (1u << i)) &&
-        i != g->local_pid) {
+    if (!slot_in_play(g, i)) {
       continue; /* nobody in this seat: no name and no score */
     }
     if (g->zombie_mask & (1u << i)) {

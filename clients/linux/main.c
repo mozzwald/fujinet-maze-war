@@ -119,6 +119,14 @@ static int name_is_set(const uint8_t *name) {
   return 0;
 }
 
+/* A slot with neither a client nor a zombie in it is not in the game: it gets
+   no scoreboard line and no marker on the board. Our own slot always counts, so
+   the view is right before the first SEATS packet arrives. */
+static int slot_in_play(uint8_t role_mask, uint8_t seat_mask, int local_pid,
+                        int p) {
+  return (role_mask & (1u << p)) || (seat_mask & (1u << p)) || p == local_pid;
+}
+
 static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
                         const struct shot_state *shots,
                         const uint8_t names[MAX_PLAYERS][NAME_LEN],
@@ -137,6 +145,9 @@ static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
         if (ps[p].x == 255 && ps[p].y == 255) {
           continue;
         }
+        if (!slot_in_play(role_mask, seat_mask, local_pid, p)) {
+          continue;
+        }
         if (ps[p].x == x && ps[p].y == y) {
           ch = (char)('0' + p);
         }
@@ -148,8 +159,7 @@ static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
     char label[NAME_LEN + 1];
     /* An empty seat has no name and no score: the zombie mask alone cannot
        tell one apart from a human who simply is not moving. */
-    if (!(role_mask & (1u << p)) && !(seat_mask & (1u << p)) &&
-        p != local_pid) {
+    if (!slot_in_play(role_mask, seat_mask, local_pid, p)) {
       mvprintw(20 + p, 0, "%*s", NAME_LEN + 10, "");
       continue;
     }

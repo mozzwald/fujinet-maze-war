@@ -231,9 +231,10 @@ Behavior:
 - This is the only way a client can tell an empty seat from a human who
   happens to be standing still. The snapshot's zombie mask names the slots the
   AI drives; every other slot used to read as a player, so with two zombies and
-  one human the HUD still listed four. Clients now show a slot only when it is
-  a zombie, is in the seat mask, or is their own slot, and leave the line --
-  name and score both -- blank otherwise.
+  one human the HUD still listed four and the board still showed four wizards.
+  A slot is in play only when it is a zombie, is in the seat mask, or is the
+  client's own slot; one that is not gets no HUD line -- name and score both --
+  and no actor drawn on the board.
 - Clients must assume their own slot is occupied regardless of the mask, so the
   HUD is right before the first `SEATS` arrives.
 
@@ -316,8 +317,8 @@ Current server behavior:
   so `--zombies 3` is the configuration in which every slot is always occupied
   by a human or a zombie.
 - With a lower `--zombies`, slots beyond that count stay empty until a human
-  claims them. An empty slot still renders as a motionless wizard on the board,
-  but it is no longer listed in the HUD (see `0x44 SEATS`).
+  claims them. The server still holds a position for such a slot, but clients
+  neither list it in the HUD nor draw it on the board (see `0x44 SEATS`).
 - Humans displace zombies: each new client takes the lowest free slot, and the
   zombie mask is recomputed from the slots clients actually hold.
 

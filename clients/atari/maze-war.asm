@@ -606,6 +606,7 @@ ERASBOT	STA	(SCRPTR),Y
 	LDA	#0
 	STA	NET_ROLE_MASK
 	STA	NET_SEAT_MASK
+	STA	NET_VACANT_MASK
 	STA	NET_STAGE_LOCAL_PID
 	JSR	NET_SCORE_INIT
 ;
@@ -2367,6 +2368,62 @@ NET_SEAT_HAS
 NSH_YES	LDA	#1
 	RTS
 NSH_NO	LDA	#0
+	RTS
+;
+; A slot with neither a client nor a zombie in it is not in the game, so it must
+; not stand on the board either. Hide it the way a respawn-pending actor is
+; hidden -- NET_DEAD_MASK plus one erase pass -- and remember which slots we hid
+; in NET_VACANT_MASK, so a seat filling again un-hides only those and never
+; disturbs an actor that is genuinely awaiting respawn.
+;
+; The vacant branch keys off NET_DEAD_MASK rather than NET_VACANT_MASK so it is
+; self-correcting: anything that clears the dead bit underneath us -- the
+; first-snapshot NET_BOOT_HIDE reveal, a stray respawn -- makes the next pass
+; re-hide and re-erase exactly once. Erasing on every pass instead would fight
+; the map repair, since a vacant actor's stale cell may now hold a brick.
+;
+; Runs from the VBI beside NET_SCORELBL, which owns these masks, and ahead of
+; the move loop that performs the erase.
+NET_VACANT_UPDATE
+	LDX	#0
+NVU_LP
+	JSR	NET_SEAT_HAS		;a client holds it
+	BNE	NVU_FILLED
+	LDA	NET_ROLE_MASK		;...or the AI drives it
+	AND	PLRMSK,X
+	BNE	NVU_FILLED
+	LDA	NET_VACANT_MASK
+	ORA	PLRMSK,X
+	STA	NET_VACANT_MASK
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,X
+	BNE	NVU_NX			;already hidden and already erased
+	LDA	NET_DEAD_MASK
+	ORA	PLRMSK,X
+	STA	NET_DEAD_MASK
+	LDA	NET_ERASE_MASK
+	ORA	PLRMSK,X
+	STA	NET_ERASE_MASK
+	JMP	NVU_NX
+NVU_FILLED
+	LDA	NET_VACANT_MASK		;only ever un-hide what we hid
+	AND	PLRMSK,X
+	BEQ	NVU_NX
+	LDA	NET_VACANT_MASK
+	AND	PLRMSKINV,X
+	STA	NET_VACANT_MASK
+	LDA	NET_DEAD_MASK
+	AND	PLRMSKINV,X
+	STA	NET_DEAD_MASK
+	LDA	NET_ERASE_MASK
+	AND	PLRMSKINV,X
+	STA	NET_ERASE_MASK
+	LDA	#1			;let the reconcile place it where the server says
+	STA	NET_P_PENDING,X
+NVU_NX
+	INX
+	CPX	#4
+	BCC	NVU_LP
 	RTS
 ;
 ; X=slot -> clear its whole HUD line: the 11 label columns and the score digit
@@ -4173,6 +4230,7 @@ VBI_SHOW_OK
 	LDA	#0
 	STA	NET_SCORE_PEND
 	JSR	NET_SCORELBL
+	JSR	NET_VACANT_UPDATE	;before the move loop, which runs the erase
 VBI_SCR_OK
 	LDX	ACTIVE	;INIT LOOP COUNT
 CKMVLP	TXA
@@ -6400,6 +6458,7 @@ NET_NAMES	.DS	4*NAME_LEN	;per-slot display name, all spaces/0 = unnamed
 NET_SCORE_PEND	.DS	1	;request HUD role-label refresh
 NET_SEAT_PKT	.DS	4	;seat-mask packet staging + trailing checksum
 NET_SEAT_MASK	.DS	1	;slots a client actually holds, bit n = slot n
+NET_VACANT_MASK	.DS	1	;slots hidden by NET_VACANT_UPDATE, not by a respawn
 NET_GAME_SHOW	.DS	1	;0 until first full-map + snapshot commit is ready to display
 NET_SNAP_IDX	.DS	1	;snapshot / brick-delta collector index
 NET_SNAP_BUF	.DS	21	;snapshot staging buffer + trailing checksum

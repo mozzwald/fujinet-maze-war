@@ -374,6 +374,24 @@ exactly and ignores unknown ones, so a client and server that disagree about
   without that the per-snapshot score pass painted a `0` back over the blank
   line ten times a second.
 - Both Linux clients skip the same rows.
+
+Follow-up the same session: an unheld slot must not stand on the board either.
+`NET_VACANT_UPDATE` (VBI, beside `NET_SCORELBL` and ahead of the move loop that
+does the erase) hides it through the same `NET_DEAD_MASK` + one-shot
+`NET_ERASE_MASK` pass a respawn-pending actor uses, and records what it hid in
+`NET_VACANT_MASK` so filling a seat un-hides only those and never reveals an
+actor genuinely awaiting respawn. The vacant branch keys off `NET_DEAD_MASK`
+rather than `NET_VACANT_MASK`, so anything that clears the dead bit underneath
+it -- the first-snapshot `NET_BOOT_HIDE` reveal, a stray respawn -- makes the
+next pass re-hide and re-erase exactly once. Erasing unconditionally on every
+pass was rejected: `NET_SCORE_PEND` fires about once a second from the name
+rotation, and a vacant actor's stale cell may now hold a brick, so a repeated
+`ERASMAN` would fight the map repair. Both Linux clients gate the HUD row and
+the sprite through one `slot_in_play()` so the two cannot diverge.
+
+Display-list check after the ~105 bytes of growth: `TITLDISP` `$6C00`,
+`HOSTDISP` `$6DAE`, `GAME` `$6DCE`, block ends `$6FD0` before `HOSTSCR` at
+`$7000` -- all three lists still inside one 1K page (the Phase 5.1 trap).
 - `tests/seat_occupancy_smoke.sh` (new) asserts the mask live against the real
   server: broadcast on join without waiting for the repeat timer, zombie slots
   excluded, a second client added, and the repeat itself.
@@ -388,7 +406,20 @@ session (see Session Continuity).
 
 ### Known gaps (not addressed)
 
-- ~~`combat_world_authority_smoke.sh` flakiness~~ FIXED 2026-09-03. Two causes,
+- `combat_world_authority_smoke.sh` is flaky again as of 2026-09-08: measured
+  4/10 failures on master and 3/10 on the seat-occupancy branch, so it is
+  pre-existing and not caused by that work. It always fails the same way, a
+  `wait_snapshot_change` timeout on a move that never lands. Nothing in the
+  suite was changed to chase it. `combat_ordering_smoke.sh` measured 0/8 on
+  both, but failed once inside a back-to-back suite run, so treat both as
+  load-sensitive: a suite failure confined to these two is worth re-running
+  before believing.
+
+  Also fixed 2026-09-08: `seat_occupancy_smoke.sh` was first written on
+  PORT=9161, which `input_queue_smoke.sh` already uses. Moved to 9171. Check
+  `grep '^PORT=' tests/*.sh` before adding a smoke.
+
+- ~~`combat_world_authority_smoke.sh` flakiness~~ was FIXED 2026-09-03, see above. Two causes,
   both artefacts of the server reading one joy per tick: a direction or a fire
   sent exactly once could be overwritten by a neighbouring neutral before the
   tick read it (the tests run at `--tick-hz 4`, a 250ms window), and the BFS
@@ -397,7 +428,7 @@ session (see Session Continuity).
   occupancy is read live at every plan. 20 consecutive green runs.
 
 - Slot identity is address+port with no client token, so a fast reconnect still briefly shows the player's old slot until the 15s timeout expires. Self-healing; a proper fix needs a protocol change.
-- With `--zombies N` below 3, slots beyond N stay empty and still render as motionless wizards **on the board**. They are no longer listed in the HUD (see "Seat occupancy" above). Left as-is on the board because it is a design decision about what `--zombies` means.
+- ~~With `--zombies N` below 3, slots beyond N stay empty and render as motionless wizards.~~ FIXED 2026-09-08: an unheld slot is neither listed in the HUD nor drawn on the board (see "Seat occupancy" above). The server still keeps a position for it; only the presentation changed.
 
 ## Session Continuity
 

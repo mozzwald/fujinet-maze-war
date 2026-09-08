@@ -6,11 +6,12 @@
 #   - it keeps repeating, so a lost SEATS heals
 #   - zombie slots are NOT in it; the snapshot's zombie mask covers those
 # Clients need this to tell an empty seat from a human standing still: without
-# it a server with two zombies and one player still listed four names.
+# it a server with two zombies and one player still listed four names and drew
+# four wizards.
 
 set -eu
 
-PORT=9161
+PORT=9171
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 SERVER_BIN="$ROOT_DIR/build/maze-war-server"
 LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/seat-occupancy-smoke.XXXXXX.log")
@@ -179,6 +180,22 @@ grep -A8 -E "^NSNAP_SCORE" "$ATARI_SRC" | grep -E "JSR[$TAB ]+NET_SEAT_HAS" >/de
 # our own slot counts as occupied even before the first SEATS arrives
 grep -A6 -E "^NET_SEAT_HAS" "$ATARI_SRC" | grep -F "NET_STAGE_LOCAL_PID" >/dev/null || {
     echo "FAIL: the local slot is not assumed occupied" >&2; exit 1; }
+# an unheld slot must not stand on the board either
+grep -E "^NET_VACANT_UPDATE" "$ATARI_SRC" >/dev/null || {
+    echo "FAIL: Atari client still draws a wizard in an empty seat" >&2; exit 1; }
+# it hides through the same dead/erase masks a respawn uses...
+grep -A24 -E "^NET_VACANT_UPDATE" "$ATARI_SRC" | grep -F "NET_DEAD_MASK" >/dev/null || {
+    echo "FAIL: vacant slots are not hidden through NET_DEAD_MASK" >&2; exit 1; }
+grep -A24 -E "^NET_VACANT_UPDATE" "$ATARI_SRC" | grep -F "NET_ERASE_MASK" >/dev/null || {
+    echo "FAIL: hiding a vacant slot never erases what is drawn" >&2; exit 1; }
+# ...but tracks what it hid, so filling a seat cannot reveal an actor that is
+# genuinely awaiting respawn
+grep -E "^NET_VACANT_MASK" "$ATARI_SRC" >/dev/null || {
+    echo "FAIL: no record of which slots were hidden as vacant" >&2; exit 1; }
+# and it runs from the VBI ahead of the move loop that performs the erase
+grep -A2 -E "JSR[$TAB ]+NET_SCORELBL" "$ATARI_SRC" \
+    | grep -E "JSR[$TAB ]+NET_VACANT_UPDATE" >/dev/null || {
+    echo "FAIL: vacancy is not refreshed with the HUD labels" >&2; exit 1; }
 
 # Both Linux clients honour the same mask.
 for c in "$ROOT_DIR/clients/linux/main.c" "$ROOT_DIR/clients/linux/sdl_main.c"; do
@@ -186,6 +203,13 @@ for c in "$ROOT_DIR/clients/linux/main.c" "$ROOT_DIR/clients/linux/sdl_main.c"; 
         echo "FAIL: $c does not know PKT_SEATS" >&2; exit 1; }
     grep -F "seat_mask" "$c" >/dev/null || {
         echo "FAIL: $c does not track the seat mask" >&2; exit 1; }
+    # the same test gates the HUD line and the sprite, so they cannot diverge
+    grep -F "slot_in_play" "$c" >/dev/null || {
+        echo "FAIL: $c still draws an actor in an empty seat" >&2; exit 1; }
+    if [ "$(grep -c "slot_in_play(" "$c")" -lt 3 ]; then
+        echo "FAIL: $c applies the seat test to only one of HUD/board" >&2
+        exit 1
+    fi
 done
 
 echo "seat occupancy smoke passed"
