@@ -1117,10 +1117,6 @@ NHR_PMCLR
 NET_WAIT_TICK
 	JSR	NET_NAME_RETRY
 	JSR	NET_IDLE_TICK
-	LDA	NET_GAME_SHOW	;only once the scoreboard exists
-	BEQ	NWT_NODIAG
-	JSR	NET_DIAG_DRAW
-NWT_NODIAG
 	INC	NET_WAIT_LO
 	BNE	NWT_X
 	INC	NET_WAIT_HI
@@ -1171,11 +1167,58 @@ NNR_GO
 	LDX	NET_LOCAL_PID
 	CPX	#4
 	BCS	NNR_X
-	JSR	NET_NAME_HAS
-	BNE	NNR_X		;server already echoed it back
+	JSR	NET_NAME_ECHO_OK
+	BEQ	NNR_X		;the server is showing exactly what we typed
 	LDA	#1
 	STA	NET_NAME_PEND
 NNR_X	RTS
+;
+; X = our slot -> A=0 (Z set) when the name the server is echoing for that slot
+; matches the one we typed, non-zero when it does not. Clobbers X and Y.
+;
+; It used to be enough to ask whether the slot had any name at all. But the
+; client->server direction is a raw byte stream with no checksum -- only the
+; server->client direction is framed and summed -- so a damaged name is
+; accepted verbatim and then rebroadcast to every client for the rest of the
+; game. One session ran start to finish with MOZZEMU shown as FDZZEMU.
+; Checking the echo against what we typed makes that a two-second glitch.
+;
+; The comparison mirrors the server's sanitize: fold to uppercase and pad with
+; spaces. Every character TXT_INPUT accepts is one the server keeps, so a
+; matching name always settles and this never retries forever.
+NET_NAME_ECHO_OK
+	TXA
+	ASL
+	ASL
+	ASL
+	STA	NET_NAME_OFF	;slot*8
+	LDY	#0
+NNE_LP
+	LDA	NAMEBUF,Y
+	BNE	NNE_UP
+	LDA	#$20		;short names are space padded
+NNE_UP	CMP	#'a'
+	BCC	NNE_CMP
+	CMP	#'z'+1
+	BCS	NNE_CMP
+	SEC
+	SBC	#$20		;and folded to uppercase
+NNE_CMP	STA	NET_NAME_CHK
+	TYA
+	CLC
+	ADC	NET_NAME_OFF
+	TAX
+	LDA	NET_NAMES,X
+	CMP	NET_NAME_CHK
+	BNE	NNE_DIFF
+	INY
+	CPY	#NAME_LEN
+	BCC	NNE_LP
+	LDA	#0
+	RTS
+NNE_DIFF
+	LDA	#1
+	RTS
 ;
 ;DRAW THE PENDING STATUS MESSAGE ON HOST SCREEN ROW 2. HOST_MSG=0 MEANS
 ;THERE IS NOTHING TO SAY. STRINGS ARE SCREEN CODES TERMINATED BY $FF SO
@@ -2344,24 +2387,6 @@ NND_SP
 	TAX
 	RTS
 ;
-; Frames rejected by the checksum or by framing, in the fourth scoreboard row's
-; free columns. Reads 00 on a healthy link; a climbing value means the link is
-; damaging frames. The other counters that found the corruption (serial error
-; latch, resync bytes, map repairs, cells rewritten, brick deltas) are still
-; maintained in RAM for peeking, they are just no longer drawn.
-NET_DIAG_DRAW
-	LDA	NET_CK_BAD
-	LSR
-	LSR
-	LSR
-	LSR
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+62
-	LDA	NET_CK_BAD
-	AND	#$0F
-	JSR	NET_HEXDIG
-	STA	BOTSCRN+63
-	RTS
 ; C set when a live actor occupies the cell the repair is about to paint.
 ; Column is the current screen byte offset halved; row is in X, which the
 ; caller's walk depends on, so it is saved and restored.
@@ -6286,6 +6311,8 @@ NET_SNAPLOG	.DS	128	;16 x 8: bit,locx,locy,px,py,dir,stick,pend
 NET_NAME_IDX	.DS	1	;name collector index
 NET_NAME_PEND	.DS	1	;our name is queued for transmission
 NET_NAME_TMR	.DS	1	;frames until the next name retry check
+NET_NAME_OFF	.DS	1	;slot*8 while checking the server's echo
+NET_NAME_CHK	.DS	1	;expected character while checking the echo
 HOST_COL	.DS	1	;TXT_DRAW screen column
 HOST_SRC	.DS	1	;TXT_DRAW buffer index
 NET_NAME_PKT	.DS	NAME_PKT_LEN+1	;name packet staging + trailing checksum
