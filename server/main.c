@@ -73,6 +73,17 @@ enum { SEAT_REPEAT_MS = 1000 };
    could take seconds to vanish. Echo it on following ticks like SHOT clears
    do -- one packet per tick, never a burst. */
 enum { BRICK_ECHO_MAX = 8, BRICK_ECHO_REPEATS = 2 };
+/* RESPAWN hides an actor (pending) and un-hides it somewhere else (final), and
+   it was the one transition packet still sent exactly once. Every other
+   once-only packet in this server was given repeats for the same reason: a
+   SHOT clear bursts three times, a BRICK_DELTA echoes, NAME rotates, the map
+   resyncs. Losing a pending RESPAWN leaves the victim's wizard standing at the
+   cell it died on until the final spawn moves it two seconds later -- with a
+   hole in it where the killing shot's own clear blanked the characters it had
+   drawn over. Losing a final RESPAWN is worse: the client keeps that actor
+   hidden until the next death, because only an explicit final spawn clears the
+   hide. Neither shows up on loopback, which never drops a packet. */
+enum { RESPAWN_ECHO_REPEATS = 2 };
 /* Display name length. The Atari HUD gives each slot columns 4..11 of its
    20-column line before the score digit at column 15, so 8 is what fits. */
 #define NAME_LEN 8
@@ -413,6 +424,44 @@ static struct {
   uint8_t y;
   uint8_t left;
 } g_brick_echo[BRICK_ECHO_MAX];
+
+/* One pending echo per slot: a later RESPAWN for a slot supersedes an earlier
+   one, so a final spawn cannot be trailed by a stale hide. */
+static struct {
+  uint8_t pkt[6];
+  uint8_t left;
+} g_respawn_echo[MAX_PLAYERS];
+
+static void queue_respawn_echo(const uint8_t *pkt) {
+  uint8_t pid = pkt[2];
+  if (pid >= MAX_PLAYERS) {
+    return;
+  }
+  memcpy(g_respawn_echo[pid].pkt, pkt, 6);
+  g_respawn_echo[pid].left = RESPAWN_ECHO_REPEATS;
+}
+
+/* At most one echo per tick, like the brick echo: a burst is what loses
+   packets in the first place. The sequence byte is re-stamped so the repeat is
+   a fresh frame rather than a duplicate of one the client may have dropped. */
+static void flush_respawn_echo(int sock, struct client_slot *clients,
+                               uint8_t *seq, int debug) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (g_respawn_echo[i].left == 0) {
+      continue;
+    }
+    g_respawn_echo[i].left--;
+    uint8_t pkt[6];
+    memcpy(pkt, g_respawn_echo[i].pkt, 6);
+    pkt[1] = (*seq)++;
+    broadcast_packet(sock, clients, pkt, sizeof(pkt));
+    if (debug) {
+      printf("TX respawn echo pid=%u flags=%02X\n", (unsigned)pkt[2],
+             (unsigned)pkt[5]);
+    }
+    return;
+  }
+}
 
 static void queue_brick_echo(uint8_t x, uint8_t y) {
   int spare = -1;
@@ -932,6 +981,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
       players[pid].y = sy;
       build_respawn((*seq)++, pid, sx, sy, 0x03, out, sizeof(out));
       broadcast_packet(sock, clients, out, sizeof(out));
+      queue_respawn_echo(out);
       if (debug) {
         printf("TX respawn pid=%u x=%u y=%u\n", pid, sx, sy);
       }
@@ -1229,6 +1279,7 @@ static void start_shot(int shooter, struct player_state *players,
           uint8_t rpkt[6];
           build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, rpkt, sizeof(rpkt));
           broadcast_packet(sock, clients, rpkt, sizeof(rpkt));
+          queue_respawn_echo(rpkt);
         }
         /* Defensive clear: ensure any stale client-side shot sprite is removed. */
         {
@@ -1317,6 +1368,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
         uint8_t pkt[6];
         build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, pkt, sizeof(pkt));
         broadcast_packet(sock, clients, pkt, sizeof(pkt));
+        queue_respawn_echo(pkt);
         if (debug) {
           printf("TX respawn pending pid=%u\n", (unsigned)p);
           {
@@ -1462,6 +1514,7 @@ static void step_players(struct player_state *players, struct shot_state *shots,
       uint8_t pkt[6];
       build_respawn((*seq)++, (uint8_t)i, sx, sy, 0x03, pkt, sizeof(pkt));
       broadcast_packet(sock, clients, pkt, sizeof(pkt));
+      queue_respawn_echo(pkt);
       if (debug) {
         printf("TX respawn pid=%u x=%u y=%u\n", (unsigned)i, sx, sy);
         {
@@ -1846,6 +1899,9 @@ int main(int argc, char **argv) {
       /* Before the step, so an echo never shares a tick with the break that
          produced it: one brick packet per tick, never two. */
       flush_brick_echo(sock, clients, &seq, debug);
+      /* Same rule as the brick echo: one repeat per tick, ahead of the step, so
+         an echo never shares a tick with the transition that produced it. */
+      flush_respawn_echo(sock, clients, &seq, debug);
       /* Sets this tick's authoritative joy and the ack that goes with it. */
       apply_queued_input(clients, players, debug, now);
       step_players(players, shots, brick_bits, sock, clients, &seq, debug,

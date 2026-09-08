@@ -239,7 +239,7 @@ if [ "${echoes:-0}" -lt 4 ]; then
 fi
 # echoes go out one per tick, ahead of the step, so a break and its echo never
 # share a tick
-grep -A3 -F "flush_brick_echo(sock, clients, &seq, debug);" "$SERVER_SRC" \
+grep -A8 -F "flush_brick_echo(sock, clients, &seq, debug);" "$SERVER_SRC" \
     | grep -F "step_players(" >/dev/null || {
     echo "FAIL: brick echo no longer flushes before the step" >&2
     exit 1

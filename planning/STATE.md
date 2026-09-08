@@ -474,6 +474,119 @@ read as though four players were pinned against walls when nothing was
 happening. That cost real time during this diagnosis. It now logs only when a
 direction was actually asked for.
 
+### RESPAWN was the last un-echoed transition packet (2026-09-08)
+
+Hardware report: when the *other* player shot this one, the victim's wizard
+stayed at its death cell, missing its head and feet, until it respawned
+elsewhere. Shooting the other player looked fine.
+
+Could **not** be reproduced on the emulator, over an hour of trying: two clients
+(Atari under FujiNet-PC plus a scripted UDP bot) on an open map with a zombie,
+the Atari both stationary and walking, sampled at ~45 Hz against a leak
+detector. That non-reproduction is the finding, not a dead end -- loopback never
+drops a packet.
+
+RESPAWN was the only transition packet still broadcast exactly once. Everything
+else once-only in this server was given repeats precisely because a single lost
+packet left a stale sprite: a SHOT clear bursts three times, BRICK_DELTA echoes
+(`BRICK_ECHO_REPEATS`), NAME rotates at 1 Hz, the map resyncs every 3 s. RESPAWN
+never got the same treatment, and it is the packet that hides and un-hides an
+actor.
+
+That accounts for the whole report:
+
+- Lost **pending** RESPAWN: the client never sets `NET_DEAD_MASK`, so `ERASMAN`
+  never runs for the victim. Its wizard stands on the death cell. The server
+  holds that actor's position fixed, so nothing else moves or redraws it. Two
+  seconds later the final spawn arrives and `NET_AUTH_REPOS` erases the old cell
+  on its way out -- "until it respawned in the new location", exactly.
+- The missing head and feet: the killing shot is drawn *into* the victim's cell,
+  then the server's SHOT clear blanks the two characters the shot occupied.
+  Those are characters the wizard was using, so the corpse is left mutilated
+  rather than whole.
+- The asymmetry: it needs a dropped packet, so it depends on which link lost it,
+  not on who shot whom.
+- Lost **final** RESPAWN is worse and was never reported only because it is
+  rarer: `NSNAP_KEEPDEAD` keeps an actor hidden until an explicit final spawn,
+  so that actor stays invisible until its next death.
+
+Fix: `queue_respawn_echo` / `flush_respawn_echo`, one slot each, one repeat per
+tick ahead of the step, exactly like the brick echo -- a later RESPAWN for a
+slot supersedes an earlier one so a final spawn is never trailed by a stale
+hide. `tests/respawn_echo_smoke.sh` asserts both transitions go out more than
+once, and fails with the echo disabled.
+
+**Rig notes, so this is not re-derived.** The emulator rig does work; the earlier
+"no SIO command frames" conclusion was wrong. `atari_load` of
+`build/maze-war-net.xex` leaves the handler resident (verified: `$2800` reads
+`4C 27 28`). Boot sequence: reset, load, run 240 frames, poke `HOSTBUF` (`$7E55`)
+with the host string and `NAMEBUF` (`$7E75`) with a name, press return twice, run
+300 frames. The pokes are needed because the MCP key table has no `.` and the
+prompt ignores backspace. Driving the emulator through its AI socket directly
+(`{"cmd": "peek", ...}`, length-prefixed JSON) is ~3.7 ms per call, which is fast
+enough to sample the screen and zero page at ~45 Hz; the MCP `run_until` path
+single-steps and distorts timing badly enough to manufacture artefacts.
+
+The leak detector is worth keeping: run the server on an open map (outer wall
+only), then every interior character must be blank except the cells a visible
+actor occupies. `RNDX/RNDY` (`$A8`/`$AC`), `MOVEST` (`$B4`), `DIR` (`$94`) and
+`NET_DEAD_MASK` (`$7C00`) give the expected set; `GAMESCR` is `$73C0`, 40 bytes
+per row, two bytes per cell.
+
+Two further defects it found, **not fixed, no repro case written yet**:
+
+- Actors standing on adjacent cells erase each other. `ERASMAN` blanks the
+  neighbouring cell too when `MOVEST != 0` (correct for the actor's own
+  animation) but nothing repaints whoever else was standing there, and a
+  stationary actor is not redrawn until it next moves. Observed directly: slots
+  1 and 2 at `(15,17)` and `(14,17)`, both flagged visible, both unpainted.
+- A stale painted cell was seen at `(9,10)` with no actor on it. Only observed
+  under the distorting `run_until` single-step regime, so it may be an artefact
+  of that; recorded rather than trusted.
+
+### Remote-actor lag: investigation only, nothing changed (2026-09-08)
+
+Asked to investigate, not fix. Local movement is predicted and feels fine; a
+remote actor visibly lags and snaps, worst when playing on one machine while
+watching the other's screen.
+
+The client has no render-only state for remote actors -- the Phase 4 premise --
+so a remote actor is moved by walking `LOCX/LOCY` toward the last authoritative
+cell (`REMOTE_FOLLOW`), with `CKMVAP` hard-snapping when the gap gets large.
+Numbers that set the feel:
+
+- Snapshots arrive at the server's 10 Hz. The display is 50/60 Hz, so a remote
+  actor has one authoritative sample per 5-6 frames and nothing to interpolate
+  between them.
+- `REMOTE_FOLLOW` only steps when the *next* cell in the actor's authoritative
+  joy direction equals the authoritative cell, i.e. it re-derives the path one
+  cell at a time from position plus joy. If a snapshot is lost, the actor stands
+  still for that tick and then has two cells to make up.
+- Recovery thresholds: `NET_RECOVER_P1 = 3` (bounded recovery), `NET_RECON_P1 =
+  10` (catastrophic hard snap), `NET_DESYNC_MAX = 3` failed recoveries before a
+  forced snap. So a remote actor absorbs small gaps by walking and large ones by
+  teleporting, with nothing in between -- which is what "snapping" is.
+- One-way delay is what the watcher sees twice over: the mover's input reaches
+  the server, the server steps, and the snapshot reaches the watcher. At 10 Hz
+  plus FujiNet's serial link that is comfortably over 150 ms before any loss.
+- The snapshot sequence filter accepts only strictly-forward deltas, so a
+  reordered or duplicated snapshot is dropped outright rather than merged.
+
+Two things worth checking before any smoothing work, in this order:
+
+1. Whether the newly fixed acked-but-discarded input bug (see "Combat smoke
+   flakiness") was contributing. It made the server drop inputs it had already
+   acked whenever a queue entry waited past `INPUT_STALE_MS`; on a link with
+   real latency that is far more reachable than on loopback, and every dropped
+   input is a step the watcher never sees. This fix landed after the reported
+   session, so the lag should be re-judged on the current build first.
+2. Whether the gaps are lost snapshots rather than interpolation. The client
+   already counts frames rejected by checksum or framing; a counter for accepted
+   snapshots per second on each side would separate "the update never arrived"
+   from "the update arrived and was rendered badly". Smoothing a lossy stream
+   just turns a jump into a wrong slide, which is the trap the Phase 4 notes
+   already warn about.
+
 ### Known gaps (not addressed)
 
 - ~~`combat_world_authority_smoke.sh` and `combat_ordering_smoke.sh` flakiness~~
@@ -515,7 +628,7 @@ rather than `atari_load`. Two smaller traps: the MCP key table has no `.` key
 (poke the address into `HOSTBUF`, `$7E54`, instead) and the prompt ignores
 backspace from the MCP key path.
 
-Test suite is 25 smokes, all green (four consecutive full-suite runs). Emulator workflow note: start FujiNet-PC
+Test suite is 26 smokes, all green (two consecutive full-suite runs). Emulator workflow note: start FujiNet-PC
 *first* on a non-default NetSIO port, then the emulator on that same port
 (`fujinet_start netsio_port: N` then `atari_start netsio: true, netsio_port: N`);
 starting the emulator first makes it bind the port so the sidecar cannot. The
