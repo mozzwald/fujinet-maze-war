@@ -370,3 +370,42 @@ Test suite is 17 smokes, all green. Emulator workflow note: start FujiNet-PC
 starting the emulator first makes it bind the port so the sidecar cannot. The
 game server must also hold UDP 9000 before any client opens a stream, or
 FujiNet-PC takes it.
+
+## Zero-page collision with the NetStream handler: investigated, largely ruled out
+
+Prompted by a hardware report of graphics being "written over", worsening with
+play, and by the fact that adding `RNDX/RNDY` grew the game's zero-page block
+from `$80-$E0` to `$80-$E8`.
+
+`NSENGINE.OBX` disassembled in place (`$2800-$2CC1`). The zero-page addresses it
+actually touches are `$00`, `$0E`, `$10`, `$1F`, `$23`, `$82`, `$83` and `$EE`.
+Only `$82/$83` falls inside the game's block — that is `POINTER` — and it is the
+argument-pointer convention for **`NS_INIT` only** (`NS_BASE+27`, `$29D0`, which
+reads its parameter block through `($82),Y` and advances it by 5). `NS_SEND`,
+`NS_RECV`, `NS_AVAIL` and `NS_STAT` touch no zero page.
+
+So there is **no ongoing zero-page contention during play**, and the block's
+growth to `$E8` collides with nothing. `NET_SAVPTR` already brackets the one
+call that matters.
+
+Two things worth keeping:
+
+- `NS_INIT` runs `PHP/SEI`, which blocks IRQ but **not** the VBI, which is an
+  NMI. The game VBI draws through `POINTER`. So a VBI landing inside `NS_INIT`
+  can corrupt the handler's argument pointer. One call per connect, so it cannot
+  explain progressive corruption, but it is a real intermittent-connect risk.
+- The handler uses `$EE`. The game's block now ends at `$E8` — a margin of five
+  bytes. Adding another few bytes to the per-player data would collide for real.
+
+## Method note
+
+Three measurements built this session turned out not to measure what they
+claimed, each caught only by a deliberate sanity check:
+
+- blocked A/B on the emulator (session drift landed on one arm; manufactured a
+  5x regression that did not exist)
+- a probe reading `MOVEST` at an address from the wrong build's `.lab`
+- a disassembly filter whose regex anchored at end-of-line, while the
+  disassembler appends `;SYMBOL` comments -- it reported *zero* zero-page usage
+
+Check that an instrument reports something before trusting it to report nothing.

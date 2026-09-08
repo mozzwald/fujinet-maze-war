@@ -1,4 +1,15 @@
 ref/
 build/
 AGENTS.md
+
+# Planning docs live in planning/ and are tracked. This entry stays so that a
+# tool recreating the old hidden directory does not quietly commit it again.
 .planning/
+
+# Local scratch and captured artifacts, kept on disk but out of the branch.
+debug/*.log
+debug/*.png
+delta.bin
+clients/atari/map.asm
+clients/atari/map1.txt
+clients/atari/map2.asm
