@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready
-stopped_at: Phases 3, 3.1, 5 and 5.1 complete and human-approved. Phase 4 render-state separation is next and is now the only substantial work left before Phase 6.
-last_updated: "2026-09-04T00:00:00.000Z"
+stopped_at: HUD seat occupancy (0x44 SEATS) landed 2026-09-08, awaiting the human Atari check. Phases 3, 3.1, 5 and 5.1 complete and human-approved. Phase 4 render-state separation is next.
+last_updated: "2026-09-08T00:00:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 6
@@ -345,6 +345,47 @@ prompt screen switches `CHBASE` to ROM (`HOST_BOOT` writes `#$E0`) while the
 scoreboard uses the embedded font, so the charset-selection path needs checking
 too, not just the glyphs.
 
+### Seat occupancy in the HUD (2026-09-08)
+
+Reported: with two zombies and one player connected, the scoreboard still
+listed four participants -- one name, two `ZOMBIE`s and a phantom `WIZARD` with
+a score.
+
+Root cause: clients had no way to tell an empty seat from a human standing
+still. The snapshot's `flags` bits 3..6 carry the zombie mask, which names the
+slots the AI drives; every other slot was assumed to be a player. The `flags`
+byte has no spare bit (bit0 valid, 1..2 recipient pid, 3..6 zombie mask, 7
+ack_valid).
+
+Chosen fix: a new `0x44 SEATS` packet (`type, seq, mask`), broadcast on change
+and repeated every `SEAT_REPEAT_MS` (1s) like `NAME`. A new packet type rather
+than a wider snapshot on purpose: the Atari dispatcher length-checks each type
+exactly and ignores unknown ones, so a client and server that disagree about
+`SEATS` degrade to today's behaviour instead of dropping every snapshot.
+
+- `server/main.c`: `compute_seat_mask()` / `build_seats()`; the broadcast sits
+  **after** `reap_timed_out_clients` so a timed-out seat is reported free on the
+  same pass that frees it.
+- `clients/atari/maze-war.asm`: `NET_RX_44DONE` stores `NET_SEAT_MASK` and
+  raises `NET_SCORE_PEND`; `NET_SEAT_HAS` answers "is this slot held", counting
+  our own `NET_STAGE_LOCAL_PID` as occupied so the HUD is right before the first
+  `SEATS` lands; `NET_LBL_BLANK` clears a line's 11 label columns and its score
+  digit. `NSLBLP` blanks unheld slots, and `NSNAP_SCORE` skips them too --
+  without that the per-snapshot score pass painted a `0` back over the blank
+  line ten times a second.
+- Both Linux clients skip the same rows.
+- `tests/seat_occupancy_smoke.sh` (new) asserts the mask live against the real
+  server: broadcast on join without waiting for the repeat timer, zombie slots
+  excluded, a second client added, and the repeat itself.
+
+Note observed while writing the test: with `--zombies 2` the second client
+takes slot **3**, not slot 1. `find_or_add_client` prefers a free non-zombie
+slot over displacing the AI, so `--zombies N` shrinks only once the free slots
+run out.
+
+Not yet verified on the Atari: the emulator rig could not be brought up this
+session (see Session Continuity).
+
 ### Known gaps (not addressed)
 
 - ~~`combat_world_authority_smoke.sh` flakiness~~ FIXED 2026-09-03. Two causes,
@@ -356,15 +397,27 @@ too, not just the glyphs.
   occupancy is read live at every plan. 20 consecutive green runs.
 
 - Slot identity is address+port with no client token, so a fast reconnect still briefly shows the player's old slot until the 15s timeout expires. Self-healing; a proper fix needs a protocol change.
-- With `--zombies N` below 3, slots beyond N stay empty and render as motionless wizards. Documented rather than changed, since it is a design decision about what `--zombies` means.
+- With `--zombies N` below 3, slots beyond N stay empty and still render as motionless wizards **on the board**. They are no longer listed in the HUD (see "Seat occupancy" above). Left as-is on the board because it is a design decision about what `--zombies` means.
 
 ## Session Continuity
 
-Last session: 2026-09-04
-Stopped at: Phase 5.1 (link integrity and frame resynchronisation) closed and human-confirmed; Phase 5 human handoff confirmation received. Next: Phase 4 render-state separation.
+Last session: 2026-09-08
+Stopped at: HUD seat occupancy (`0x44 SEATS`) implemented on the server, the
+Atari client and both Linux clients; full smoke suite green. Awaiting the human
+Atari check. Next: Phase 4 render-state separation.
 Resume file: .planning/ROADMAP.md
 
-Test suite is 17 smokes, all green. Emulator workflow note: start FujiNet-PC
+**Emulator rig did not come up on 2026-09-08.** `atari_load` of
+`build/maze-war-net.xex` boots to the host prompt, but the Atari then issues no
+SIO command frames at all (`netsio_status` `message_counts` shows only
+`0xc4`/`0xc5` ping/pong), so `NS_INIT` fails and the client reports "NO REPLY".
+The concatenated handler is evidently not resident when loaded through the BIN
+loader; next attempt should boot from a FujiNet-mounted disk via `fujinet_boot`
+rather than `atari_load`. Two smaller traps: the MCP key table has no `.` key
+(poke the address into `HOSTBUF`, `$7E54`, instead) and the prompt ignores
+backspace from the MCP key path.
+
+Test suite is 23 smokes, all green. Emulator workflow note: start FujiNet-PC
 *first* on a non-default NetSIO port, then the emulator on that same port
 (`fujinet_start netsio_port: N` then `atari_start netsio: true, netsio_port: N`);
 starting the emulator first makes it bind the port so the sidecar cannot. The

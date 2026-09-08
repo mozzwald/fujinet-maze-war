@@ -195,7 +195,7 @@ grep -E "^NET_NAME_DRAW" "$ATARI_SRC" >/dev/null
 grep -E "^NET_NAME_RETRY" "$ATARI_SRC" >/dev/null
 grep -E "^NET_TX_BUILD_NAME" "$ATARI_SRC" >/dev/null
 # zombie slots keep their ZOMBIE label whatever name is stored
-grep -A5 -E "^NSLBLP" "$ATARI_SRC" | grep -F "ZOMTXT" >/dev/null
+grep -A12 -E "^NSLBLP" "$ATARI_SRC" | grep -F "ZOMTXT" >/dev/null
 
 # Both Linux clients speak the same NAME contract as the Atari.
 for c in "$ROOT_DIR/clients/linux/main.c" "$ROOT_DIR/clients/linux/sdl_main.c"; do

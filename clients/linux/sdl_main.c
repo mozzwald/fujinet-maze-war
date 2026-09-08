@@ -21,6 +21,7 @@ enum {
   PKT_DELTA = 0x41,
   PKT_SHOT = 0x42,
   PKT_NAME = 0x43,
+  PKT_SEATS = 0x44,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52
@@ -88,6 +89,9 @@ struct game_state {
   struct fx_state fx[FX_MAX];
   int fx_cursor;
   uint8_t zombie_mask;
+  /* Slots a client actually holds. The zombie mask only names AI-driven
+     slots, so without this an empty seat looks like a silent human. */
+  uint8_t seat_mask;
   uint8_t names[MAX_PLAYERS][NAME_LEN];
   int local_pid;
   int have_snapshot;
@@ -707,6 +711,10 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
     char label[NAME_LEN + 1];
     const char *role;
     Uint32 color = theme->player_colors[i];
+    if (!(g->zombie_mask & (1u << i)) && !(g->seat_mask & (1u << i)) &&
+        i != g->local_pid) {
+      continue; /* nobody in this seat: no name and no score */
+    }
     if (g->zombie_mask & (1u << i)) {
       role = "ZOMBIE";
     } else if (name_is_set(g->names[i])) {
@@ -1014,6 +1022,11 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
     return;
   }
 
+  if (n >= 3 && buf[0] == PKT_SEATS) {
+    g->seat_mask = (uint8_t)(buf[2] & 0x0F);
+    return;
+  }
+
   if (n >= 3 + NAME_LEN && buf[0] == PKT_NAME) {
     uint8_t np = buf[2];
     if (np < MAX_PLAYERS) {
@@ -1275,6 +1288,7 @@ int main(int argc, char **argv) {
   game.local_pid = opt_pid;
   game.zombie_mask = 0;
   memset(game.names, 0, sizeof(game.names));
+  game.seat_mask = 0;
   memset(my_name, ' ', sizeof(my_name));
   {
     size_t i;

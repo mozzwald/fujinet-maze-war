@@ -17,6 +17,8 @@ This document matches current server behavior in `server/main.c`.
 | 0x40 | SNAPSHOT    | S->C  | 20   | Authoritative world/player state |
 | 0x41 | DELTA       | C->S  | 4    | Client input update |
 | 0x42 | SHOT        | S->C  | 6    | Shot state update |
+| 0x43 | NAME        | S<->C | 11   | Per-slot display name |
+| 0x44 | SEATS       | S->C  | 3    | Which slots a client holds |
 | 0x50 | BRICK_FULL  | S->C  | 51   | Full brick bitset |
 | 0x51 | BRICK_DELTA | S<->C | 4    | Brick removed |
 | 0x52 | RESPAWN     | S<->C | 6    | Respawn request/event |
@@ -213,6 +215,28 @@ Behavior:
   its 20-column line before the score digit at column 15. Zombie slots always
   render `ZOMBIE` regardless of any stored name.
 
+### 0x44 SEATS (3 bytes, S->C)
+
+```
+[0] type = 0x44
+[1] seq
+[2] seat mask (bit `n` = slot `n` is held by a connected client)
+```
+
+Behavior:
+- Broadcast whenever the mask changes, so a join, a drop or a slot handoff
+  shows up immediately, and repeated every `SEAT_REPEAT_MS` (1s) because the
+  packet is unacknowledged like `NAME`.
+- Bits 4..7 are reserved and currently zero.
+- This is the only way a client can tell an empty seat from a human who
+  happens to be standing still. The snapshot's zombie mask names the slots the
+  AI drives; every other slot used to read as a player, so with two zombies and
+  one human the HUD still listed four. Clients now show a slot only when it is
+  a zombie, is in the seat mask, or is their own slot, and leave the line --
+  name and score both -- blank otherwise.
+- Clients must assume their own slot is occupied regardless of the mask, so the
+  HUD is right before the first `SEATS` arrives.
+
 ### 0x50 BRICK_FULL (51 bytes, S->C)
 
 Full brick layout bitset (`20*19=380` bits => 48 bytes).
@@ -292,7 +316,8 @@ Current server behavior:
   so `--zombies 3` is the configuration in which every slot is always occupied
   by a human or a zombie.
 - With a lower `--zombies`, slots beyond that count stay empty until a human
-  claims them. An empty slot still renders as a motionless wizard on clients.
+  claims them. An empty slot still renders as a motionless wizard on the board,
+  but it is no longer listed in the HUD (see `0x44 SEATS`).
 - Humans displace zombies: each new client takes the lowest free slot, and the
   zombie mask is recomputed from the slots clients actually hold.
 

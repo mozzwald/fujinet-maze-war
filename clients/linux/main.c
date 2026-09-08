@@ -20,6 +20,7 @@ enum {
   PKT_DELTA = 0x41,
   PKT_SHOT = 0x42,
   PKT_NAME = 0x43,
+  PKT_SEATS = 0x44,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52
@@ -121,7 +122,7 @@ static int name_is_set(const uint8_t *name) {
 static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
                         const struct shot_state *shots,
                         const uint8_t names[MAX_PLAYERS][NAME_LEN],
-                        uint8_t role_mask, int local_pid) {
+                        uint8_t role_mask, uint8_t seat_mask, int local_pid) {
   for (int y = 0; y < 19; y++) {
     for (int x = 0; x < 20; x++) {
       int idx = y * 20 + x;
@@ -145,6 +146,13 @@ static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
   }
   for (int p = 0; p < MAX_PLAYERS; p++) {
     char label[NAME_LEN + 1];
+    /* An empty seat has no name and no score: the zombie mask alone cannot
+       tell one apart from a human who simply is not moving. */
+    if (!(role_mask & (1u << p)) && !(seat_mask & (1u << p)) &&
+        p != local_pid) {
+      mvprintw(20 + p, 0, "%*s", NAME_LEN + 10, "");
+      continue;
+    }
     if (role_mask & (1u << p)) {
       snprintf(label, sizeof(label), "ZOMBIE");
     } else if (name_is_set(names[p])) {
@@ -301,6 +309,7 @@ int main(int argc, char **argv) {
   uint8_t names[MAX_PLAYERS][NAME_LEN];
   memset(names, 0, sizeof(names));
   uint8_t role_mask = 0;
+  uint8_t seat_mask = 0;
 
   /* Our own name, space-padded the way the wire format wants it. */
   uint8_t my_name[NAME_LEN];
@@ -365,6 +374,8 @@ int main(int argc, char **argv) {
             players[rp].y = buf[4];
           }
         }
+      } else if (n >= 3 && buf[0] == PKT_SEATS) {
+        seat_mask = (uint8_t)(buf[2] & 0x0F);
       } else if (n >= 3 + NAME_LEN && buf[0] == PKT_NAME) {
         uint8_t np = buf[2];
         if (np < MAX_PLAYERS) {
@@ -519,7 +530,8 @@ int main(int argc, char **argv) {
     }
 
     if (now >= next_redraw) {
-      draw_screen(bricks, players, shots, names, role_mask, local_pid);
+      draw_screen(bricks, players, shots, names, role_mask, seat_mask,
+                  local_pid);
       next_redraw = now + 33;
     }
   }

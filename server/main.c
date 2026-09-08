@@ -19,6 +19,7 @@ enum {
   PKT_DELTA = 0x41,
   PKT_SHOT = 0x42,
   PKT_NAME = 0x43,
+  PKT_SEATS = 0x44,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52
@@ -61,6 +62,12 @@ enum { BRICK_RESYNC_MS = 3000 };
    on a slow timer: at tick rate it was adding a packet to every single tick,
    which is bandwidth taken from BRICK_DELTA on a link that drops things. */
 enum { NAME_ROTATE_MS = 1000 };
+/* Which slots a human actually holds. Clients cannot derive this: the zombie
+   mask in the snapshot only tells them which slots the AI drives, so an empty
+   seat and a silent human looked identical and every client listed four
+   players. Broadcast on change so a join or a drop shows up at once, and
+   repeat on this timer because the packet is unacknowledged like NAME. */
+enum { SEAT_REPEAT_MS = 1000 };
 /* A destroyed brick used to be announced once. Losing that one packet left the
    wall painted on a client until the next full resync, which is why a brick
    could take seconds to vanish. Echo it on following ticks like SHOT clears
@@ -369,6 +376,27 @@ static void build_name(uint8_t seq, uint8_t pid, const uint8_t *name,
   out[1] = seq;
   out[2] = pid;
   memcpy(&out[3], name, NAME_LEN);
+}
+
+/* bit n set = slot n is held by a connected client. */
+static uint8_t compute_seat_mask(const struct client_slot *clients) {
+  uint8_t mask = 0;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (clients[i].in_use) {
+      mask |= (uint8_t)(1u << i);
+    }
+  }
+  return mask;
+}
+
+static void build_seats(uint8_t seq, uint8_t mask, uint8_t *out,
+                        size_t out_len) {
+  if (out_len < 3) {
+    return;
+  }
+  out[0] = PKT_SEATS;
+  out[1] = seq;
+  out[2] = (uint8_t)(mask & 0x0Fu);
 }
 
 static void build_brick_delta(uint8_t seq, uint8_t x, uint8_t y,
@@ -1661,6 +1689,8 @@ int main(int argc, char **argv) {
   uint64_t last_transport_summary_ms = now_ms();
   uint64_t last_brick_resync_ms = now_ms();
   uint64_t last_name_rotate_ms = now_ms();
+  uint64_t last_seat_ms = 0;
+  uint8_t last_seat_mask = 0xFF; /* never a valid mask: forces a first send */
   int name_rotate = 0;
   memset(g_brick_echo, 0, sizeof(g_brick_echo));
   const uint64_t tick_ms = 1000ULL / (uint64_t)tick_hz;
@@ -1737,6 +1767,23 @@ int main(int argc, char **argv) {
 
     reap_timed_out_clients(clients, now_ms(), debug, players, shots,
                            last_input_ms);
+
+    /* After the reap, so a timed-out seat is reported free on the same pass
+       that frees it. */
+    {
+      uint8_t seat_mask = compute_seat_mask(clients);
+      if (seat_mask != last_seat_mask ||
+          now_ms() - last_seat_ms >= SEAT_REPEAT_MS) {
+        last_seat_mask = seat_mask;
+        last_seat_ms = now_ms();
+        uint8_t pkt[3];
+        build_seats(seq++, seat_mask, pkt, sizeof(pkt));
+        broadcast_packet(sock, clients, pkt, sizeof(pkt));
+        if (debug) {
+          printf("TX seats mask=%X -> all clients\n", seat_mask);
+        }
+      }
+    }
     if (debug && now_ms() - last_transport_summary_ms >= TRANSPORT_SUMMARY_MS) {
       log_transport_summaries(clients, &global_transport);
       last_transport_summary_ms = now_ms();

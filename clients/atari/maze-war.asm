@@ -605,6 +605,8 @@ ERASBOT	STA	(SCRPTR),Y
 ;
 	LDA	#0
 	STA	NET_ROLE_MASK
+	STA	NET_SEAT_MASK
+	STA	NET_STAGE_LOCAL_PID
 	JSR	NET_SCORE_INIT
 ;
 ;INITIALIZE ACTIVE PARTICIPANTS
@@ -1823,6 +1825,8 @@ NET_FRAME_DISPATCH
 	BEQ	NFD_SHOT
 	CMP	#$43
 	BEQ	NFD_NAME
+	CMP	#$44
+	BEQ	NFD_SEAT
 	CMP	#$50
 	BEQ	NFD_FULL
 	CMP	#$51
@@ -1854,6 +1858,14 @@ NFD_NAME
 	LDX	# >NET_NAME_PKT
 	JSR	NET_FRAME_COPY
 	JMP	NET_RX_43DONE
+NFD_SEAT
+	LDA	#4
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_SEAT_PKT
+	LDX	# >NET_SEAT_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_44DONE
 NFD_FULL
 	LDA	#52
 	JSR	NET_FRAME_LENCK
@@ -1915,6 +1927,22 @@ NET_RX_43DONE
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_NAME_IDX
+	RTS
+;
+; 0x44 SEATS: bit n = slot n is held by a connected client. The snapshot's
+; role mask only says which slots the AI drives, so without this an empty
+; seat and a quiet human read the same and the HUD listed four players.
+NET_RX_44DONE
+	LDA	NET_SEAT_PKT+2
+	AND	#$0F
+	CMP	NET_SEAT_MASK
+	BEQ	NR44_X
+	STA	NET_SEAT_MASK
+	LDA	#1
+	STA	NET_SCORE_PEND
+NR44_X
+	LDA	#0
+	STA	NET_RX_STATE
 	RTS
 ;
 ; store the name for slot pid and ask the VBI to repaint the HUD labels.
@@ -2181,10 +2209,23 @@ NSNAP_Z1JOY
 	LDX	#0
 NSNAP_SCORE
 	; server scores are binary 0..255; HUD renders modulo-10 glyphs.
+	; An empty seat has no score to show, and the label pass has already
+	; blanked its line, so leave it blank instead of painting a 0 back over it.
 	LDY	SCRINDX,X
+	LDA	NET_ROLE_MASK
+	AND	PLRMSK,X
+	BNE	NSNAP_SCRSHOW
+	JSR	NET_SEAT_HAS
+	BEQ	NSNAP_SCRBLK
+NSNAP_SCRSHOW
 	LDA	NET_SNAP_BUF+15,X
 	JSR	NET_SCORECHR
 	STA	SCORE,Y
+	JMP	NSNAP_SCRNX
+NSNAP_SCRBLK
+	LDA	#0
+	STA	SCORE,Y
+NSNAP_SCRNX
 	INX
 	CPX	#4
 	BCC	NSNAP_SCORE
@@ -2255,7 +2296,12 @@ NET_SCORELBL
 NSLBLP
 	LDA	NET_ROLE_MASK
 	AND	PLRMSK,X
-	BEQ	NSLBW
+	BNE	NSLBZ
+	JSR	NET_SEAT_HAS	;nobody in the seat: no label and no score at all
+	BNE	NSLBW
+	JSR	NET_LBL_BLANK
+	JMP	NSLBN
+NSLBZ
 	LDA	# <ZOMTXT
 	STA	POINTER
 	LDA	# >ZOMTXT
@@ -2307,6 +2353,40 @@ NSLBN
 	BCC	NSLBLP
 	RTS
 
+; X=slot -> A=0 (Z set) when nobody holds the slot, A<>0 when a client does.
+; Our own slot always counts: the first SEATS packet may not have arrived yet,
+; and we plainly occupy the seat the server is addressing us on.
+; Preserves X and Y.
+NET_SEAT_HAS
+	LDA	NET_SEAT_MASK
+	AND	PLRMSK,X
+	BNE	NSH_YES
+	TXA
+	CMP	NET_STAGE_LOCAL_PID
+	BNE	NSH_NO
+NSH_YES	LDA	#1
+	RTS
+NSH_NO	LDA	#0
+	RTS
+;
+; X=slot -> clear its whole HUD line: the 11 label columns and the score digit
+; that follows them. Preserves X.
+NET_LBL_BLANK
+	LDA	LBLDSTLO,X
+	STA	SCRPTR
+	LDA	LBLDSTHI,X
+	STA	SCRPTR+1
+	LDY	#0
+	LDA	#0
+NLB_LP	STA	(SCRPTR),Y
+	INY
+	CPY	#11
+	BCC	NLB_LP
+	LDY	SCRINDX,X
+	LDA	#0
+	STA	SCORE,Y
+	RTS
+;
 ; X=slot -> A=0 when the slot has no name, A<>0 when it does.
 ; NUL and space both count as empty. Preserves X, clobbers A/Y/COUNT.
 NET_NAME_HAS
@@ -6318,6 +6398,8 @@ HOST_SRC	.DS	1	;TXT_DRAW buffer index
 NET_NAME_PKT	.DS	NAME_PKT_LEN+1	;name packet staging + trailing checksum
 NET_NAMES	.DS	4*NAME_LEN	;per-slot display name, all spaces/0 = unnamed
 NET_SCORE_PEND	.DS	1	;request HUD role-label refresh
+NET_SEAT_PKT	.DS	4	;seat-mask packet staging + trailing checksum
+NET_SEAT_MASK	.DS	1	;slots a client actually holds, bit n = slot n
 NET_GAME_SHOW	.DS	1	;0 until first full-map + snapshot commit is ready to display
 NET_SNAP_IDX	.DS	1	;snapshot / brick-delta collector index
 NET_SNAP_BUF	.DS	21	;snapshot staging buffer + trailing checksum
