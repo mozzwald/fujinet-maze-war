@@ -831,6 +831,67 @@ Two things worth checking before any smoothing work, in this order:
 - Slot identity is address+port with no client token, so a fast reconnect still briefly shows the player's old slot until the 15s timeout expires. Self-healing; a proper fix needs a protocol change.
 - ~~With `--zombies N` below 3, slots beyond N stay empty and render as motionless wizards.~~ FIXED 2026-09-08: an unheld slot is neither listed in the HUD nor drawn on the board (see "Seat occupancy" above). The server still keeps a position for it; only the presentation changed.
 
+## Branch note: `realm-net` diverges from here (2026-09-09)
+
+**Everything above this point was written on `a8-net-fix`.** A new branch,
+`realm-net`, was created off `a8-net-fix` at this point (pushed to `self`) to
+explore a FujiRealm-informed realtime-transport migration (TCP, CRC-16
+framing, a unified reliable-event stream) without disturbing `a8-net-fix`'s
+own near-complete track toward `master`. From here, this file's history
+diverges by branch: `a8-net-fix` continues to track the v1 roadmap (Phase 4
+render-state separation next, pending human hardware verification per the lag
+investigation above); `realm-net` tracks the new Phase 7 work below. A future
+session should check which branch it's on before trusting "what's next" from
+this file alone.
+
+### Phase 7 planned: Realtime Transport Reliability (FujiRealm-informed)
+
+Asked to plan a migration to "fujirealm style client/server networking"
+because FujiRealm (`~/fujicode/fujirealm-game-demo`) feels more reliable and
+less laggy in play. Full research and the plan itself are in
+`planning/phases/07-realtime-transport-reliability/` (`07-RESEARCH.md` plus
+`07-01` through `07-05`); this is a summary of the headline finding and the
+recommendation, not a replacement for reading that directory.
+
+**Headline finding:** FujiRealm's Atari client vendors the *same* netstream
+handler family maze-war already builds from
+(`~/fujicode/fujinet-atari-netstream`); the UDP/TCP choice is a single
+runtime flag bit passed to `NS_InitNetstream`, not something baked into the
+handler, and the byte-stream framing maze-war already built in Phase 5.1 is
+already transport-agnostic. So the transport swap itself is low-risk and
+narrow in scope (`07-01`/`07-02`).
+
+**The finding that reshaped the plan:** FujiRealm's server does not simulate
+movement from input the way maze-war's does — the client reports its own
+already-decided new position and the server just validates it's one legal
+step and adopts or rejects it (`server/game.py:1367-1488` in the FujiRealm
+repo). That's a genuinely different, client-authoritative point on the
+trust spectrum than maze-war's stated design (`PROJECT.md`: "Server remains
+authoritative for wizard position"). And critically, FujiRealm's remote
+players are **not** interpolated at all — `netstream_apply_remote_players`
+snaps them straight to each update, which is *worse* than maze-war's own
+`REMOTE_FOLLOW` (which at least walks one cell per tick). So copying that
+model would not fix the remote-player lag this project spent 2026-09-08/09
+measuring, and might make it feel worse if naively extended to remote actors.
+
+**Recommendation, and what the plan actually proposes:** adopt TCP transport,
+CRC-16 framing, and a unified acknowledged reliable-event stream (replacing
+the `BRICK_DELTA`/`RESPAWN`/`NAME` echo-burst hacks with one real ARQ, closely
+modeled on FujiRealm's own `TERRAIN_EDGE` go-back-N delivery) — these three
+serve "more reliable" directly and are all independent of the authority-model
+question. Do **not** adopt client-authoritative movement by default; it's
+written up (`07-05-PLAN.md`) for the record, explicitly marked do-not-execute
+without a separate go-ahead, since it doesn't address the reported problem and
+walks back a stated project constraint for a benefit (zero-round-trip local
+movement) the user didn't report needing. Let the already-planned Phase 4
+(`04-02`/`04-03`, real remote-actor interpolation) proceed after this phase's
+reliability work lands — it should give maze-war *better* remote smoothness
+than FujiRealm has, not just parity with it.
+
+New v2 requirements `RTP-01` through `RTP-05` added to `REQUIREMENTS.md`.
+Nothing executed yet — this session was planning only, per the request. No
+source code touched.
+
 ## Session Continuity
 
 Last session: 2026-09-09 (continued overnight, unattended)
@@ -907,3 +968,20 @@ claimed, each caught only by a deliberate sanity check:
   disassembler appends `;SYMBOL` comments -- it reported *zero* zero-page usage
 
 Check that an instrument reports something before trusting it to report nothing.
+
+## Session Continuity (branch: `realm-net`, most recent)
+
+Last session: 2026-09-09
+Stopped at: Phase 7 (Realtime Transport Reliability) planned and written up in
+full — `planning/phases/07-realtime-transport-reliability/` (`07-RESEARCH.md`
+plus five `07-0N-PLAN.md` files), `REQUIREMENTS.md` extended with `RTP-01..05`,
+`ROADMAP.md` extended with the Phase 7 entry. **Nothing executed.** This was a
+planning-only request; no source file changed. See the "Phase 7 planned"
+section above this one for the headline findings and recommendation.
+Next, if greenlit: `07-01` (server TCP transport) and `07-02` (client TCP
+transport) together, tested against real hardware before proceeding to
+`07-03`/`07-04` — this project's own repeated lesson is that the emulator's
+netsio path does not reproduce real SIO-hop behavior, and that lesson applies
+at least as strongly to a transport change as it did to the framing and
+reconciliation work already completed on `a8-net-fix`.
+Resume file: `planning/phases/07-realtime-transport-reliability/07-RESEARCH.md`

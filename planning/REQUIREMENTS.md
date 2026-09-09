@@ -49,6 +49,14 @@
 
 ## v2 Requirements
 
+### Realtime Transport (FujiRealm-informed, Phase 7, branch `realm-net`)
+
+- [ ] **RTP-01**: The server accepts realtime connections over TCP instead of a single shared UDP socket, with no change to game tick rate or packet payload semantics.
+- [ ] **RTP-02**: The Atari client and both Linux clients connect over TCP using the same vendored netstream handler and framing, with transport selected by a flag bit rather than a handler rebuild.
+- [ ] **RTP-03**: Every server-to-client and client-to-server frame is protected by CRC-16/CCITT-FALSE instead of a one-byte additive sum, catching corruption patterns the sum could miss, without weakening the existing one-frame-cost-of-corruption resync property.
+- [ ] **RTP-04**: Brick-destroyed, respawn, and name-change events are delivered through one ordered, cumulatively-acknowledged reliable stream instead of three separate fixed-repeat-count echo mechanisms, recovering a single lost event within one retransmit interval rather than the multi-second full-resync window.
+- [ ] **RTP-05**: The trade-off of adopting client-authoritative local movement (as FujiRealm does) is documented with a clear recommendation, and is not implemented without an explicit, separate decision to do so.
+
 ### AI
 
 - **AI-01**: AI zombies use smarter pathing or combat behavior than the current simple slow baseline.
