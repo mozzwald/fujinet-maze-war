@@ -1,8 +1,69 @@
 # Phase 4: Render-State Separation — Research
 
-**Researched:** 2026-09-09
+**Researched:** 2026-09-09 (two sessions)
 **Domain:** Why a remote actor lags and snaps on the Atari client, measured rather than reasoned about
-**Confidence:** LOW as first written -- see the correction below. The rig is sound; the first instrument built on it was not.
+**Confidence:** HIGH for the final finding below. The rig had two separate serious bugs, both found and fixed; the numbers below are from the corrected instrument and reproduce across many runs and loss rates.
+
+## Final finding (second session, after fixing the rig itself): no reconciliation bug found
+
+The `MOVEST != 0` guard hypothesis from the first session (below) **does not
+reproduce**. A second, deeper instrument bug was found first -- the rig itself
+was pausing the emulated Atari mid-measurement, which is what produced the
+contradictory "fixed it / made it worse" result that closed the first session.
+Full detail, including how that bug was found and the fix, is in
+`tests/rig/README.md` ("Trusting a number out of this rig"); the short version:
+
+**The atari800 emulator does not free-run in the background.** It only
+advances a frame in the gaps between AI-socket commands, so a tight
+`peek()`-only sampling loop with no gap between calls freezes it completely
+(verified: 1844 peek calls in 2 real seconds advanced the CPU's registers by
+exactly zero). The previous session's measurement scripts sampled in exactly
+that pattern, so they were intermittently pausing the client while the real
+server and bot kept running in wall-clock time -- which produces essentially
+random, non-reproducible readings that look exactly like a client bug. Fixed:
+`ai.py`'s `AI.cmd()` now enforces a minimum ~8ms gap between commands. A
+second, smaller bug (restarting the relay process wedges the Atari-side
+netstream handshake) was also found and fixed via a live control-file
+mechanism so the relay never has to restart mid-session.
+
+With both fixed, `converge.py` (new: splits the gap measurement by whether the
+watched remote is currently moving or has been still for >1s) was run against
+**unmodified HEAD, no code changes**, across one-way 120ms delay at 0%, 3%,
+20% and 50% independent random loss, 2-3 runs per condition, 40-100s each:
+
+- While moving: a real but modest gap, 60-87% at 0 cells depending on loss,
+  shrinking tail to 4-5 cells, **never once reaching the 3-cell or 10-cell
+  thresholds** that would engage `REMOTE_FOLLOW`'s bounded-recovery or
+  hard-snap paths, at any loss rate tested including 50%.
+- Once still for more than a second: **gap 0 in 100% of samples, every run,
+  every condition**, including 799+ samples at 3% loss (three separate runs)
+  and 1365 samples at 50% loss.
+
+**Conclusion: the reconciliation logic converges correctly and reliably.**
+There is no stuck-state bug in `RF_SNAP`/`REMOTE_FOLLOW` to fix at the code
+level the first session was investigating. The `MOVEST` guard fix that the
+first session implemented, measured as contradictory, and reverted was
+correctly reverted -- it wasn't needed, and the contradiction that flagged it
+for further scrutiny was the rig freezing the emulator, not the guard.
+
+**What this does not settle:** the residual "moving" gap is architecturally
+expected, not a bug. `REMOTE_FOLLOW` walks one cell per move tick toward the
+last known authoritative position rather than snapping instantly to each new
+snapshot (deliberately -- an instant snap every ~100ms would look far worse),
+so *some* lag while the target actively moves is the designed cost of smooth
+walking without prediction. Whether that residual lag is small enough to feel
+good, or whether it's what the user is calling "hard to play against," is a
+presentation-quality judgment call, not something this rig can answer by
+itself -- it needs a human playing against it. **Reducing it further requires
+the render-state separation already planned in `04-02`/`04-03`** (giving
+remote actors real interpolation instead of one-cell-per-tick walking), which
+is a substantially larger, higher-risk change to core rendering that this
+project's own established practice gates behind human hardware verification at
+each step -- not something to attempt unsupervised. See `04-06-PLAN.md` for the
+status of the smaller catch-up idea (retracted; not warranted given the finding
+above).
+
+## First session: how the leading hypothesis was formed (superseded above, kept for the reasoning)
 
 ## Why this exists
 

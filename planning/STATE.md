@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready
-stopped_at: 2026-09-08 - slot-0 corpse and clipped far-left cells fixed (ERASMAN clobbered Y), death smoke animation restored, display-list layout anchored and tested. Awaiting the human check; lag investigation is next. Phases 3, 3.1, 5 and 5.1 complete and human-approved. Phase 4 render-state separation is next.
-last_updated: "2026-09-08T00:00:00.000Z"
+stopped_at: 2026-09-09 - slot-0 corpse, clipped far-left cells and missing death animation human-confirmed fixed. Lag investigation closed conclusively (no reconciliation bug found; two rig instrument bugs found and fixed instead); render-state separation (04-02/04-03) is the correctly-scoped next step and needs human hardware verification. Phases 3, 3.1, 5 and 5.1 complete and human-approved.
+last_updated: "2026-09-09T00:00:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 6
@@ -616,6 +616,82 @@ interrupt the move; scan `GAMESCR` for painted cells no visible actor accounts
 for. Likely fix: have the map repair blank a floor cell that holds characters no
 actor is standing on.
 
+### Remote-actor lag: rig fixed, reconciliation cleared, no bug found (2026-09-09, continued overnight)
+
+**Status: investigation closed. No reconciliation bug exists to fix. The
+residual lag is architecture-inherent and its fix is the already-planned
+`04-02`/`04-03` render-state separation, which needs human hardware
+verification and was correctly not attempted unsupervised overnight.**
+
+Told to continue the lag investigation/fix until done or blocked. Found a
+second, more serious rig bug before even getting to re-test the `MOVEST`
+guard: **the atari800 emulator does not free-run in the background.** Its main
+loop only advances a frame between AI-socket commands, so the previous
+session's `peek()`-only sampling loops (no gap between calls) were
+intermittently *pausing the emulated Atari* while the real server, relay and
+bot kept running in wall-clock time on their own OS processes. Verified
+directly: 1844 back-to-back peek calls over 2 real seconds left the CPU's
+PC/A/X/Y/SP registers unchanged; RTCLOK (the OS's own VBI counter) confirmed
+0 Hz advancement under a zero-gap loop versus ~58 Hz (matching real 60Hz NTSC)
+with even a 5ms gap between calls. This fully explains the previous session's
+contradictory measurements (the `MOVEST`-guard fix appearing "perfect" at one
+loss rate and "worse" at another, each internally consistent across repeated
+runs) -- the client wasn't behaving inconsistently, the rig was pausing it
+inconsistently. Fixed: `tests/rig/ai.py`'s `AI.cmd()` now enforces a minimum
+~8ms gap between every AI-socket command, so nothing built on it can
+reintroduce this silently.
+
+A second, smaller bug: restarting the relay process to change delay/loss
+parameters was found to permanently wedge the Atari-side netstream handshake
+(`netsio_status` showed `netstream.active` flip false, `sync.timeouts`
+climbing), recoverable only via a full cold reset and reboot. Fixed:
+`tests/rig/link.py` now polls a control file for live delay/loss changes, so
+it never has to restart while the Atari is connected.
+
+With both fixed, `tests/rig/converge.py` (new -- splits the gap measurement by
+whether the watched remote is currently moving or has been still for over a
+second) was run against **unmodified HEAD, zero code changes**, across 120ms
+one-way delay at 0%, 3%, 20% and 50% independent random loss, 2-3 runs per
+condition, 40-100s each, using `tests/rig/movestop.py` (new -- a bot that
+alternates walking and standing still, auto-restarting its own socket loop on
+error after an earlier version died silently mid-run and several minutes of
+results were unknowingly taken against its frozen, disconnected slot):
+
+- While the remote is actively moving: a real but modest gap, 60-87% of
+  samples at 0 cells depending on loss rate, a shrinking tail out to 4-5 cells,
+  and -- at every loss rate tested including 50% -- **never once reaching the
+  3-cell (`NET_RECOVER_P1`) or 10-cell (`NET_RECON_P1`) thresholds** that
+  would engage `REMOTE_FOLLOW`'s bounded-recovery or hard-snap paths.
+- Once the remote has been still for more than a second: **gap 0 in 100% of
+  samples, in every single run, at every loss rate tested**, including three
+  separate runs at 3% loss (799+ samples each) and one at 50% loss (1365
+  samples).
+
+**The `MOVEST != 0` guard on `RF_SNAP` does not cause a stuck-arrears bug.**
+The previous session's fix-then-revert of that guard was the right call, made
+for the wrong apparent reason (an instrument artifact, not a real
+contradiction) -- but the guard itself checked out as fine once measured
+properly. `04-06-PLAN.md` (bounded catch-up) is retracted; there is nothing for
+it to catch up from. `04-RESEARCH.md` carries the full writeup, and
+`tests/rig/README.md` documents both instrument bugs in detail so they cannot
+recur silently in future rig work.
+
+**What remains genuinely true:** `REMOTE_FOLLOW` walks a remote actor one cell
+per move tick toward the last known authoritative position rather than
+interpolating, so *some* lag while a remote is actively moving is the designed
+cost of that approach, not a defect in it. Reducing that further needs real
+render-state separation for remote actors (already planned as `04-02`/`04-03`),
+which is a substantially larger change to core rendering. Given this session's
+own repeated lesson -- three separate speculative-but-plausible fixes this
+multi-day session (`SETSTIL` residue, the `MOVEST` guard, and implicitly the
+original 04-06 catch-up) each failed to survive measurement -- attempting that
+larger, harder-to-verify rewrite unsupervised overnight, with no path to
+hardware confirmation before the user returns, was judged the wrong call. This
+is the honest stopping point: the investigation is complete and conclusive, no
+safe further code change presented itself, and the properly-scoped next step
+needs the user's own hardware-verification loop the same way every other
+phase in this project has.
+
 ### Remote-actor lag: a fix attempted and reverted, and why (2026-09-09, later)
 
 **Status: no lag fix shipped. The rig, not the client, is the current blocker.**
@@ -757,13 +833,23 @@ Two things worth checking before any smoothing work, in this order:
 
 ## Session Continuity
 
-Last session: 2026-09-08
-Stopped at: the slot-0 corpse, the clipped far-left cells and the missing death
-animation are human-confirmed fixed and shipped. No lag fix has shipped: 04-06's
-premise did not survive checking, a second candidate (the `MOVEST` guard on
-`RF_SNAP`) was implemented and reverted for want of a reproducible A/B, and the
-measurement rig is now the blocker. Next: make the rig give the same answer
-twice, then re-test the `MOVEST` guard.
+Last session: 2026-09-09 (continued overnight, unattended)
+Stopped at: the lag investigation is **closed, conclusively, with no code
+change**. Two serious bugs in the measurement rig itself were found and fixed
+(the emulator freezing under tight peek loops; the relay wedging the netstream
+handshake on restart) -- full detail in `tests/rig/README.md` and
+`planning/phases/04-render-state-separation/04-RESEARCH.md`. With the rig
+trustworthy, remote reconciliation was shown to converge to zero gap in 100% of
+samples once a remote actor is genuinely still, at every loss rate tested up to
+50%, and never approaches the recovery/snap thresholds while moving even at
+50% loss. There is no stuck-reconciliation bug; `04-06` (bounded catch-up) is
+retracted as unneeded. The remaining, architecture-inherent "lag while moving"
+needs real render-state separation (`04-02`/`04-03`) to improve further, which
+is a substantially larger change to core rendering correctly left for a
+human-supervised session with hardware verification, not attempted here.
+Nothing in `clients/atari/maze-war.asm`, `server/main.c`, or any shipped test
+changed this session -- only `tests/rig/*` (the measurement instruments) and
+planning docs. Full smoke suite (28) still green, unchanged from last session.
 Resume file: .planning/ROADMAP.md
 
 **Emulator rig did not come up on 2026-09-08.** `atari_load` of

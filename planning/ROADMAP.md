@@ -14,7 +14,7 @@ This roadmap follows the dependency chain identified in research: normalize tran
 - [x] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded. Final real-Atari verification approved the cadence/fire-direction replay fix and closed RECN-01 through RECN-04.
 - [x] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients. Human mixed-session checkpoint approved 2026-09-03.
 - [x] **Phase 3.1: Netstream Handler Refresh and POKEY Channel Isolation (INSERTED)** - Update to the latest netstream handler (built from source) and remap all sound to POKEY channels 1+2 so the game can never corrupt the handler's channel 3+4 baud timer. See `ref/net-fix-plan.md` for full analysis. Completed 2026-09-02; all four criteria verified (see STATE.md).
-- [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors. Reordered after Phase 5: presentation polish, needed for release but not for reliable play. Now the only substantial work left before Phase 6; 3 plans drafted 2026-09-04.
+- [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors. Reordered after Phase 5: presentation polish, needed for release but not for reliable play. Now the only substantial work left before Phase 6; 5 plans drafted 2026-09-04. Remote-actor lag investigated 2026-09-09: no reconciliation bug found (two measurement-rig bugs found and fixed instead); this phase's own work is the correctly-scoped fix for the residual lag, pending a human-supervised session.
 - [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff received 2026-09-04.
 - [x] **Phase 5.1: Link Integrity and Frame Resynchronisation (INSERTED)** - Make the Atari receive path robust to a lossy SIO byte stream: per-packet checksum, COBS framing with a zero delimiter so the parser always realigns, actor-state validation, and the boot/render faults these exposed. Unplanned; driven by real-hardware symptoms that emulation could not reproduce. Completed and human-confirmed 2026-09-04. See STATE.md "Phase 5.1".
 - [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow. A minimal validation pass (scripted emulator sessions including join/leave handoff) runs after Phase 5; full hardening runs after Phase 4.
@@ -97,6 +97,21 @@ Plans:
 - [ ] `04-03` — Interpolate remote actors and zombies from authoritative targets through the render state, and prove with counters that no smoothed value ever reaches a gameplay decision.
 - [ ] `04-04` — Clear all player-missile memory before PM DMA is enabled, and stop enabling missile DMA the game never uses. Hardware-only artefact: `PMAREA` is uninitialised `.DS`, nothing clears the missile region at `$3B00`, and `GRACTL` is set to `$03` while no missile register is ever written. Independent of smoothing; can run in parallel with 04-01.
 - [ ] `04-05` — Complete the embedded font for characters text can use. `F`, `J`, `Q`, `V` and `X` hold maze artwork rather than letterforms, which was safe while all text was compile-time constants and stopped being safe when player names became user input. Independent of smoothing; can run in parallel with 04-01.
+- [x] `04-06` — RETRACTED 2026-09-09, not executed. Proposed a bounded catch-up for `REMOTE_FOLLOW` on the premise that a diverged remote actor gets permanently stuck; that premise was traced to two bugs in the measurement rig itself (documented in `04-RESEARCH.md` and `tests/rig/README.md`), and a corrected instrument shows reconciliation converges to zero gap in 100% of samples once a remote actor is still, at every loss rate tested including 50%. No catch-up mechanism is needed. Kept in the plan list for the record.
+
+**Status note (2026-09-09)**: The remote-actor lag investigation (requested
+separately from the phase's original plans) is closed. See `04-RESEARCH.md`
+for the full writeup. Headline: with a corrected measurement rig (two serious
+instrument bugs found and fixed -- the emulator freezing under tight polling
+loops, and the relay wedging the netstream handshake on restart), remote
+reconciliation was shown to work correctly under real-hardware-like conditions
+(120ms delay, 0-50% loss) -- no stuck-state bug exists. The residual lag while
+a remote actor is actively moving is the designed cost of `REMOTE_FOLLOW`
+walking one cell per tick without interpolation, which is exactly what `04-02`
+and `04-03` below already exist to address. That work was not attempted
+unsupervised: it is a substantially larger change to core rendering, and this
+project has consistently gated changes of that size behind human hardware
+verification.
 
 **Status note (2026-09-04)**: Two prerequisites are already done and should not be
 re-derived. Prediction now runs on the input actually transmitted
@@ -196,5 +211,5 @@ Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) 
 | 3. Combat and World Authority | 3/3 | Complete | 2026-09-03 |
 | 3.1 Netstream Handler Refresh and POKEY Channel Isolation | 2/2 | Complete | 2026-09-02 |
 | 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
-| 4. Render-State Separation | 0/6 | In progress. 04-RESEARCH done then partly retracted 2026-09-09; 04-06 blocked on its premise. Current task is making the measurement rig reproducible | - |
+| 4. Render-State Separation | 0/6 (04-06 retracted, not executed) | Lag investigation closed 2026-09-09: no reconciliation bug found after fixing two measurement-rig bugs. Original 04-01..04-05 plans (render-state separation proper) not started; correctly scoped for a human-supervised session | - |
 | 6. Mixed-Session Validation and Hardening | 0/TBD | Not started | - |
