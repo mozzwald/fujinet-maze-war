@@ -616,6 +616,51 @@ interrupt the move; scan `GAMESCR` for painted cells no visible actor accounts
 for. Likely fix: have the map repair blank a floor cell that holds characters no
 actor is standing on.
 
+### Remote-actor lag: a fix attempted and reverted, and why (2026-09-09, later)
+
+**Status: no lag fix shipped. The rig, not the client, is the current blocker.**
+
+Asked to implement 04-06 (the bounded catch-up), the first step was to confirm
+its premise. It did not survive. The measurements 04-06 was built on came from
+an instrument that chose which slot to watch as "not mine" and nothing more --
+and an unoccupied slot is hidden and parked on its placeholder cell
+`(1, slot+1)` while the server still holds a spawn position for it. Measuring
+one produces a large, perfectly constant gap that reads exactly like a
+catastrophic rendering fault. The "100 % one cell behind" and the eight-cell
+tail are both suspect.
+
+With a corrected instrument, a remote that patrols continuously instead of
+stalling against a wall, and the local player parked out of its lane, a remote
+actor tracks its authoritative cell within about one cell in normal running.
+
+**A different candidate was found, implemented, measured and reverted.**
+`RF_SNAP` refuses to reposition a diverged remote while `MOVEST != 0`. A remote
+that is following is mid-move nearly all of the time, so the snap that path
+exists to perform is almost never allowed to run -- while `NET_AUTH_REPOS`, the
+routine it guards, is built for exactly that case and zeroes `MOVEST` itself.
+Removing the guard measured dramatically better at 120 ms / 3 % loss (gap 0 in
+100 % of samples, twice, against a pre-fix build that was badly wrong twice) and
+measured *worse* at 120 ms / 0 % loss. Two conditions, opposite verdicts, each
+internally consistent. That is an instrument problem, not a result, and it is
+not a basis for changing remote reconciliation. Reverted.
+
+This is the second speculative fix stopped by measurement this session (the
+`SETSTIL` residue change was the first). Both were plausible readings of the
+code. Neither survived contact with a number, which is the process working.
+
+**What has to happen before any lag change lands:**
+
+1. `tests/rig/gap.py` now picks a slot that is live, not hidden, and
+   demonstrably moving, and aborts rather than report a number it cannot stand
+   behind. Two further variance sources are documented in `tests/rig/README.md`:
+   slot churn from reconnects (every reconnect takes a new slot and the old one
+   lingers for the 15 s timeout, so a boot mid-run invalidates it) and the local
+   player standing in the remote's path.
+2. Re-establish a baseline that reproduces across at least two runs per build in
+   both link conditions. Treat two runs of one build that disagree as a broken
+   instrument, not as a result.
+3. Only then re-test the `MOVEST` guard, which remains the best suspect.
+
 ### Remote-actor lag: measured, and a plan (2026-09-09)
 
 The three rendering bugs above are human-confirmed fixed. The lag work now has
@@ -714,9 +759,11 @@ Two things worth checking before any smoothing work, in this order:
 
 Last session: 2026-09-08
 Stopped at: the slot-0 corpse, the clipped far-left cells and the missing death
-animation are all human-confirmed fixed. Remote-actor lag is now measured rather
-than argued about, and 04-06 is drafted as the first fix. Next: execute 04-06,
-then re-measure before touching 04-02/04-03.
+animation are human-confirmed fixed and shipped. No lag fix has shipped: 04-06's
+premise did not survive checking, a second candidate (the `MOVEST` guard on
+`RF_SNAP`) was implemented and reverted for want of a reproducible A/B, and the
+measurement rig is now the blocker. Next: make the rig give the same answer
+twice, then re-test the `MOVEST` guard.
 Resume file: .planning/ROADMAP.md
 
 **Emulator rig did not come up on 2026-09-08.** `atari_load` of

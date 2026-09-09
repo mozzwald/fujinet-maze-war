@@ -196,5 +196,5 @@ Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) 
 | 3. Combat and World Authority | 3/3 | Complete | 2026-09-03 |
 | 3.1 Netstream Handler Refresh and POKEY Channel Isolation | 2/2 | Complete | 2026-09-02 |
 | 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
-| 4. Render-State Separation | 0/6 | Not started; 04-RESEARCH done 2026-09-09, 04-06 added as the cheap first win | - |
+| 4. Render-State Separation | 0/6 | In progress. 04-RESEARCH done then partly retracted 2026-09-09; 04-06 blocked on its premise. Current task is making the measurement rig reproducible | - |
 | 6. Mixed-Session Validation and Hardening | 0/TBD | Not started | - |

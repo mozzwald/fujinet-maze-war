@@ -2,7 +2,7 @@
 
 **Researched:** 2026-09-09
 **Domain:** Why a remote actor lags and snaps on the Atari client, measured rather than reasoned about
-**Confidence:** HIGH for the mechanism, MEDIUM for how much of the felt lag each part contributes
+**Confidence:** LOW as first written -- see the correction below. The rig is sound; the first instrument built on it was not.
 
 ## Why this exists
 
@@ -46,7 +46,38 @@ to the stream it has, which is the only part the client can fix.
 
 25 000 and 19 000 samples per row respectively.
 
-## What that says
+## Correction, 2026-09-09: the table above is not trustworthy
+
+Do not build on the numbers above. The script that produced them chose which
+slot to watch as "not mine" and nothing more, and **an unoccupied slot is hidden
+and parked on its placeholder cell `(1, slot+1)` while the server still holds a
+spawn position for it**. Measuring one yields a large, perfectly constant gap
+that reads exactly like a catastrophic rendering fault. The 100 %-at-one-cell
+and the eight-cell tail may both be that artefact rather than the client.
+
+What survived re-measurement with a corrected instrument, a continuously
+patrolling remote and the local player parked out of its lane:
+
+- A remote actor tracks its authoritative cell within about one cell in normal
+  running. The client is not obviously broken.
+- Two runs of the *same* build, in the two link conditions, disagreed about
+  whether a candidate fix helped -- dramatically better at 3 % loss, worse with
+  no loss at all. That is an instrument problem, not a result.
+
+`tests/rig/gap.py` now picks a slot that is live, not hidden, and demonstrably
+moving, and aborts rather than report a number it cannot stand behind. The rig
+README records the other two variance sources found the hard way: slot churn
+from reconnects, and the local player standing in the remote's path.
+
+**A candidate fix was implemented, measured and reverted.** `RF_SNAP` refuses to
+reposition a diverged remote while `MOVEST != 0`, and a remote that is following
+is mid-move nearly all the time, so the snap that path exists to perform is
+almost never allowed to run -- while `NET_AUTH_REPOS`, the thing it guards, is
+built for exactly that case and zeroes `MOVEST` itself. That remains the best
+suspect on the table. It was not shipped because the A/B could not be made to
+agree with itself.
+
+## What the original numbers said, kept for the reasoning only
 
 **1. `REMOTE_FOLLOW` has no catch-up, so a single missed step is permanent.**
 It advances a remote actor at most one cell per move tick, and only when the

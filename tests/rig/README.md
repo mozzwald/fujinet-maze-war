@@ -44,9 +44,41 @@ prompt ignores backspace from the AI socket. RETURN is keycode `$0C`.
 
 ## The measurements
 
-- `lagmeasure.py` — how far a remote actor's simulation cell trails the last
-  authoritative cell received. A constant offset is follow lag; spikes are
-  stalls. These want different fixes, so tell them apart before designing one.
+- `gap.py` — how far a remote actor's rendered cell trails the authoritative
+  cell the client has received. **Read the warning below before trusting a
+  number out of this.**
 - `leak.py` — painted interior cells no visible actor accounts for, with how
   long each persisted. On an open map every interior character must belong to an
   actor, which makes this a clean oracle for rendering residue.
+- `patrol.py` — a remote that never stops moving. It turns on its own
+  authoritative position rather than holding a stick into a wall, because a bot
+  stalled against a wall looks stationary to the server, and measuring a
+  stationary remote answers a different question than the one being asked.
+- `park.py` — puts the local actor on a fixed cell before a run. Two runs are
+  only comparable if the geometry is; a player left on a random spawn sits in
+  the patrol lane on one run and not the next.
+
+## Trusting a number out of this rig
+
+This is the part that cost the most and is easiest to get wrong. An earlier
+version of `gap.py` chose which slot to watch as "not mine" and nothing more.
+**An unoccupied slot is hidden and parked on its placeholder cell `(1, slot+1)`
+while the server still holds a spawn position for it**, so measuring one yields
+a large, perfectly constant gap that looks exactly like a catastrophic
+rendering fault. Several confident conclusions were drawn from that before it
+was spotted, in both directions, on the same build.
+
+`gap.py` now picks its slot deliberately — live, not hidden, and demonstrably
+moving during a three-second probe — and aborts the run rather than report a
+number it cannot stand behind. Two further sources of variance are worth
+knowing:
+
+- **Slot churn.** Every reconnect takes a new slot and the old one lingers for
+  the 15 s client timeout. Boot the Atari once and leave it; a boot in the
+  middle of a run invalidates it.
+- **Which actor is where.** Park the local player out of the patrol rectangle,
+  or the remote spends the run blocked against it and barely moves.
+
+The discipline that follows: run any comparison at least twice per build, and
+treat two runs of the same build that disagree as a broken instrument rather
+than as a result.
