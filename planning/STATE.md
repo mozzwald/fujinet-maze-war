@@ -616,7 +616,37 @@ interrupt the move; scan `GAMESCR` for painted cells no visible actor accounts
 for. Likely fix: have the map repair blank a floor cell that holds characters no
 actor is standing on.
 
-### Remote-actor lag: investigation only, nothing changed (2026-09-08)
+### Remote-actor lag: measured, and a plan (2026-09-09)
+
+The three rendering bugs above are human-confirmed fixed. The lag work now has
+numbers behind it: see `planning/phases/04-render-state-separation/04-RESEARCH.md`
+for the rig and the table, and `04-06-PLAN.md` for the cheap first fix.
+
+Headline: a remote actor is **one cell behind its authoritative cell in 100 % of
+samples** under 120 ms one-way delay with 3 % loss, in one unbroken run; 47 % of
+the time under delay alone, with a 5.6 % tail at eight cells; never behind on a
+clean loopback. `REMOTE_FOLLOW` advances at most one cell per move tick and has
+no catch-up, so one dropped snapshot puts a moving remote actor permanently one
+animation period -- about 100 ms of visual lag -- in arrears, on top of the real
+link delay. That is most of the felt lag and it does not need render state to
+fix, hence 04-06 ahead of 04-02/04-03.
+
+What unblocked this: a delay-and-loss relay between FujiNet-PC and the server.
+The standing note said the snap could not be reproduced on the emulator, and it
+could not -- loopback never delays or drops anything. Bind the relay to a
+loopback alias, never `0.0.0.0`, or FujiNet-PC's own netstream socket fights it
+for the port.
+
+**Attempted and reverted:** the stale-residue bug below. The most likely
+mechanism was `SETSTIL` drawing a two-character stationary image over a
+four-character mid-move one and orphaning the other half, so `SETSTIL` was made
+to blank the trailing pair first. Measured on the rig either side of the change:
+3 stale cells / 83 s worst case with it, 2 cells / 20 s without -- no
+improvement, within noise. Reverted rather than shipped. That rules out
+`SETSTIL` as the dominant source and leaves the map-repair janitor
+(blank a floor cell holding characters no actor stands on) as the next idea.
+
+### Remote-actor lag: earlier reasoning, superseded by the measurements above (2026-09-08)
 
 Asked to investigate, not fix. Local movement is predicted and feels fine; a
 remote actor visibly lags and snaps, worst when playing on one machine while
@@ -683,11 +713,10 @@ Two things worth checking before any smoothing work, in this order:
 ## Session Continuity
 
 Last session: 2026-09-08
-Stopped at: the slot-0 corpse and the clipped far-left cells both fixed (one
-clobbered register in `ERASMAN`), the death smoke animation restored on the
-server's death notice, and the display-list layout anchored and tested. Awaiting
-the human check on all three. Then: the remote-actor lag investigation below,
-which the user wants planned and fixed next.
+Stopped at: the slot-0 corpse, the clipped far-left cells and the missing death
+animation are all human-confirmed fixed. Remote-actor lag is now measured rather
+than argued about, and 04-06 is drafted as the first fix. Next: execute 04-06,
+then re-measure before touching 04-02/04-03.
 Resume file: .planning/ROADMAP.md
 
 **Emulator rig did not come up on 2026-09-08.** `atari_load` of
