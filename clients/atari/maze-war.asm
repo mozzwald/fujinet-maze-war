@@ -74,18 +74,12 @@ NET_BAUD_LO	=	$00	;57600
 NET_BAUD_HI	=	$E1
 NET_PORT_LO	=	$23	;swap16(9000) -> $2823
 NET_PORT_HI	=	$28
-NET_FRAME_DIV	=	7	;~8.6 Hz @ 60 FPS -- deliberately SLOWER than the
-			;server's 10 Hz tick.  The server applies exactly one
-			;queued input per tick and cannot catch up: its drain
-			;sets joy and step_players moves once from it, so a
-			;backlog never clears.  At 6 frames the client produced
-			;one input per 100ms against a 100ms tick -- exactly
-			;1:1 with no slack, so any jitter that landed two in a
-			;tick left the server permanently one input behind.
-			;That is a turn registering a column early: the server
-			;turned before it had applied the last step, into a
-			;brick, while the client walked on down a clear column.
-			;Seven frames gives the queue margin to drain.
+NET_FRAME_DIV	=	6	;10 Hz at 60 FPS, matching the server tick.  The
+			;server applies one queued input per tick and sets
+			;neutral when the queue is empty, so slower pacing
+			;creates visible 100/200 ms remote movement gaps on
+			;clean TCP.  Overflow remains bounded by the server
+			;queue and by the pending/replay contract.
 NET_RECON_P0	=	3	;local player reconcile threshold (manhattan cells)
 NET_IDLE_SETTLE	=	20	;frames of held-neutral before idle convergence
 NET_RECON_P1	=	10	;remote catastrophic hard-snap guard
@@ -626,7 +620,7 @@ SETALLP	LDA	#0	;TYPE = PLAYER
 	STA	SOUND,X
 	STA	MOVEST,X
 	STA	DIR,X
-	LDA	#2	;net-only cadence: immediate first frame + 2-frame phases ~= 10 Hz
+	LDA	#1	;one visual phase per VBI; enough capacity for 10 Hz net play
 	STA	MOVRATE,X
 	STA	MOVCLOK,X
 	LDA	#5	;NEXT HIT SCORE=5
@@ -2850,6 +2844,13 @@ NSC_LP
 	STA	NET_PX_Y,X
 	LDA	NET_STAGE_PJOY,X
 	STA	NET_PJOY,X
+	CPX	NET_LOCAL_PID	; remote simulation truth updates immediately;
+	BEQ	NSC_LOCAL	; RNDX/RNDY is the only part that follows.
+	LDA	NET_STAGE_PX_X,X
+	STA	LOCX,X
+	LDA	NET_STAGE_PX_Y,X
+	STA	LOCY,X
+NSC_LOCAL
 	LDA	NET_STAGE_PENDING,X
 	STA	NET_P_PENDING,X
 	BNE	NSC_PN
@@ -3093,10 +3094,10 @@ NLRP_FACE
 	JSR	SETSTIL
 	LDY	NET_PEND_HEAD
 	LDA	NET_PEND_COUNT
+	BEQ	NLRP_X
 	STA	NET_REPLAY_LEFT
 	LDA	#0
 	STA	NET_REPLAY_MOVE
-	BEQ	NLRP_X
 NLRP_LP
 	LDA	NET_PEND_JOY,Y
 	JSR	NET_LOCAL_REPLAY_STEP
@@ -3264,6 +3265,8 @@ NRW_POSOK
 	LDA	NET_ERASE_MASK
 	AND	PLRMSKINV,Y
 	STA	NET_ERASE_MASK
+	JSR	NET_AUTH_REPOS	;respawn/join is a real discontinuity, not drift:
+	JSR	SETSTIL		;put render and simulation on the spawn cell now.
 	CPX	NET_LOCAL_PID	;our own respawn lands as a wholesale jump;
 	BNE	NRAW_X		;keep it out of the drift metric
 	LDA	#30
@@ -4917,17 +4920,16 @@ RZ1_CHKSHOT
 	JMP	CHKSHOT
 
 ; --- REMOTE_FOLLOW ---
-; Remote playback is driven by authoritative snapshot joy + position.
-; The client does not guess X/Y pathing from deltas alone:
-; - snapshot joy selects DIR
-; - snapshot position must match one legal cell advance in that DIR
-; - otherwise we hold or hard-snap only as recovery
+; Remote playback is render-only.  NET_STAGE_COMMIT already copied the latest
+; authoritative cell into LOCX/LOCY, so this routine moves RNDX/RNDY toward it
+; and marks each INITMOVE as a render chase step.  Collision, shots and slot
+; state therefore see server truth immediately, while the picture interpolates.
 REMOTE_FOLLOW
-	LDA	LOCX,X
-	CMP	NET_PX_X,X
+	LDA	RNDX,X
+	CMP	LOCX,X
 	BNE	RF_NEEDS
-	LDA	LOCY,X
-	CMP	NET_PX_Y,X
+	LDA	RNDY,X
+	CMP	LOCY,X
 	BNE	RF_NEEDS
 	LDA	#0
 	STA	NET_P_PENDING,X
@@ -4939,11 +4941,11 @@ RF_NEEDS
 	CMP	#$FF
 	BEQ	RF_SYNCCHK
 	STA	DIR,X
-	JSR	NET_AHEAD_FREE
+	JSR	NET_AHEAD_FREE_RND
 	BNE	RF_SYNCCHK
-	LDA	LOCX,X
+	LDA	RNDX,X
 	STA	COUNT
-	LDA	LOCY,X
+	LDA	RNDY,X
 	STA	HOLDIT
 	LDA	DIR,X
 	BEQ	RF_VXP
@@ -4963,27 +4965,29 @@ RF_VXM
 	DEC	COUNT
 RF_VCHK
 	LDA	COUNT
-	CMP	NET_PX_X,X
+	CMP	LOCX,X
 	BNE	RF_SYNCCHK
 	LDA	HOLDIT
-	CMP	NET_PX_Y,X
+	CMP	LOCY,X
 	BNE	RF_SYNCCHK
 	LDA	#0
 	STA	NET_DESYNC_CNT,X
+	LDA	#1
+	STA	NET_RCHASE_STEP
 	JMP	INITMOVE
 RF_SYNCCHK
-	LDA	LOCX,X
+	LDA	RNDX,X
 	SEC
-	SBC	NET_PX_X,X
+	SBC	LOCX,X
 	BCS	RF_DXPOS
 	EOR	#$FF
 	CLC
 	ADC	#1
 RF_DXPOS
 	STA	COUNT		;abs dx
-	LDA	LOCY,X
+	LDA	RNDY,X
 	SEC
-	SBC	NET_PX_Y,X
+	SBC	LOCY,X
 	BCS	RF_DYPOS
 	EOR	#$FF
 	CLC
@@ -4993,25 +4997,21 @@ RF_DYPOS
 	LDA	COUNT
 	CLC
 	ADC	HOLDIT
-	STA	NET_RX_TMP	;manhattan divergence
-	CMP	#NET_RECOVER_P1	;walk off anything short of the snap threshold.
-	BCS	RF_FAIL		;Only an exact one-cell gap used to be walked, so
-			;a remote that got two ahead -- one missed
-			;snapshot while it was moving -- could never be
-			;followed at all: it failed, counted up and
-			;snapped.  That is the frequent remote snapping.
-	LDA	NET_PX_X,X
-	CMP	LOCX,X
+	STA	NET_RF_DIST	;manhattan render gap; look-ahead clobbers NET_RX_TMP
+	CMP	#NET_RECOVER_P1	;walk off anything short of the snap threshold
+	BCS	RF_FAIL
+	LDA	LOCX,X
+	CMP	RNDX,X
 	BEQ	RF_1Y
 	BCC	RF_1L
 	LDA	#0
-	BNE	RF_1SET
+	JMP	RF_1SET
 RF_1L
 	LDA	#2
 	BNE	RF_1SET
 RF_1Y
-	LDA	NET_PX_Y,X
-	CMP	LOCY,X
+	LDA	LOCY,X
+	CMP	RNDY,X
 	BCC	RF_1U
 	LDA	#1
 	BNE	RF_1SET
@@ -5019,23 +5019,31 @@ RF_1U
 	LDA	#3
 RF_1SET
 	STA	DIR,X
-	JSR	NET_AHEAD_FREE
+	JSR	NET_AHEAD_FREE_RND
 	BNE	RF_FAIL
-	LDA	NET_RX_TMP	;stepped successfully.  Only call it recovered when
-	CMP	#2		;we were within one cell; a gap of two that keeps
-	BCS	RF_STEPFAR	;coming back means we are trailing at the remote's
-	LDA	#0		;own speed and will never close it, so keep the
-	STA	NET_DESYNC_CNT,X	;counter running and snap rather than follow
-	JMP	INITMOVE	;two cells behind forever.
+	LDA	NET_RF_DIST	;stepped successfully.  Only call it recovered when
+	CMP	#2		;we were within one cell; a larger gap that keeps
+	BCS	RF_STEPFAR	;coming back means the picture is trailing at the
+	LDA	#0		;remote actor's own speed, so keep the counter
+	STA	NET_DESYNC_CNT,X	;running and snap rather than follow forever.
+	LDA	#1
+	STA	NET_RCHASE_STEP
+	JMP	INITMOVE
 RF_STEPFAR
+	LDA	#$10		;remote bounded recovery was still two cells out
+	JSR	NET_DIAG_BUMP
 	INC	NET_DESYNC_CNT,X
 	LDA	NET_DESYNC_CNT,X
 	CMP	#NET_DESYNC_MAX
 	BCS	RF_SNAP
+	LDA	#1
+	STA	NET_RCHASE_STEP
 	JMP	INITMOVE
 RF_FAIL
+	LDA	#$20		;remote recovery route blocked or over threshold
+	JSR	NET_DIAG_BUMP
 	INC	NET_DESYNC_CNT,X
-	LDA	NET_RX_TMP
+	LDA	NET_RF_DIST
 	CMP	#NET_RECOVER_P1
 	BCS	RF_SNAP
 	LDA	NET_DESYNC_CNT,X
@@ -5050,6 +5058,8 @@ RF_SNAP
 			;recovered and stayed wrong for the rest of the
 			;game.  Every other site that means "leave this
 			;actor alone" masks $03; RENDER_CHASE does too.
+	LDA	#$08		;remote hard snap from render follower
+	JSR	NET_DIAG_BUMP
 	JSR	NET_AUTH_REPOS
 	JSR	SETSTIL
 	LDA	#0
@@ -6800,6 +6810,7 @@ NET_DIAG_YSAV	.DS	1	;NET_DIAG_BUMP saved Y
 NET_DIAG_CNT	.DS	4	;per-path counts: staged, idle, vbi, remote
 NET_IDLE_FRAMES	.DS	1	;consecutive frames with the stick centred
 NET_GLIDE_TMP	.DS	1	;VBI-safe scratch for the glide distance test
+NET_RF_DIST	.DS	1	;REMOTE_FOLLOW saved gap; NET_AHEAD_FREE_RND clobbers RX tmp
 NET_RCHASE	.DS	1	;a correction is being walked off by the picture
 NET_RCHASE_STEP	.DS	1	;this INITMVE moves the render position only
 NET_MOVE_DUE	.DS	1	;permission to begin one predicted cell, granted

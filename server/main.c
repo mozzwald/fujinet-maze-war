@@ -2057,6 +2057,7 @@ int main(int argc, char **argv) {
 
     now = now_ms();
     if (now >= next_tick) {
+      uint64_t tick_deadline = next_tick;
       /* Before the step, so an echo never shares a tick with the break that
          produced it: one brick packet per tick, never two. */
       flush_brick_echo(sock, clients, &seq, debug);
@@ -2094,7 +2095,17 @@ int main(int argc, char **argv) {
           printf("TX snapshot -> slot %d\n", i);
         }
       }
-      next_tick = now + tick_ms;
+      next_tick = tick_deadline + tick_ms;
+      if (next_tick <= now) {
+        unsigned skipped = 0;
+        while (next_tick <= now && skipped < 4) {
+          next_tick += tick_ms;
+          skipped++;
+        }
+        if (next_tick <= now) {
+          next_tick = now + tick_ms;
+        }
+      }
     }
   }
 

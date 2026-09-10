@@ -396,23 +396,38 @@ persistent player identity or session-resume mechanism.
 - Inbound `DELTA` inputs are queued per client and applied **one per tick, in
   order**. The server used to keep only the newest joy each tick and discard
   the rest, so any input arriving between ticks was lost.
-- Consecutive inputs carrying the **same** joy are coalesced into the waiting
-  queue entry, which only advances its sequence. A held direction or an idle
-  keepalive therefore costs no queue depth and cannot push a real direction
-  change to the back or add input latency. Only genuine transitions take a slot.
-- With an empty queue the server repeats the last applied joy for at most
-  `INPUT_REPEAT_MAX` ticks before falling back to neutral, so a dropped or late
-  packet does not stop a held direction dead.
-- On queue overflow the arriving input is dropped and **not** acked, so the
-  client keeps it pending and replays it.
-- Measured on a live Atari session: queue depth stays at 0-1 with zero
-  overflow, so none of this adds latency in practice.
+- Only consecutive **neutral** keepalives (`joy=0x0F`) coalesce into a
+  waiting queue entry. Directional repeats each represent a separate command
+  and remain separate, so their ACKs do not discard unapplied predicted steps.
+- With an empty queue (or an entry not yet ready under `--lag-ms`), the server
+  sets joy to neutral immediately. It does not repeat the previous direction.
+- A directional command may move at most one cell when applied, subject to
+  collision, respawn, and directional-fire rules. Command arrival rate therefore
+  affects movement rate. The Atari NTSC path sends every six display frames,
+  matching the default ten server ticks per second; the renderer has enough
+  phase capacity to finish the previous cell before the next transmitted
+  command grants another predicted cell. PAL pacing still needs a dedicated
+  video-rate adjustment rather than pretending the shared packet sequence is a
+  simulation clock.
+- The per-client input queue holds six entries. Overflow drops the arriving
+  command without applying it. Current receive freshness has already advanced,
+  and a subsequent cumulative ACK can pass the dropped sequence; clients must
+  not assume overflow is repaired by retransmitting that sequence or by local
+  pending replay. This is an outstanding contract issue recorded in
+  `planning/phases/04-render-state-separation/04-LAG-REVIEW.md`.
+- Snapshot `seq` is a shared packet sequence, not a simulation timestamp.
+  The current wire format supplies no movement phase or dedicated server tick.
 
 ## Gameplay and Timing Semantics
 
 - Authoritative simulation runs server-side.
 - Tick rate is configurable (`--tick-hz`, default 10).
-- If a human client's input is stale for >500 ms, server forces neutral input.
+- Tick deadlines advance from the previous scheduled deadline with bounded
+  overrun recovery, so a late poll iteration does not permanently drift the
+  server's 10 Hz cadence.
+- Connected humans use the queued-input/empty-queue rule above. The separate
+  >500 ms input-staleness check applies only to non-zombie slots without a
+  connected client.
 - Zombie AI can control unoccupied slots (`--zombies`).
 
 ## Combat And World Authority Semantics

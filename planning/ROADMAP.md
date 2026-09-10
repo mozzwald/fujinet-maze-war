@@ -14,7 +14,7 @@ This roadmap follows the dependency chain identified in research: normalize tran
 - [x] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded. Final real-Atari verification approved the cadence/fire-direction replay fix and closed RECN-01 through RECN-04.
 - [x] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients. Human mixed-session checkpoint approved 2026-09-03.
 - [x] **Phase 3.1: Netstream Handler Refresh and POKEY Channel Isolation (INSERTED)** - Update to the latest netstream handler (built from source) and remap all sound to POKEY channels 1+2 so the game can never corrupt the handler's channel 3+4 baud timer. See `ref/net-fix-plan.md` for full analysis. Completed 2026-09-02; all four criteria verified (see STATE.md).
-- [ ] **Phase 4: Render-State Separation** - Keep render smoothing isolated from gameplay truth for local and remote actors. Reordered after Phase 5: presentation polish, needed for release but not for reliable play. Now the only substantial work left before Phase 6; 5 plans drafted 2026-09-04. Remote-actor lag investigated 2026-09-09: no reconciliation bug found (two measurement-rig bugs found and fixed instead); this phase's own work is the correctly-scoped fix for the residual lag, pending a human-supervised session.
+- [ ] **Phase 4: Render-State Separation** - Reopened 2026-09-10 after persistent remote lag on hardware and emulation. The first timing/recovery repair pass is user-tested and greatly improved play: two-computer emulation is almost flawless, real Atari XL + hardware FujiNet still occasionally jumps one or two cells. Bounded timed playback remains the next step only if that residual hardware jumpiness needs more work. See [lag review and repair sequence](phases/04-render-state-separation/04-LAG-REVIEW.md).
 - [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff received 2026-09-04.
 - [x] **Phase 5.1: Link Integrity and Frame Resynchronisation (INSERTED)** - Make the Atari receive path robust to a lossy SIO byte stream: per-packet checksum, COBS framing with a zero delimiter so the parser always realigns, actor-state validation, and the boot/render faults these exposed. Unplanned; driven by real-hardware symptoms that emulation could not reproduce. Completed and human-confirmed 2026-09-04. See STATE.md "Phase 5.1".
 - [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow. A minimal validation pass (scripted emulator sessions including join/leave handoff) runs after Phase 5; full hardening runs after Phase 4.
@@ -93,11 +93,11 @@ Plans:
   4. No display artefact originates from memory the client never initialised, and any character a player can enter renders as itself.
 **Plans**: 5 plans
 Plans:
-- [ ] `04-01` — Lock the movement decision to the transmit tick so one delta always equals exactly one predicted cell, removing the phase slip between `MOVCLOK` and `NET_FRAME_DIV` that still produces corrections. Gameplay-truth work; must land before smoothing so smoothing is not hiding a live desync.
-- [ ] `04-02` — Introduce render-only actor position distinct from `LOCX/LOCY`, so collision, shot origin and slot state keep reading authoritative/predicted cells while the display reads a separate interpolated position. Retire the `LOCAL_FOLLOW` glide stopgap in favour of it.
-- [ ] `04-03` — Interpolate remote actors and zombies from authoritative targets through the render state, and prove with counters that no smoothed value ever reaches a gameplay decision.
-- [ ] `04-04` — Clear all player-missile memory before PM DMA is enabled, and stop enabling missile DMA the game never uses. Hardware-only artefact: `PMAREA` is uninitialised `.DS`, nothing clears the missile region at `$3B00`, and `GRACTL` is set to `$03` while no missile register is ever written. Independent of smoothing; can run in parallel with 04-01.
-- [ ] `04-05` — Complete the embedded font for characters text can use. `F`, `J`, `Q`, `V` and `X` hold maze artwork rather than letterforms, which was safe while all text was compile-time constants and stopped being safe when player names became user input. Independent of smoothing; can run in parallel with 04-01.
+- [x] `04-01` — Repair implemented and user-tested: NTSC sends now match the server's 10 Hz tick, animation has enough phase capacity, and server tick deadlines no longer drift from late loop iterations.
+- [x] `04-02` — Introduce render-only actor position distinct from `LOCX/LOCY`; collision, shot origin and slot state stay on simulation truth while draw/erase uses `RNDX/RNDY`.
+- [ ] `04-03` — Partial repair accepted as a major improvement: fallback direction and recovery-distance bugs are fixed and instrumented. Bounded timed playback remains unimplemented and is reserved for the remaining occasional real-hardware jumps.
+- [x] `04-04` — Clear all player-missile memory before PM DMA is enabled, and stop enabling missile DMA the game never uses. Hardware artefact check remains useful during the phase acceptance pass.
+- [x] `04-05` — Complete the embedded font for characters text can use, including player-name and prompt/status text coverage.
 - [x] `04-06` — RETRACTED 2026-09-09, not executed. Proposed a bounded catch-up for `REMOTE_FOLLOW` on the premise that a diverged remote actor gets permanently stuck; that premise was traced to two bugs in the measurement rig itself (documented in `04-RESEARCH.md` and `tests/rig/README.md`), and a corrected instrument shows reconciliation converges to zero gap in 100% of samples once a remote actor is still, at every loss rate tested including 50%. No catch-up mechanism is needed. Kept in the plan list for the record.
 
 **Status note (2026-09-09)**: The remote-actor lag investigation (requested
@@ -230,7 +230,7 @@ Plans:
 **Execution Order:**
 1 -> 2 -> 3 (code) -> 3.1 (INSERTED) -> 5 -> 3 human checkpoint -> 6 (minimal validation) -> 4 -> 6 (full hardening)
 
-Phases 1, 2, 3, 3.1 and 5 are done. Next: Phase 6 minimal validation, then Phase 4.
+Phases 1, 2, 3, 3.1 and 5 are done. Next: Phase 4 lag repair and user acceptance, then Phase 6 validation.
 
 Phase 5 was brought forward ahead of the Phase 3 human checkpoint: both need the same
 mixed session to verify, and running the checkpoint before the slot work would have
@@ -247,6 +247,6 @@ Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) 
 | 3. Combat and World Authority | 3/3 | Complete | 2026-09-03 |
 | 3.1 Netstream Handler Refresh and POKEY Channel Isolation | 2/2 | Complete | 2026-09-02 |
 | 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
-| 4. Render-State Separation | 0/6 (04-06 retracted, not executed) | Lag investigation closed 2026-09-09: no reconciliation bug found after fixing two measurement-rig bugs. Original 04-01..04-05 plans (render-state separation proper) not started; correctly scoped for a human-supervised session | - |
+| 4. Render-State Separation | 4/5; 04-03 partially open; 04-06 retracted | First lag repair pass user-tested 2026-09-10: emulation almost flawless, real Atari XL + hardware FujiNet greatly improved with occasional one-to-two-cell jumps | - |
 | 6. Mixed-Session Validation and Hardening | 0/TBD | Not started | - |
 | 7. Realtime Transport Reliability (EXPERIMENTAL, branch `realm-net`) | 4/5 | 07-01 TCP, 07-02 clients/hardware acceptance, 07-03 CRC, and 07-04 reliable events complete; 07-05 deferred | - |

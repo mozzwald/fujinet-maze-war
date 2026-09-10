@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready
-stopped_at: 2026-09-09 - realm-net 07-01/07-02/07-03/07-04 complete. TCP clients have real Atari/FujiNet acceptance, CRC-16 framing has emulator validation, and reliable NAME/BRICK_DELTA/RESPAWN events are cumulatively acknowledged. 07-05 remains deferred and not recommended.
-last_updated: "2026-09-09T00:00:00.000Z"
+status: in_progress
+stopped_at: 2026-09-10 - Phase 4 first lag repair pass user-tested: emulation/emulation almost flawless, real Atari XL + hardware FujiNet greatly improved with occasional one-to-two-cell jumps. See 04-LAG-REVIEW.md.
+last_updated: "2026-09-10T00:00:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 6
@@ -19,11 +19,11 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** `realm-net` Phase 07 — TCP migration, real-hardware acceptance, CRC-16 framing, and reliable events (07-04) complete; 07-05 remains deferred.
+**Current focus:** Phase 4 remote movement checkpoint after successful first lag repair testing. See [lag review](phases/04-render-state-separation/04-LAG-REVIEW.md). Phase 7 remains committed; 07-05 remains deferred.
 
-## Current branch: realm-net (2026-09-09)
+## Current branch: realm-net (2026-09-10)
 
-07-01, 07-02, 07-03, and 07-04 are complete. TCP runs with `$05`, REGISTER clear,
+Phase 4 is reopened: the user saw substantial remote lag and jumpiness, including emulator-to-emulator sessions. The first repair pass fixes the confirmed follower direction/distance defects, raises render/send capacity for 10 Hz NTSC play, restores pending replay reachability, and makes server tick deadlines fixed with bounded overrun recovery. User testing on 2026-09-10 found two-computer emulation almost flawless and real Atari XL with hardware FujiNet greatly improved, with occasional one-to-two-cell remote jumps remaining. Bounded timed playback remains the next step only if the residual hardware jumps need more work before Phase 6. 07-01, 07-02, 07-03, and 07-04 are complete. TCP runs with `$05`, REGISTER clear,
 57600 baud, and the unchanged handler. The user confirmed the Atari/FujiNet
 hardware path works; MCP-managed Atari/FujiNet-PC also validated the CRC wire
 format with zero network or CRC errors. Reliable NAME, BRICK_DELTA, and RESPAWN
@@ -39,7 +39,7 @@ Phase: 03.1 (handler-refresh-pokey-isolation) — COMPLETE 2026-09-02. All four 
 Phase: 05 (slot-lifecycle-and-zombie-handoff) — COMPLETE. Code 2026-09-02 (LIFE-01..04 addressed), smoke suite green including `slot_lifecycle_smoke.sh`. Human confirmation of live join/leave handoff received 2026-09-04; human testing continues alongside each change from here.
 Phase: 05.1 (link-integrity-and-frame-resync) — COMPLETE 2026-09-04. Unplanned, driven by real-hardware symptoms. See "Phase 5.1" below.
 
-Execution order going forward: 4 -> 6 (minimal) -> 6 (full). Phases 3, 3.1, 5 and 5.1 are closed and human-approved.
+Execution order going forward: decide whether to checkpoint/commit this Phase 4 repair or pursue bounded timed playback for the remaining real-hardware jumps -> Phase 6 minimal -> Phase 6 full. Phases 3, 3.1, 5 and 5.1 are closed and human-approved.
 
 ## Performance Metrics
 
@@ -99,7 +99,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Phase 4 render-state separation. See "Phase 4 starting notes" and "Phase 4 investigation log" below; both were written before the 5.1 work and are partly superseded — read the 5.1 section first.
+- Phase 4 first lag repair is user-tested and much improved. Decide whether to checkpoint/commit it as-is or pursue bounded timed playback for the remaining occasional real-hardware jumps.
 - Phase 6 minimal validation: scripted emulator sessions including join/leave handoff.
 - Update `.planning/REQUIREMENTS.md` if the Phase 3.1 invariant and the 5.1 link-integrity invariant should become tracked requirement IDs.
 

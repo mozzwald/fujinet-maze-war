@@ -2,13 +2,11 @@
 
 # One delta per predicted cell.
 #
-# The server drains at most one queued input per tick and drops the overflow
-# without acking it, so the client must not put more deltas on the wire than
-# the server can apply. It used to send on every stick edge as well as on the
-# periodic slot: 60 rapid direction changes produced 18 applied and 33 dropped,
-# and every dropped input was a cell the client had already predicted. Nothing
-# reconverges that while the player is moving, so drift climbed past
-# NET_RECON_P0 and snapped the wizard back mid-turn.
+# The server drains at most one queued input per tick and drops overflow without
+# acking it, so the client must not put more movement deltas on the wire than
+# the server can apply. It also must not run slower than the server on a clean
+# NTSC path: that creates empty authoritative ticks and visible 100/200 ms
+# remote movement gaps even when TCP delivery is steady.
 #
 # The invariant this pins: deltas leave only from the periodic slot, whose
 # period equals the predicted-cell period, so sends and predicted cells stay
@@ -21,28 +19,22 @@ ATARI_SRC="$ROOT_DIR/clients/atari/maze-war.asm"
 
 TAB=$(printf '\t')
 
-# A predicted cell is NET_FRAME_DIV frames: INITMOVE_STEP runs phase 0 at once,
-# then MOVEST cycles the remaining three phases at MOVRATE frames each. Both
-# come off the same frame counter, so the two rates only stay locked while
-# NET_FRAME_DIV == (4 - 1) * MOVRATE.
+# A predicted cell is NET_FRAME_DIV frames. INITMOVE_STEP runs phase 0 at once,
+# then MOVEST cycles the remaining three phases at MOVRATE frames each. The
+# renderer must be able to finish a cell before the next transmit grant, while
+# the transmit grant itself matches the server's 10 Hz tick on NTSC.
 frame_div=$(grep -E "^NET_FRAME_DIV${TAB}+=" "$ATARI_SRC" | awk '{print $3}')
 movrate=$(grep -B1 -E "STA${TAB}+MOVRATE,X" "$ATARI_SRC" | grep -E "LDA${TAB}+#" | head -1 | sed 's/.*#//' | awk '{print $1}')
-# The cell animation is (4-1)*MOVRATE frames. The send gate must be at least
-# that long, or a cell would be gated before it finished drawing -- and it must
-# be STRICTLY longer than the server's 10Hz tick in frame terms (6 at 60fps),
-# because the server drains exactly one input per tick with no catch-up. At
-# equal rates the queue never drains and the server ends up permanently an
-# input behind, which shows up as a turn registering a column early.
 anim=$(( (4 - 1) * movrate ))
 if [ "$frame_div" -lt "$anim" ]; then
     echo "FAIL: NET_FRAME_DIV=$frame_div is shorter than the $anim-frame cell" \
          "animation; a cell would be gated before it finished" >&2
     exit 1
 fi
-if [ "$frame_div" -le 6 ]; then
-    echo "FAIL: NET_FRAME_DIV=$frame_div gives the server no drain margin." \
-         "It applies one input per 100ms tick and cannot catch up, so a client" \
-         "sending at or faster than that leaves it permanently behind" >&2
+if [ "$frame_div" -ne 6 ]; then
+    echo "FAIL: NET_FRAME_DIV=$frame_div is not the NTSC 10 Hz/server cadence;" \
+         "clean TCP then produces either empty authoritative ticks or input" \
+         "pressure above the server movement rate" >&2
     exit 1
 fi
 

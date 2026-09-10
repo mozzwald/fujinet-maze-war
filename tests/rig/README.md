@@ -3,6 +3,29 @@
 > use `tests/tcp_transport_smoke.sh` and the Phase 7 validation notes for TCP.
 > The Atari AI-socket inspection helpers remain usable.
 
+## Current TCP movement baseline (2026-09-10)
+
+`tcp_movement_probe.py` is a standalone TCP diagnostic using the current real
+server and COBS/CRC protocol. It creates an isolated loopback server and open
+map, sends commands at the Atari's current frame cadence, records snapshot and
+application timing as JSON, and cleans up its own server. It does not drive
+Atari800 or measure rendering/SIO. Run twice per rate:
+
+```sh
+make build/maze-war-server
+python3 tests/rig/tcp_movement_probe.py --fps 60 --seconds 10 > /tmp/cadence-60.json
+python3 tests/rig/tcp_movement_probe.py --fps 50 --seconds 10 > /tmp/cadence-50.json
+```
+
+By default the probe uses 6 frames at 60 Hz and 5 frames at 50 Hz, i.e. a
+10 Hz command stream. Override with `--frames N` to reproduce older pacing or
+stress a proposed client cadence. The 50 Hz option simulates PAL input pacing;
+it is not a PAL emulator test.
+See `planning/phases/04-render-state-separation/04-LAG-REVIEW.md` for the results
+and current repair plan. The historical UDP conclusions below do not establish
+smoothness of the current TCP renderer. In particular, convergence after a stop
+and a small cell gap do not measure animation phase timing or display latency.
+
 # Rig: reproducing lag and rendering faults on the emulator
 
 Not part of `make test`. These are the instruments the Phase 4 measurements in

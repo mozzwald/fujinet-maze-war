@@ -34,7 +34,7 @@ grep -qE "^RNDY[[:space:]]+\.DS[[:space:]]+4" "$ATARI_SRC" \
 # cell off for part of every move, which is the bug this split removes.
 # RENDER_CHASE is deliberately absent: it is the bridge between the two and
 # must read both.
-for r in NET_AHEAD_FREE CKMV_AOK NLRC_IDLE RF_NEEDS; do
+for r in NET_AHEAD_FREE CKMV_AOK NLRC_IDLE; do
     # stop at the routine separator, or the body runs on into whatever
     # routine happens to follow and the check reports on the wrong code
     body=$(awk -v r="$r" '
@@ -48,6 +48,35 @@ for r in NET_AHEAD_FREE CKMV_AOK NLRC_IDLE RF_NEEDS; do
     printf '%s' "$body" | grep -qE "LOC[XY]," \
       || fail "$r no longer reads LOCX/LOCY at all -- did the split invert?"
 done
+
+
+# --- remote actors interpolate through render state only -----------------
+remote=$(awk '$1=="REMOTE_FOLLOW"{on=1} on{print} on&&/^RF_DONE/{seen=1} seen&&/JMP[[:space:]]+CHKSHOT/{exit}' "$ATARI_SRC")
+printf '%s' "$remote" | grep -qE "RND[XY],X" \
+  || fail "REMOTE_FOLLOW does not read render position; remote smoothing is not presentation-only"
+printf '%s' "$remote" | grep -qE "JSR[[:space:]]+NET_AHEAD_FREE_RND" \
+  || fail "REMOTE_FOLLOW does not path from the rendered cell"
+printf '%s' "$remote" | grep -qE "STA[[:space:]]+NET_RCHASE_STEP" \
+  || fail "REMOTE_FOLLOW can reach INITMOVE without marking the step render-only"
+printf '%s' "$remote" | grep -qE "CMP[[:space:]]+LOCX,X" \
+  || fail "REMOTE_FOLLOW does not chase authoritative simulation X"
+printf '%s' "$remote" | grep -qE "CMP[[:space:]]+LOCY,X" \
+  || fail "REMOTE_FOLLOW does not chase authoritative simulation Y"
+
+commit=$(awk '$1=="NET_STAGE_COMMIT"{on=1} on{print} on&&/^NSC_NG/{exit}' "$ATARI_SRC")
+printf '%s' "$commit" | grep -qE "STA[[:space:]]+LOCX,X" \
+  || fail "NET_STAGE_COMMIT does not put remote authoritative X into simulation truth"
+printf '%s' "$commit" | grep -qE "STA[[:space:]]+LOCY,X" \
+  || fail "NET_STAGE_COMMIT does not put remote authoritative Y into simulation truth"
+printf '%s' "$commit" | grep -qE "CPX[[:space:]]+NET_LOCAL_PID" \
+  || fail "NET_STAGE_COMMIT remote simulation update is not guarded away from the local predicted slot"
+
+
+respawn=$(awk '$1=="NET_RESP_APPLY_WRK"{on=1} on{print} on&&/^NRAW_X/{exit}' "$ATARI_SRC")
+printf '%s' "$respawn" | grep -qE "JSR[[:space:]]+NET_AUTH_REPOS" \
+  || fail "final respawn does not snap render+simulation to the spawn cell"
+printf '%s' "$respawn" | grep -qE "JSR[[:space:]]+SETSTIL" \
+  || fail "final respawn does not redraw a still actor at the spawn cell"
 
 # --- drawing reads render state only -----------------------------------
 # ERASMAN is the one that has bitten hardest: it blanks two characters at the
