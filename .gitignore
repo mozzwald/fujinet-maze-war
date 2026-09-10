@@ -13,3 +13,4 @@ delta.bin
 clients/atari/map.asm
 clients/atari/map1.txt
 clients/atari/map2.asm
+tests/__pycache__
