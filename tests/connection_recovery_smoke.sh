@@ -5,7 +5,7 @@
 #   - a server that goes silent mid-game must time out the same way
 #   - both paths return to the host prompt with an explanation instead of
 #     freezing, and NS_INIT failures must not spin through RESTART forever
-#   - the server must not share its UDP port with another binder
+#   - the TCP listener must reject a second active listener
 
 set -eu
 
@@ -56,13 +56,10 @@ grep -E "JSR[$TAB ]+HOST_MSGDRAW" "$ATARI_SRC" >/dev/null
 grep -E "^HOSTPROMPT[$TAB ]+\.BYTE.*\\\$FF" "$ATARI_SRC" >/dev/null
 grep -A2 -F "HD_PR${TAB}LDA${TAB}(INPROM),Y" "$ATARI_SRC" | grep -E "CMP[$TAB ]+#\\\$FF" >/dev/null
 
-# the server must fail loudly instead of silently sharing the port with
-# FujiNet-PC's netstream socket, which swallowed the client's datagrams
-if grep -E "SO_REUSEADDR" "$SERVER_SRC" | grep -v '^\s*/\*' | grep -q "setsockopt"; then
-    echo "FAIL: server re-enabled SO_REUSEADDR on the game socket" >&2
-    exit 1
-fi
-grep -F "Another process already holds that port" "$SERVER_SRC" >/dev/null
+# TCP allows SO_REUSEADDR for restart after TIME_WAIT. The live duplicate-bind
+# and restart assertions are in tcp_transport_smoke.sh.
+grep -F 'SOCK_STREAM' "$SERVER_SRC" >/dev/null
+grep -F 'listen(sock, MAX_PLAYERS)' "$SERVER_SRC" >/dev/null
 
 # Slot lifecycle resets on the client: a slot that changes role, or a local pid
 # that moves, must not keep latches describing the previous occupant.

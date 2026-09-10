@@ -11,6 +11,7 @@ set -eu
 
 PORT=9151
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$ROOT_DIR/tests${PYTHONPATH:+:$PYTHONPATH}"
 SERVER_BIN="$ROOT_DIR/build/maze-war-server"
 LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/player-names-smoke.XXXXXX.log")
 SERVER_PID=
@@ -39,6 +40,7 @@ sleep 1
 
 python3 - "$PORT" <<'PYEOF'
 import socket, sys, time
+from tcp_frames import recv_frame, send_frame
 
 
 def cobs_decode(pkt):
@@ -70,23 +72,23 @@ PKT_NAME = 0x43
 
 class C:
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect(("127.0.0.1", port))
         self.sock.settimeout(0.05)
         self.names = {}
 
     def name(self, pid, text):
         n = text.ljust(NAME_LEN)[:NAME_LEN].encode("latin1")
-        self.sock.send(bytes([PKT_NAME, 1, pid]) + n)
+        send_frame(self.sock, bytes([PKT_NAME, 1, pid]) + n)
 
     def pump(self, secs=0.8):
         end = time.time() + secs
         while time.time() < end:
             try:
-                p = cobs_decode(self.sock.recv(256))
+                p = cobs_decode(recv_frame(self.sock, 256))
             except socket.timeout:
                 continue
-            if len(p) >= 3 + NAME_LEN and p[0] == PKT_NAME:  # trailing checksum byte
+            if len(p) >= 3 + NAME_LEN and p[0] == PKT_NAME:  # CRC trailer stripped by recv_frame
                 self.names[p[2]] = bytes(p[3:3 + NAME_LEN]).decode("latin1")
 
 
@@ -152,15 +154,19 @@ grep -F 'NAME slot=0 name="MOZZWALD"' "$LOG_FILE" >/dev/null
 # The name lives with the rest of the slot's transient state, so the handoff
 # reset must drop it too.
 SERVER_SRC="$ROOT_DIR/server/main.c"
-grep -F 'memset(clients[i].name, 0, NAME_LEN)' "$SERVER_SRC" >/dev/null || {
+grep -F 'memset(client->name, 0, NAME_LEN)' "$SERVER_SRC" >/dev/null || {
     echo "FAIL: claiming a slot does not clear the previous occupant's name" >&2
     exit 1
 }
 
 # Names must be repeated so a lost NAME heals, and must go out one at a time.
 # Bursting them behind the 51-byte BRICK_FULL made the Atari drop the map.
-grep -F "broadcast_next_name(sock, clients, &seq, &name_rotate)" "$SERVER_SRC" >/dev/null || {
+grep -F "broadcast_next_name(sock, clients, &seq, &name_rotate, debug)" "$SERVER_SRC" >/dev/null || {
     echo "FAIL: names are not re-broadcast" >&2
+    exit 1
+}
+grep -F "broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now_ms(), debug)" "$SERVER_SRC" >/dev/null || {
+    echo "FAIL: name rotation is not mirrored into the reliable event stream" >&2
     exit 1
 }
 # ...and on their own slow timer, not once per tick. At tick rate the name
@@ -172,7 +178,7 @@ grep -E "NAME_ROTATE_MS" "$SERVER_SRC" >/dev/null || {
 }
 # The one call site must sit inside the NAME_ROTATE_MS timer block, not the
 # game tick. Anchor on the timer assignment that immediately precedes it.
-if ! grep -B2 -F "broadcast_next_name(sock, clients, &seq, &name_rotate)" \
+if ! grep -B2 -F "broadcast_next_name(sock, clients, &seq, &name_rotate, debug)" \
      "$SERVER_SRC" | grep -F "last_name_rotate_ms = now_ms();" >/dev/null; then
     echo "FAIL: name rotation is not driven by its own timer" >&2
     exit 1

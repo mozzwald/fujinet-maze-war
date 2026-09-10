@@ -3,7 +3,7 @@
 Original game Maze War, by Mark Price, from A.N.A.L.O.G. Magazine #36 (November 1985)
 
 Networked Maze War with:
-- an authoritative UDP server (`server/main.c`)
+- an authoritative TCP server (`server/main.c`)
 - an Atari client (`clients/atari/maze-war.asm`)
 - a Linux/macOS terminal test client (`clients/linux/main.c`)
 - a Linux/macOS SDL1 graphics client (`clients/linux/sdl_main.c`)
@@ -54,7 +54,7 @@ make build/maze-war-client-sdl
 Output artifacts:
 - `build/maze-war.xex`: raw Atari client program assembled from `maze-war.asm`
 - `build/maze-war-net.xex`: `NSENGINE.OBX` + `maze-war.xex` concatenated
-- `build/maze-war-server`: UDP authoritative server
+- `build/maze-war-server`: TCP authoritative server
 - `build/maze-war-client`: terminal client with optional Linux evdev input
 - `build/maze-war-client-sdl`: SDL1 graphics client
 
@@ -144,10 +144,12 @@ Controls (SDL client):
 
 ## Networking Overview
 
-- Transport: UDP
+- Transport: TCP (Atari `NET_FLAGS=$05`, unchanged 57600 baud)
 - Default server port: `9000`
 - Max players: 4 total slots
 - Server tick: fixed rate (`--tick-hz`, default 10 Hz)
+- A disconnected Linux client exits; restart it to reconnect. The Atari returns
+  to its host prompt after its silence watchdog expires.
 - Sequence numbers: 8-bit packet seq for ordering/duplicate filtering
 
 Core packet flow:

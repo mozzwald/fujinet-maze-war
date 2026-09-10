@@ -1,3 +1,5 @@
+#include <signal.h>
+#include "../../net/tcp_stream.h"
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
@@ -22,9 +24,11 @@ enum {
   PKT_SHOT = 0x42,
   PKT_NAME = 0x43,
   PKT_SEATS = 0x44,
+  PKT_RELIABLE_ACK = 0x45,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
-  PKT_RESPAWN = 0x52
+  PKT_RESPAWN = 0x52,
+  PKT_RELIABLE_EVENT = 0x53
 };
 
 enum { MAX_PLAYERS = 4 };
@@ -159,33 +163,6 @@ static float clampf(float v, float lo, float hi) {
     return hi;
   }
   return v;
-}
-
-/* Server frames are COBS-encoded with a trailing zero delimiter, so a byte
-   lost on the Atari's SIO link cannot desynchronise its parser. Datagrams keep
-   frame boundaries for us here, so decoding is all that is needed; the trailing
-   checksum byte is left in place and simply ignored by the length checks. */
-static ssize_t cobs_decode_inplace(uint8_t *buf, ssize_t n) {
-  if (n <= 0) {
-    return n;
-  }
-  if (buf[n - 1] == 0) {
-    n--; /* drop the delimiter */
-  }
-  ssize_t rd = 0, wr = 0;
-  while (rd < n) {
-    uint8_t code = buf[rd++];
-    if (code == 0) {
-      return -1;
-    }
-    for (uint8_t i = 1; i < code && rd < n; i++) {
-      buf[wr++] = buf[rd++];
-    }
-    if (code != 0xFF && rd < n) {
-      buf[wr++] = 0;
-    }
-  }
-  return wr;
 }
 
 static uint8_t pack_joy(uint8_t stick, uint8_t trig) {
@@ -883,7 +860,7 @@ static int resolve_host(const char *host, int port, struct sockaddr_in *out_addr
 
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_DGRAM;
+  hints.ai_socktype = SOCK_STREAM;
   snprintf(port_str, sizeof(port_str), "%d", port);
 
   rc = getaddrinfo(host, port_str, &hints, &res);
@@ -903,18 +880,11 @@ static int resolve_host(const char *host, int port, struct sockaddr_in *out_addr
   return -1;
 }
 
-static int open_udp_socket_nonblocking(void) {
-  int sock = socket(AF_INET, SOCK_DGRAM, 0);
-  int flags;
-  if (sock < 0) {
-    return -1;
-  }
-  flags = fcntl(sock, F_GETFL, 0);
-  if (flags < 0) {
-    close(sock);
-    return -1;
-  }
-  if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0) {
+static int open_tcp_socket(const struct sockaddr_in *addr) {
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (sock < 0) return -1;
+  if (connect(sock, (const struct sockaddr *)addr, sizeof(*addr)) < 0 ||
+      tcp_configure(sock) < 0) {
     close(sock);
     return -1;
   }
@@ -1010,8 +980,49 @@ static void apply_player_snapshot(struct game_state *g, int pid,
   }
 }
 
+static void send_reliable_ack(int sock, struct tcp_tx *tx, uint8_t *seq,
+                              uint16_t rev) {
+  uint8_t pkt[4];
+  pkt[0] = PKT_RELIABLE_ACK;
+  pkt[1] = (*seq)++;
+  pkt[2] = (uint8_t)rev;
+  pkt[3] = (uint8_t)(rev >> 8);
+  tcp_tx_queue_frame(sock, tx, pkt, sizeof(pkt));
+}
+
+static int reliable_inner_is_valid(const uint8_t *buf, ssize_t n) {
+  if (n == 4 && buf[0] == PKT_BRICK_DELTA) {
+    return 1;
+  }
+  if (n == 6 && buf[0] == PKT_RESPAWN) {
+    return 1;
+  }
+  if (n == 3 + NAME_LEN && buf[0] == PKT_NAME) {
+    return 1;
+  }
+  return 0;
+}
+
 static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
-                          uint64_t now, int debug) {
+                          uint64_t now, int debug, int sock,
+                          struct tcp_tx *tx, uint8_t *seq,
+                          uint16_t *reliable_applied_rev) {
+  if (n >= 8 && buf[0] == PKT_RELIABLE_EVENT) {
+    uint16_t rev = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
+    const uint8_t *inner = &buf[4];
+    ssize_t inner_len = n - 4;
+    if (rev != (uint16_t)(*reliable_applied_rev + 1) ||
+        !reliable_inner_is_valid(inner, inner_len)) {
+      send_reliable_ack(sock, tx, seq, *reliable_applied_rev);
+      return;
+    }
+    *reliable_applied_rev = rev;
+    send_reliable_ack(sock, tx, seq, *reliable_applied_rev);
+    handle_packet(g, inner, inner_len, now, debug, sock, tx, seq,
+                  reliable_applied_rev);
+    return;
+  }
+
   if (n >= 51 && buf[0] == PKT_BRICK_FULL) {
     decode_brick_full(g, &buf[3]);
     return;
@@ -1205,6 +1216,9 @@ int main(int argc, char **argv) {
   uint64_t last_name_send_ms = 0;
   char prompt_msg[128] = "";
   int sock = -1;
+  struct tcp_tx tx = {0};
+  struct tcp_rx rx = {0};
+  signal(SIGPIPE, SIG_IGN);
   struct sockaddr_in server_addr;
   struct layout layout;
   struct theme theme;
@@ -1213,6 +1227,7 @@ int main(int argc, char **argv) {
   struct input_state input;
   uint8_t seq = 0;
   uint8_t last_joy = 0xFF;
+  uint16_t reliable_applied_rev = 0;
   uint64_t last_send_ms = 0;
   uint64_t next_frame_ms;
   int running = 1;
@@ -1286,7 +1301,7 @@ int main(int argc, char **argv) {
     snprintf(prompt_msg, sizeof(prompt_msg), "COULD NOT RESOLVE HOST");
   }
 
-  sock = open_udp_socket_nonblocking();
+  sock = open_tcp_socket(&server_addr);
   if (sock < 0) {
     perror("socket");
     return 1;
@@ -1352,18 +1367,16 @@ int main(int argc, char **argv) {
 
     now = now_ms();
 
-    while (1) {
-      uint8_t buf[256];
-      ssize_t n = recvfrom(sock, buf, sizeof(buf), 0, NULL, NULL);
-      n = cobs_decode_inplace(buf, n);
-      if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          break;
-        }
-        break;
-      }
-      handle_packet(&game, buf, n, now, debug);
+    if (tcp_tx_flush(sock, &tx) < 0) break;
+    for (int frames = 0; frames < 64; frames++) {
+      uint8_t buf[64];
+      int n = tcp_recv_frame(sock, &rx, buf, sizeof(buf));
+      if (n < 0) { running = 0; break; }
+      if (n == 0) break;
+      handle_packet(&game, buf, n, now, debug, sock, &tx, &seq,
+                    &reliable_applied_rev);
     }
+    if (!running) break;
 
     /* The server repeats names it knows, but it cannot repeat one it never
        received, so keep sending until our own slot comes back named. */
@@ -1375,7 +1388,7 @@ int main(int argc, char **argv) {
         pkt[1] = seq++;
         pkt[2] = (uint8_t)((game.local_pid >= 0) ? game.local_pid : 0);
         memcpy(&pkt[3], my_name, NAME_LEN);
-        sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        tcp_tx_queue_frame(sock, &tx, pkt, sizeof(pkt));
       }
       last_name_send_ms = now;
     }
@@ -1392,7 +1405,7 @@ int main(int argc, char **argv) {
         pkt[1] = seq++;
         pkt[2] = (uint8_t)tx_pid;
         pkt[3] = joy;
-        sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        tcp_tx_queue_frame(sock, &tx, pkt, sizeof(pkt));
         last_joy = joy;
         last_send_ms = now;
       }

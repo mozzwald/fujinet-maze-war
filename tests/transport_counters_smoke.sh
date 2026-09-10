@@ -4,6 +4,7 @@ set -eu
 
 PORT=9102
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$ROOT_DIR/tests${PYTHONPATH:+:$PYTHONPATH}"
 SERVER_BIN="$ROOT_DIR/build/maze-war-server"
 LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/transport-counters-smoke.XXXXXX.log")
 SERVER_PID=
@@ -32,6 +33,7 @@ sleep 1
 
 python3 - "$PORT" <<'PY'
 import socket
+from tcp_frames import recv_frame, send_frame
 import sys
 import time
 
@@ -43,9 +45,10 @@ payloads = [
     bytes([0x41, 0x03, 0x00, 0x3F]),
 ]
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect(("127.0.0.1", port))
 for payload in payloads:
-    sock.sendto(payload, ("127.0.0.1", port))
+    send_frame(sock, payload)
     time.sleep(0.2)
 sock.close()
 time.sleep(2.5)

@@ -18,7 +18,7 @@ This roadmap follows the dependency chain identified in research: normalize tran
 - [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff received 2026-09-04.
 - [x] **Phase 5.1: Link Integrity and Frame Resynchronisation (INSERTED)** - Make the Atari receive path robust to a lossy SIO byte stream: per-packet checksum, COBS framing with a zero delimiter so the parser always realigns, actor-state validation, and the boot/render faults these exposed. Unplanned; driven by real-hardware symptoms that emulation could not reproduce. Completed and human-confirmed 2026-09-04. See STATE.md "Phase 5.1".
 - [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow. A minimal validation pass (scripted emulator sessions including join/leave handoff) runs after Phase 5; full hardening runs after Phase 4.
-- [ ] **Phase 7: Realtime Transport Reliability (FujiRealm-informed, EXPERIMENTAL, branch `realm-net`)** - Not part of the v1 execution order below; lives on its own branch off `a8-net-fix` so it doesn't disturb v1's near-complete track. Migrates the realtime channel to TCP, upgrades framing to CRC-16, and replaces three ad hoc echo mechanisms with one acknowledged reliable-event stream, informed by a close read of FujiRealm's own networking (`~/fujicode/fujirealm-game-demo`). Explicitly does **not** adopt FujiRealm's client-authoritative movement model by default — see `planning/phases/07-realtime-transport-reliability/07-RESEARCH.md` for why. Planned 2026-09-09; not yet started.
+- [ ] **Phase 7: Realtime Transport Reliability (FujiRealm-informed, EXPERIMENTAL, branch `realm-net`)** - Not part of the v1 execution order below; lives on its own branch off `a8-net-fix` so it doesn't disturb v1's near-complete track. TCP migration, client conversion, CRC-16 framing, and the acknowledged reliable-event stream are complete. The remaining 07-05 client-authoritative movement plan is documented but not recommended. The work is informed by a close read of FujiRealm's own networking (`~/fujicode/fujirealm-game-demo`). Explicitly does **not** adopt FujiRealm's client-authoritative movement model by default — see `planning/phases/07-realtime-transport-reliability/07-RESEARCH.md` for why.
 
 ## Phase Details
 
@@ -188,10 +188,10 @@ top of a more reliable transport rather than through its noise.
      decision.
 **Plans**: 5 plans (04 executable, 01 explicitly deferred)
 Plans:
-- [ ] `07-01` — Server: UDP socket to TCP listen/accept, game logic untouched.
-- [ ] `07-02` — Atari and Linux clients: TCP netstream connection via the existing flag-bit mechanism.
-- [ ] `07-03` — Upgrade frame checksum from a 1-byte sum to CRC-16/CCITT-FALSE.
-- [ ] `07-04` — Replace `BRICK_DELTA`/`RESPAWN`/`NAME` echo hacks with one ordered, cumulatively-acknowledged reliable-event stream.
+- [x] `07-01` — Server TCP listen/accept complete; full smoke suite passes. See `07-01-SUMMARY.md`.
+- [x] `07-02` — TCP clients and emulator reconnect validation complete; real-hardware acceptance confirmed. See `07-02-SUMMARY.md`.
+- [x] `07-03` — CRC-16/CCITT-FALSE framing complete in both directions; emulator and hardware confirmation recorded. See `07-03-SUMMARY.md`.
+- [x] `07-04` — Replace `BRICK_DELTA`/`RESPAWN`/`NAME` echo hacks with one ordered, cumulatively-acknowledged reliable-event stream. See `07-04-SUMMARY.md`.
 - [ ] `07-05` — NOT RECOMMENDED, documented only: full client-authoritative local movement. Do not execute without an explicit separate go-ahead.
 
 ## Traceability
@@ -249,4 +249,4 @@ Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) 
 | 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
 | 4. Render-State Separation | 0/6 (04-06 retracted, not executed) | Lag investigation closed 2026-09-09: no reconciliation bug found after fixing two measurement-rig bugs. Original 04-01..04-05 plans (render-state separation proper) not started; correctly scoped for a human-supervised session | - |
 | 6. Mixed-Session Validation and Hardening | 0/TBD | Not started | - |
-| 7. Realtime Transport Reliability (EXPERIMENTAL, branch `realm-net`) | 0/5 | Planned 2026-09-09, not started. Not part of the v1 sequence above | - |
+| 7. Realtime Transport Reliability (EXPERIMENTAL, branch `realm-net`) | 4/5 | 07-01 TCP, 07-02 clients/hardware acceptance, 07-03 CRC, and 07-04 reliable events complete; 07-05 deferred | - |

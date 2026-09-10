@@ -1,3 +1,5 @@
+#include <signal.h>
+#include "../../net/tcp_stream.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -21,9 +23,11 @@ enum {
   PKT_SHOT = 0x42,
   PKT_NAME = 0x43,
   PKT_SEATS = 0x44,
+  PKT_RELIABLE_ACK = 0x45,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
-  PKT_RESPAWN = 0x52
+  PKT_RESPAWN = 0x52,
+  PKT_RELIABLE_EVENT = 0x53
 };
 
 enum { MAX_PLAYERS = 4 };
@@ -54,33 +58,6 @@ static uint64_t now_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
-}
-
-/* Server frames are COBS-encoded with a trailing zero delimiter, so a byte
-   lost on the Atari's SIO link cannot desynchronise its parser. Datagrams keep
-   frame boundaries for us here, so decoding is all that is needed; the trailing
-   checksum byte is left in place and simply ignored by the length checks. */
-static ssize_t cobs_decode_inplace(uint8_t *buf, ssize_t n) {
-  if (n <= 0) {
-    return n;
-  }
-  if (buf[n - 1] == 0) {
-    n--; /* drop the delimiter */
-  }
-  ssize_t rd = 0, wr = 0;
-  while (rd < n) {
-    uint8_t code = buf[rd++];
-    if (code == 0) {
-      return -1;
-    }
-    for (uint8_t i = 1; i < code && rd < n; i++) {
-      buf[wr++] = buf[rd++];
-    }
-    if (code != 0xFF && rd < n) {
-      buf[wr++] = 0;
-    }
-  }
-  return wr;
 }
 
 static uint8_t pack_joy(uint8_t stick, uint8_t trig) {
@@ -189,7 +166,7 @@ static void usage(const char *argv0) {
           argv0);
 }
 
-static void send_respawn(int sock, const struct sockaddr_in *srv,
+static void send_respawn(int sock, struct tcp_tx *tx,
                          uint8_t *seq, int local_pid) {
   uint8_t pkt[6];
   pkt[0] = PKT_RESPAWN;
@@ -198,12 +175,35 @@ static void send_respawn(int sock, const struct sockaddr_in *srv,
   pkt[3] = 0;
   pkt[4] = 0;
   pkt[5] = 0;
-  sendto(sock, pkt, sizeof(pkt), 0, (const struct sockaddr *)srv, sizeof(*srv));
+  tcp_tx_queue_frame(sock, tx, pkt, sizeof(pkt));
+}
+
+static void send_reliable_ack(int sock, struct tcp_tx *tx, uint8_t *seq,
+                              uint16_t rev) {
+  uint8_t pkt[4];
+  pkt[0] = PKT_RELIABLE_ACK;
+  pkt[1] = (*seq)++;
+  pkt[2] = (uint8_t)rev;
+  pkt[3] = (uint8_t)(rev >> 8);
+  tcp_tx_queue_frame(sock, tx, pkt, sizeof(pkt));
+}
+
+static int reliable_inner_is_valid(const uint8_t *pkt, ssize_t len) {
+  if (len == 4 && pkt[0] == PKT_BRICK_DELTA) {
+    return 1;
+  }
+  if (len == 6 && pkt[0] == PKT_RESPAWN) {
+    return 1;
+  }
+  if (len == 3 + NAME_LEN && pkt[0] == PKT_NAME) {
+    return 1;
+  }
+  return 0;
 }
 
 static void handle_curses_key(int ch, int *up, int *down, int *left,
                               int *right, int *fire, int *running,
-                              int sock, const struct sockaddr_in *srv,
+                              int sock, struct tcp_tx *tx,
                               uint8_t *seq, int local_pid) {
   switch (ch) {
     case KEY_UP:
@@ -231,7 +231,7 @@ static void handle_curses_key(int ch, int *up, int *down, int *left,
       break;
     case 'r':
     case 'R':
-      send_respawn(sock, srv, seq, local_pid);
+      send_respawn(sock, tx, seq, local_pid);
       break;
     case 27:
       *running = 0;
@@ -275,7 +275,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Invalid pid (0..3)\\n");
     return 1;
   }
-  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) {
     perror("socket");
     return 1;
@@ -291,6 +291,15 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  signal(SIGPIPE, SIG_IGN);
+  if (connect(sock, (struct sockaddr *)&srv, sizeof(srv)) < 0 ||
+      tcp_configure(sock) < 0) {
+    perror("connect");
+    close(sock);
+    return 1;
+  }
+  struct tcp_tx tx = {0};
+  struct tcp_rx rx = {0};
   int evfd = -1;
 #if HAVE_EVDEV_INPUT
   if (input_path) {
@@ -335,6 +344,7 @@ int main(int argc, char **argv) {
   int up = 0, down = 0, left = 0, right = 0, fire = 0;
   uint64_t last_send_ms = 0;
   uint8_t seq = 0;
+  uint16_t reliable_applied_rev = 0;
   uint64_t next_redraw = now_ms();
 
   if (debug) {
@@ -360,51 +370,68 @@ int main(int argc, char **argv) {
     }
     poll(pfds, nfds, 10);
 
-    if (pfds[0].revents & POLLIN) {
-      uint8_t buf[256];
-      ssize_t n = recvfrom(sock, buf, sizeof(buf), 0, NULL, NULL);
-      n = cobs_decode_inplace(buf, n);
-      if (n >= 3 && buf[0] == PKT_BRICK_FULL && n >= 51) {
-        memcpy(bricks, &buf[3], 48);
-      } else if (n >= 4 && buf[0] == PKT_BRICK_DELTA) {
-        uint8_t x = buf[2];
-        uint8_t y = buf[3];
+    if (tcp_tx_flush(sock, &tx) < 0) break;
+    /* Drain buffered frames even when poll has no new socket bytes. */
+    for (int frames = 0; frames < 64; frames++) {
+      uint8_t buf[64];
+      int n = tcp_recv_frame(sock, &rx, buf, sizeof(buf));
+      if (n < 0) { running = 0; break; }
+      if (n == 0) break;
+      const uint8_t *pkt = buf;
+      ssize_t pkt_len = n;
+      if (n >= 8 && buf[0] == PKT_RELIABLE_EVENT) {
+        uint16_t rev = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
+        pkt = &buf[4];
+        pkt_len = n - 4;
+        if (rev != (uint16_t)(reliable_applied_rev + 1) ||
+            !reliable_inner_is_valid(pkt, pkt_len)) {
+          send_reliable_ack(sock, &tx, &seq, reliable_applied_rev);
+          continue;
+        }
+        reliable_applied_rev = rev;
+        send_reliable_ack(sock, &tx, &seq, reliable_applied_rev);
+      }
+      if (pkt_len >= 3 && pkt[0] == PKT_BRICK_FULL && pkt_len >= 51) {
+        memcpy(bricks, &pkt[3], 48);
+      } else if (pkt_len >= 4 && pkt[0] == PKT_BRICK_DELTA) {
+        uint8_t x = pkt[2];
+        uint8_t y = pkt[3];
         if (x < 20 && y < 19) {
           int idx = y * 20 + x;
           bricks[idx / 8] &= (uint8_t)~(1u << (idx % 8));
         }
-      } else if (n >= 6 && buf[0] == PKT_RESPAWN) {
-        uint8_t rp = buf[2];
+      } else if (pkt_len >= 6 && pkt[0] == PKT_RESPAWN) {
+        uint8_t rp = pkt[2];
         if (rp < MAX_PLAYERS) {
-          if (buf[5] & 0x01) {
+          if (pkt[5] & 0x01) {
             players[rp].x = 255;
             players[rp].y = 255;
           } else {
-            players[rp].x = buf[3];
-            players[rp].y = buf[4];
+            players[rp].x = pkt[3];
+            players[rp].y = pkt[4];
           }
         }
-      } else if (n >= 3 && buf[0] == PKT_SEATS) {
-        seat_mask = (uint8_t)(buf[2] & 0x0F);
-      } else if (n >= 3 + NAME_LEN && buf[0] == PKT_NAME) {
-        uint8_t np = buf[2];
+      } else if (pkt_len >= 3 && pkt[0] == PKT_SEATS) {
+        seat_mask = (uint8_t)(pkt[2] & 0x0F);
+      } else if (pkt_len >= 3 + NAME_LEN && pkt[0] == PKT_NAME) {
+        uint8_t np = pkt[2];
         if (np < MAX_PLAYERS) {
-          memcpy(names[np], &buf[3], NAME_LEN);
+          memcpy(names[np], &pkt[3], NAME_LEN);
         }
-      } else if (n >= 6 && buf[0] == PKT_SHOT) {
-        uint8_t sp = buf[2];
+      } else if (pkt_len >= 6 && pkt[0] == PKT_SHOT) {
+        uint8_t sp = pkt[2];
         if (sp < MAX_PLAYERS) {
-          shots[sp].x = buf[3];
-          shots[sp].y = buf[4];
-          shots[sp].active = buf[5] ? 1 : 0;
+          shots[sp].x = pkt[3];
+          shots[sp].y = pkt[4];
+          shots[sp].active = pkt[5] ? 1 : 0;
         }
-      } else if (n >= 19 && buf[0] == PKT_SNAPSHOT) {
-        int snap_pid = (int)((buf[2] >> 1) & 0x03);
-        role_mask = (uint8_t)((buf[2] >> 3) & 0x0F);
-        int ack_valid = (buf[2] & 0x80) != 0;
+      } else if (pkt_len >= 19 && pkt[0] == PKT_SNAPSHOT) {
+        int snap_pid = (int)((pkt[2] >> 1) & 0x03);
+        role_mask = (uint8_t)((pkt[2] >> 3) & 0x0F);
+        int ack_valid = (pkt[2] & 0x80) != 0;
         uint8_t ack_seq = 0;
-        if (n >= 20) {
-          ack_seq = buf[19];
+        if (pkt_len >= 20) {
+          ack_seq = pkt[19];
         } else {
           ack_valid = 0;
         }
@@ -414,28 +441,30 @@ int main(int argc, char **argv) {
             printf("local pid=%d (from snapshot flags)\n", local_pid);
           }
         }
-        players[0].x = buf[3];
-        players[0].y = buf[4];
-        players[1].x = buf[5];
-        players[1].y = buf[6];
-        players[2].x = buf[7];
-        players[2].y = buf[8];
-        players[3].x = buf[9];
-        players[3].y = buf[10];
-        players[0].joy = buf[11];
-        players[1].joy = buf[12];
-        players[2].joy = buf[13];
-        players[3].joy = buf[14];
-        players[0].score = buf[15];
-        players[1].score = buf[16];
-        players[2].score = buf[17];
-        players[3].score = buf[18];
+        players[0].x = pkt[3];
+        players[0].y = pkt[4];
+        players[1].x = pkt[5];
+        players[1].y = pkt[6];
+        players[2].x = pkt[7];
+        players[2].y = pkt[8];
+        players[3].x = pkt[9];
+        players[3].y = pkt[10];
+        players[0].joy = pkt[11];
+        players[1].joy = pkt[12];
+        players[2].joy = pkt[13];
+        players[3].joy = pkt[14];
+        players[0].score = pkt[15];
+        players[1].score = pkt[16];
+        players[2].score = pkt[17];
+        players[3].score = pkt[18];
         if (debug) {
           printf("snapshot ack pid=%d ack_valid=%d ack_seq=%u\n", snap_pid,
                  ack_valid, (unsigned)ack_seq);
         }
       }
     }
+
+    if (!running) break;
 
     if (evfd >= 0 && (pfds[1].revents & POLLIN)) {
 #if HAVE_EVDEV_INPUT
@@ -487,7 +516,7 @@ int main(int argc, char **argv) {
             break;
           case KEY_R:
             if (pressed) {
-              send_respawn(sock, &srv, &seq, local_pid);
+              send_respawn(sock, &tx, &seq, local_pid);
             }
             break;
           default:
@@ -507,7 +536,7 @@ int main(int argc, char **argv) {
           break;
         }
         handle_curses_key(ch, &up, &down, &left, &right, &fire, &running,
-                          sock, &srv, &seq, local_pid);
+                          sock, &tx, &seq, local_pid);
       }
     }
 
@@ -521,20 +550,21 @@ int main(int argc, char **argv) {
         pkt[1] = seq++;
         pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
         memcpy(&pkt[3], my_name, NAME_LEN);
-        sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&srv, sizeof(srv));
+        tcp_tx_queue_frame(sock, &tx, pkt, sizeof(pkt));
       }
       last_name_send_ms = now;
     }
 
     uint8_t stick = compute_stick(up, down, left, right);
     uint8_t joy = pack_joy(stick, (uint8_t)fire);
-    if (joy != last_joy || (joy != 0x0F && now - last_send_ms > 100)) {
+    if (joy != last_joy || (joy != 0x0F && now - last_send_ms > 100) ||
+        now - last_send_ms >= 1000) {
       uint8_t pkt[4];
       pkt[0] = PKT_DELTA;
       pkt[1] = seq++;
       pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
       pkt[3] = joy;
-      sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&srv, sizeof(srv));
+      tcp_tx_queue_frame(sock, &tx, pkt, sizeof(pkt));
       last_joy = joy;
       last_send_ms = now;
     }

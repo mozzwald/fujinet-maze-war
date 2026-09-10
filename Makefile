@@ -38,13 +38,13 @@ $(OUT): $(SRC) | build
 $(NET): $(HANDLER) $(OUT) | build
 	cat $(HANDLER) $(OUT) > $@
 
-$(SERVER): server/main.c server/transport_normalize.c server/transport_normalize.h server/transport_stats.c server/transport_stats.h | build
+$(SERVER): net/tcp_stream.h server/main.c server/transport_normalize.c server/transport_normalize.h server/transport_stats.c server/transport_stats.h | build
 	$(CC) $(CFLAGS) -o $@ server/main.c server/transport_normalize.c server/transport_stats.c
 
-$(CLIENT): clients/linux/main.c | build
+$(CLIENT): clients/linux/main.c net/tcp_stream.h | build
 	$(CC) $(CFLAGS) -o $@ $< $(NCURSES_LIBS)
 
-$(CLIENT_SDL): clients/linux/sdl_main.c | build
+$(CLIENT_SDL): clients/linux/sdl_main.c net/tcp_stream.h | build
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $< $(SDL_LIBS)
 
 # Smoke suite. Depends on `all` because several tests exercise the real

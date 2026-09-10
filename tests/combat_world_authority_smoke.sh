@@ -4,6 +4,7 @@ set -eu
 
 PORT=9112
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$ROOT_DIR/tests${PYTHONPATH:+:$PYTHONPATH}"
 SERVER_BIN="$ROOT_DIR/build/maze-war-server"
 LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/combat-world-authority.XXXXXX.log")
 BRICK_FILE=$(mktemp "${TMPDIR:-/tmp}/combat-world-bricks.XXXXXX.txt")
@@ -80,6 +81,7 @@ def cobs_decode(pkt):
     return bytes(out)
 
 import socket
+from tcp_frames import recv_frame, send_frame
 import sys
 import time
 
@@ -110,11 +112,15 @@ def decode_bricks(packet):
 
 
 class Client:
+    peers = []
     def __init__(self, slot_hint):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect(("127.0.0.1", port))
         self.sock.settimeout(0.02)
         self.slot_hint = slot_hint
+        self.last_joy = 0x0F
+        self.last_tx = time.monotonic()
+        self.peers.append(self)
         self.pid = None
         self.seq = 1
         self.players = {}
@@ -148,8 +154,14 @@ class Client:
     def pump(self, duration=0.2):
         deadline = time.time() + duration
         while time.time() < deadline:
+            # Preserve idle seats while another peer runs a long scenario.
+            # Never refresh held movement/fire: stale-input checks still apply.
+            for peer in self.peers:
+                if (peer.pid is not None and peer.last_joy == 0x0F and
+                        time.monotonic() - peer.last_tx >= 1):
+                    peer.send_neutral()
             try:
-                packet = cobs_decode(self.sock.recv(256))
+                packet = cobs_decode(recv_frame(self.sock, 256))
             except socket.timeout:
                 continue
             self.handle(packet)
@@ -157,7 +169,7 @@ class Client:
     def wait_ready(self):
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            self.sock.send(bytes([0x41, self.seq & 0xFF, self.slot_hint & 0xFF, 0x0F]))
+            send_frame(self.sock, bytes([0x41, self.seq & 0xFF, self.slot_hint & 0xFF, 0x0F]))
             self.seq = (self.seq + 1) & 0xFF
             self.pump(0.02)
             if self.pid is not None and self.bricks is not None and len(self.players) == 4:
@@ -165,9 +177,11 @@ class Client:
         raise SystemExit("timed out waiting for initial state")
 
     def send_delta(self, joy):
+        self.last_joy = joy
+        self.last_tx = time.monotonic()
         packet = bytes([0x41, self.seq & 0xFF, self.pid & 0xFF, joy & 0xFF])
         self.seq = (self.seq + 1) & 0xFF
-        self.sock.send(packet)
+        send_frame(self.sock, packet)
 
     def send_neutral(self):
         self.send_delta(0x0F)
@@ -390,8 +404,8 @@ def choose_fire_into_brick(bricks, start, blocked):
 
 clients = [Client(0), Client(1)]
 for expected_pid, client in enumerate(clients):
-    # The server only allocates a slot after the first inbound packet.
-    client.sock.send(bytes([0x41, 1, expected_pid, 0x0F]))
+    # Complete the accepted connection handshake with neutral input.
+    send_frame(client.sock, bytes([0x41, 1, expected_pid, 0x0F]))
     client.seq = 2
     client.wait_ready()
 

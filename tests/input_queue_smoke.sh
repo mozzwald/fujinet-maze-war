@@ -15,6 +15,7 @@ set -eu
 
 PORT=9161
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$ROOT_DIR/tests${PYTHONPATH:+:$PYTHONPATH}"
 SERVER_BIN="$ROOT_DIR/build/maze-war-server"
 LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/input-queue-smoke.XXXXXX.log")
 SERVER_PID=
@@ -44,6 +45,7 @@ sleep 1
 
 python3 - "$PORT" <<'PYEOF'
 import socket, sys, time
+from tcp_frames import recv_frame, send_frame
 
 
 def cobs_decode(pkt):
@@ -74,13 +76,13 @@ TICK = 0.25
 
 class C:
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect(("127.0.0.1", port))
         self.sock.settimeout(0.02)
         self.seq = 1
 
     def send(self, joy):
-        self.sock.send(bytes([0x41, self.seq & 0xFF, 0, joy]))
+        send_frame(self.sock, bytes([0x41, self.seq & 0xFF, 0, joy]))
         self.seq += 1
         return (self.seq - 1) & 0xFF
 
@@ -89,7 +91,7 @@ class C:
         out = None
         while time.time() < end:
             try:
-                p = cobs_decode(self.sock.recv(256))
+                p = cobs_decode(recv_frame(self.sock, 256))
             except socket.timeout:
                 continue
             if len(p) >= 20 and p[0] == 0x40 and (p[2] & 0x80):

@@ -27,19 +27,23 @@ grep -E 'LDA[[:space:]]+NET_SNAP_BUF\+15,X' "$ATARI_SRC" >/dev/null
 
 grep -F "PKT_SNAPSHOT = 0x40" "$LINUX_MAIN" >/dev/null
 grep -F "PKT_SHOT = 0x42" "$LINUX_MAIN" >/dev/null
+grep -F "PKT_RELIABLE_ACK = 0x45" "$LINUX_MAIN" >/dev/null
 grep -F "PKT_BRICK_DELTA = 0x51" "$LINUX_MAIN" >/dev/null
 grep -F "PKT_RESPAWN = 0x52" "$LINUX_MAIN" >/dev/null
-grep -E 'buf\[0\] == PKT_BRICK_DELTA' "$LINUX_MAIN" >/dev/null
-grep -E 'buf\[0\] == PKT_RESPAWN' "$LINUX_MAIN" >/dev/null
-grep -E 'buf\[0\] == PKT_SHOT' "$LINUX_MAIN" >/dev/null
-grep -E 'buf\[0\] == PKT_SNAPSHOT' "$LINUX_MAIN" >/dev/null
+grep -F "PKT_RELIABLE_EVENT = 0x53" "$LINUX_MAIN" >/dev/null
+grep -E 'pkt\[0\] == PKT_BRICK_DELTA' "$LINUX_MAIN" >/dev/null
+grep -E 'pkt\[0\] == PKT_RESPAWN' "$LINUX_MAIN" >/dev/null
+grep -E 'pkt\[0\] == PKT_SHOT' "$LINUX_MAIN" >/dev/null
+grep -E 'pkt\[0\] == PKT_SNAPSHOT' "$LINUX_MAIN" >/dev/null
 grep -E 'players\[rp\]\.x = 255' "$LINUX_MAIN" >/dev/null
-grep -E 'players\[0\]\.score = buf\[15\]' "$LINUX_MAIN" >/dev/null
+grep -E 'players\[0\]\.score = pkt\[15\]' "$LINUX_MAIN" >/dev/null
 
 grep -F "PKT_SNAPSHOT = 0x40" "$LINUX_SDL" >/dev/null
 grep -F "PKT_SHOT = 0x42" "$LINUX_SDL" >/dev/null
+grep -F "PKT_RELIABLE_ACK = 0x45" "$LINUX_SDL" >/dev/null
 grep -F "PKT_BRICK_DELTA = 0x51" "$LINUX_SDL" >/dev/null
 grep -F "PKT_RESPAWN = 0x52" "$LINUX_SDL" >/dev/null
+grep -F "PKT_RELIABLE_EVENT = 0x53" "$LINUX_SDL" >/dev/null
 grep -E 'buf\[0\] == PKT_BRICK_DELTA' "$LINUX_SDL" >/dev/null
 grep -E 'buf\[0\] == PKT_RESPAWN' "$LINUX_SDL" >/dev/null
 grep -E 'buf\[0\] == PKT_SHOT' "$LINUX_SDL" >/dev/null

@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready
-stopped_at: 2026-09-09 - slot-0 corpse, clipped far-left cells and missing death animation human-confirmed fixed. Lag investigation closed conclusively (no reconciliation bug found; two rig instrument bugs found and fixed instead); render-state separation (04-02/04-03) is the correctly-scoped next step and needs human hardware verification. Phases 3, 3.1, 5 and 5.1 complete and human-approved.
+stopped_at: 2026-09-09 - realm-net 07-01/07-02/07-03/07-04 complete. TCP clients have real Atari/FujiNet acceptance, CRC-16 framing has emulator validation, and reliable NAME/BRICK_DELTA/RESPAWN events are cumulatively acknowledged. 07-05 remains deferred and not recommended.
 last_updated: "2026-09-09T00:00:00.000Z"
 progress:
   total_phases: 8
@@ -19,7 +19,18 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** Phase 05 — slot lifecycle and zombie handoff
+**Current focus:** `realm-net` Phase 07 — TCP migration, real-hardware acceptance, CRC-16 framing, and reliable events (07-04) complete; 07-05 remains deferred.
+
+## Current branch: realm-net (2026-09-09)
+
+07-01, 07-02, 07-03, and 07-04 are complete. TCP runs with `$05`, REGISTER clear,
+57600 baud, and the unchanged handler. The user confirmed the Atari/FujiNet
+hardware path works; MCP-managed Atari/FujiNet-PC also validated the CRC wire
+format with zero network or CRC errors. Reliable NAME, BRICK_DELTA, and RESPAWN
+events now ride one ordered, cumulatively acknowledged stream. A forced full
+smoke suite should be rerun after future changes. 07-05 remains explicitly
+deferred. Older v1 position and investigation notes below are
+retained as historical context.
 
 ## Current Position
 
@@ -888,9 +899,10 @@ movement) the user didn't report needing. Let the already-planned Phase 4
 reliability work lands — it should give maze-war *better* remote smoothness
 than FujiRealm has, not just parity with it.
 
-New v2 requirements `RTP-01` through `RTP-05` added to `REQUIREMENTS.md`.
-Nothing executed yet — this session was planning only, per the request. No
-source code touched.
+New v2 requirements `RTP-01` through `RTP-05` were added to
+`REQUIREMENTS.md` when this research was written. The plan is no longer merely
+proposed: 07-01 through 07-03 are complete; see the current branch summary at
+the top of this file.
 
 ## Session Continuity
 
@@ -972,16 +984,11 @@ Check that an instrument reports something before trusting it to report nothing.
 ## Session Continuity (branch: `realm-net`, most recent)
 
 Last session: 2026-09-09
-Stopped at: Phase 7 (Realtime Transport Reliability) planned and written up in
-full — `planning/phases/07-realtime-transport-reliability/` (`07-RESEARCH.md`
-plus five `07-0N-PLAN.md` files), `REQUIREMENTS.md` extended with `RTP-01..05`,
-`ROADMAP.md` extended with the Phase 7 entry. **Nothing executed.** This was a
-planning-only request; no source file changed. See the "Phase 7 planned"
-section above this one for the headline findings and recommendation.
-Next, if greenlit: `07-01` (server TCP transport) and `07-02` (client TCP
-transport) together, tested against real hardware before proceeding to
-`07-03`/`07-04` — this project's own repeated lesson is that the emulator's
-netsio path does not reproduce real SIO-hop behavior, and that lesson applies
-at least as strongly to a transport change as it did to the framing and
-reconciliation work already completed on `a8-net-fix`.
-Resume file: `planning/phases/07-realtime-transport-reliability/07-RESEARCH.md`
+Stopped at: 07-01 server TCP, 07-02 TCP clients and real-hardware acceptance,
+07-03 CRC-16 framing, and 07-04 reliable events are complete. Read the four corresponding summary
+files under `planning/phases/07-realtime-transport-reliability/` for the
+implementation and validation evidence. Use a forced rebuild in this workspace
+because patch timestamp handling can otherwise leave an older binary in place.
+Next: 07-05 remains deferred and not recommended; do not execute without an
+explicit separate go-ahead.
+Resume file: `planning/phases/07-realtime-transport-reliability/07-05-PLAN.md`

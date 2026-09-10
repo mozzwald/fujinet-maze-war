@@ -10,7 +10,7 @@
 # realign. A zero delimiter can, because COBS guarantees no zero inside a frame.
 #
 # The decoder below is a literal transcription of NET_COBS_DECODE and
-# NET_FRAME_CKSUM from clients/atari/maze-war.asm, kept in step with it by
+# NET_FRAME_CRC16 from clients/atari/maze-war.asm, kept in step with it by
 # hand. It is checked against the server's real encoder by
 # packet_checksum_smoke; what this test adds is the resync guarantee, which
 # needs a deliberately damaged stream and so cannot be observed on a healthy
@@ -51,13 +51,21 @@ def cobs_decode_asm(buf, frame_idx):
         wr += 1
 
 
-# --- literal transcription of NET_FRAME_CKSUM ---
-def cksum_asm(buf, length):
-    ck_len = (length - 1) & 0xFF
-    total = 0
+# --- literal transcription of NET_FRAME_CRC16 ---
+def crc16_asm(buf, length):
+    ck_len = length - 2
+    crc_lo = crc_hi = 0xff
     for y in range(ck_len):
-        total = (total + buf[y]) & 0xFF
-    return buf[ck_len] == total
+        crc_hi ^= buf[y]
+        for _ in range(8):
+            carry = crc_lo >> 7
+            crc_lo = (crc_lo << 1) & 0xff
+            next_carry = crc_hi >> 7
+            crc_hi = ((crc_hi << 1) & 0xff) | carry
+            if next_carry:
+                crc_lo ^= 0x21
+                crc_hi ^= 0x10
+    return buf[ck_len] == crc_lo and buf[ck_len + 1] == crc_hi
 
 
 def encode(raw):
@@ -82,11 +90,14 @@ def encode(raw):
     return bytes(out) + b"\x00"
 
 
-def with_cksum(raw):
-    t = 0
-    for b in raw:
-        t = (t + b) & 0xFF
-    return bytes(raw) + bytes([t])
+def with_crc(raw):
+    data = bytearray(raw)
+    crc = 0xffff
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xffff if crc & 0x8000 else (crc << 1) & 0xffff
+    return bytes(data) + bytes([crc & 0xff, crc >> 8])
 
 
 def parse(stream):
@@ -99,7 +110,7 @@ def parse(stream):
             if buf:
                 w = bytearray(buf) + bytearray(8)
                 n, err = cobs_decode_asm(w, len(buf))
-                if err or n < 2 or not cksum_asm(w, n):
+                if err or n < 3 or not crc16_asm(w, n):
                     rejected += 1
                 else:
                     good += 1
@@ -121,12 +132,25 @@ for i in range(40):
     body = bytes([0x40, i & 0xFF, 0x81]
                  + [random.choice([0, 1, 5, 17, 0, 0x0F]) for _ in range(16)]
                  + [i & 0xFF])
-    frames.append(with_cksum(body))
+    frames.append(with_crc(body))
 stream = b"".join(encode(f) for f in frames)
 
 clean, rej = parse(stream)
 if clean != len(frames) or rej:
     fail(f"clean stream: {clean} accepted, {rej} rejected, expected {len(frames)}/0")
+
+# A byte swap preserves the old additive sum exactly, but changes the ordered
+# byte sequence that CRC-16 protects. This is the regression that distinguishes
+# this upgrade from merely changing the trailer width.
+payload = bytes([0x40, 0x01, 0x81, 0x02, 0x11])
+damaged = bytearray(with_crc(payload))
+damaged[1], damaged[3] = damaged[3], damaged[1]
+old_sum = sum(damaged[:-2]) & 0xff
+if old_sum != sum(payload) & 0xff:
+    fail("test setup did not preserve the old additive sum")
+if crc16_asm(damaged, len(damaged)):
+    fail("CRC-16 accepted a byte swap that the old additive sum misses")
+print("CRC-16 rejected a byte swap that preserves the old additive sum")
 
 mid = len(stream) // 2
 for label, damaged in (

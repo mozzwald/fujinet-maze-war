@@ -57,7 +57,8 @@ C_SP	=	$0082
 ;
 ; Packet ids used on the wire:
 ;   $40 SNAPSHOT (19 bytes), $42 SHOT (6), $50 BRICK_FULL (51),
-;   $51 BRICK_DELTA (4), $52 RESPAWN (6), and client TX $41 DELTA (4).
+;   $51 BRICK_DELTA (4), $52 RESPAWN (6), $53 RELIABLE_EVENT,
+;   client TX $41 DELTA (4), and client TX $45 RELIABLE_ACK (4).
 ; Client simulation is presentation-oriented: server state remains authoritative.
 NS_BASE	=	$2800
 NS_BEGN	=	NS_BASE+0
@@ -68,7 +69,7 @@ NS_AVAIL	=	NS_BASE+18
 NS_STAT	=	NS_BASE+21
 NS_INIT	=	NS_BASE+27
 ;
-NET_FLAGS	=	$04	;external TX, internal RX clock (UDP)
+NET_FLAGS	=	$05	;external TX, internal RX clock (TCP)
 NET_BAUD_LO	=	$00	;57600
 NET_BAUD_HI	=	$E1
 NET_PORT_LO	=	$23	;swap16(9000) -> $2823
@@ -96,6 +97,9 @@ NET_HARD_P0	=	12	;local hard-snap guard (only on severe divergence)
 HOST_MAX	=	31	;max hostname length
 NAME_LEN	=	8	;HUD gives each slot columns 4..11 before the score digit
 NAME_PKT_LEN	=	3+NAME_LEN	;$43, seq, pid, then the name
+REL_PKT_MAX	=	4+NAME_PKT_LEN+2	;$53, seq, rev lo/hi, NAME, CRC
+NET_TX_RAW_MAX	=	NAME_PKT_LEN+2	;payload plus CRC-16 trailer
+NET_TX_BUF_MAX	=	NET_TX_RAW_MAX+2	;COBS code byte and delimiter worst case
 NET_WAIT_MAX	=	3	;~13s (3*256 frames) with no server data before giving up
 NET_INIT_TRIES	=	3	;NS_INIT attempts before falling back to the host prompt
 ;
@@ -1023,18 +1027,14 @@ NET_CLRMAP1
 	; one-time probe frame so server allocates our slot and begins snapshots.
 	; parser ignores unknown type bytes, so this safely acts as "hello".
 	LDA	#$A5
-	STA	NET_TX_BUF
+	STA	NET_TX_RAW
 	LDA	NET_SEQ
-	STA	NET_TX_BUF+1
+	STA	NET_TX_RAW+1
 	INC	NET_SEQ
 	LDA	#$0F
-	STA	NET_TX_BUF+2
-	LDA	#1
-	STA	NET_TX_BUF+3
+	STA	NET_TX_RAW+2
 	LDA	#4
-	STA	NET_TX_STATE
-	LDA	#0
-	STA	NET_TX_IDX
+	JSR	NET_TX_FRAME
 NET_INITX	RTS
 ;
 ;BOOT DIAGNOSTIC: RED BORDER = NS_INIT FAILED (FUJINET REJECTED OR
@@ -1180,10 +1180,9 @@ NNR_X	RTS
 ; matches the one we typed, non-zero when it does not. Clobbers X and Y.
 ;
 ; It used to be enough to ask whether the slot had any name at all. But the
-; client->server direction is a raw byte stream with no checksum -- only the
-; server->client direction is framed and summed -- so a damaged name is
-; accepted verbatim and then rebroadcast to every client for the rest of the
-; game. One session ran start to finish with MOZZEMU shown as FDZZEMU.
+; The client-to-server frame is COBS+CRC protected too. The echo comparison is
+; still useful: it detects a server-side normalization mismatch and makes any
+; rejected/changed name a two-second glitch rather than persistent HUD state.
 ; Checking the echo against what we typed makes that a two-second glitch.
 ;
 ; The comparison mirrors the server's sanitize: fold to uppercase and pad with
@@ -1292,18 +1291,24 @@ NP_BOOTCOL
 	JSR	NET_SAMPLE_INPUT
 	; guard against memory scribbles from legacy draw/effect paths
 	LDA	NET_TX_STATE
-	CMP	#NAME_PKT_LEN+1
+	CMP	#NET_TX_BUF_MAX+1
 	BCC	NP_TXS_OK
 	LDA	#0
 	STA	NET_TX_STATE
 	STA	NET_TX_IDX
 NP_TXS_OK
 	LDA	NET_TX_IDX
-	CMP	#NAME_PKT_LEN
+	CMP	#NET_TX_BUF_MAX
 	BCC	NP_TXI_OK
 	LDA	#0
 	STA	NET_TX_IDX
 NP_TXI_OK
+	LDA	NET_REL_ACK_PEND	;ack applied reliable events promptly
+	BEQ	NP_RELOK
+	LDA	NET_TX_STATE
+	BNE	NP_RELOK
+	JSR	NET_TX_BUILD_REL_ACK
+NP_RELOK
 	LDA	NET_NAME_PEND	;announce our name whenever the line is idle
 	BEQ	NP_NAMEOK
 	LDA	NET_TX_STATE
@@ -1432,7 +1437,7 @@ NJD_OK
 NET_TX_BUILD_DELTA
 	LDA	NET_RX_STICK
 	JSR	NET_SAN_STICKA
-	STA	NET_TX_BUF+3
+	STA	NET_TX_RAW+3
 	STA	NET_TX_LAST_STICK
 	LDA	NET_RX_TRIG
 	TAY
@@ -1440,9 +1445,9 @@ NET_TX_BUILD_DELTA
 	BNE	NTB_TRIGUP
 	TYA
 	BNE	NTB_TRIGUP
-	LDA	NET_TX_BUF+3
+	LDA	NET_TX_RAW+3
 	ORA	#$10
-	STA	NET_TX_BUF+3
+	STA	NET_TX_RAW+3
 NTB_TRIGUP
 	TYA
 	STA	NET_TX_LAST_TRIG
@@ -1450,22 +1455,20 @@ NTB_TRIGUP
 	BEQ	NTB_NOLATCH
 	LDA	#0
 	STA	NET_TRIG_LATCH
-	LDA	NET_TX_BUF+3
+	LDA	NET_TX_RAW+3
 	ORA	#$10
-	STA	NET_TX_BUF+3
+	STA	NET_TX_RAW+3
 NTB_NOLATCH
 	LDA	#$41
-	STA	NET_TX_BUF
+	STA	NET_TX_RAW
 	LDA	NET_SEQ
-	STA	NET_TX_BUF+1
+	STA	NET_TX_RAW+1
 	INC	NET_SEQ
 	LDY	NET_LOCAL_PID
-	STY	NET_TX_BUF+2
+	STY	NET_TX_RAW+2
 	JSR	NET_LOCAL_INPUT_PUSH
 	LDA	#4
-	STA	NET_TX_STATE
-	LDA	#0
-	STA	NET_TX_IDX
+	JSR	NET_TX_FRAME
 	JSR	NET_SHOT_PREDICT
 	RTS
 ;
@@ -1473,27 +1476,124 @@ NTB_NOLATCH
 ; sender's own slot, so this cannot rename anyone else.
 NET_TX_BUILD_NAME
 	LDA	#$43
-	STA	NET_TX_BUF
+	STA	NET_TX_RAW
 	LDA	NET_SEQ
-	STA	NET_TX_BUF+1
+	STA	NET_TX_RAW+1
 	INC	NET_SEQ
 	LDA	NET_LOCAL_PID
-	STA	NET_TX_BUF+2
+	STA	NET_TX_RAW+2
 	LDX	#0
 NTBN_CP
 	LDA	NAMEBUF,X
 	BNE	NTBN_ST
 	LDA	#$20		;pad short names with spaces
 NTBN_ST
-	STA	NET_TX_BUF+3,X
+	STA	NET_TX_RAW+3,X
 	INX
 	CPX	#NAME_LEN
 	BCC	NTBN_CP
 	LDA	#NAME_PKT_LEN
-	STA	NET_TX_STATE
+	JSR	NET_TX_FRAME
+	STA	NET_NAME_PEND
+	RTS
+;
+; queue $45 seq + highest applied reliable revision.
+NET_TX_BUILD_REL_ACK
+	LDA	#$45
+	STA	NET_TX_RAW
+	LDA	NET_SEQ
+	STA	NET_TX_RAW+1
+	INC	NET_SEQ
+	LDA	NET_REL_REV_LO
+	STA	NET_TX_RAW+2
+	LDA	NET_REL_REV_HI
+	STA	NET_TX_RAW+3
+	LDA	#4
+	JSR	NET_TX_FRAME
+	LDA	#0
+	STA	NET_REL_ACK_PEND
+	RTS
+;
+; A = payload length in NET_TX_RAW. Append CRC-16/CCITT-FALSE, COBS encode it
+; into NET_TX_BUF, append the delimiter, and arm the byte-at-a-time handler TX.
+NET_TX_FRAME
+	STA	NET_TX_RAWLEN
+	LDA	#$FF
+	STA	NET_CK_LO
+	STA	NET_CK_HI
+	LDY	#0
+NTF_CBYTE
+	CPY	NET_TX_RAWLEN
+	BCS	NTF_CEND
+	LDA	NET_TX_RAW,Y
+	EOR	NET_CK_HI
+	STA	NET_CK_HI
+	LDX	#8
+NTF_CBIT
+	ASL	NET_CK_LO
+	ROL	NET_CK_HI
+	BCC	NTF_CNEXT
+	LDA	NET_CK_LO
+	EOR	#$21
+	STA	NET_CK_LO
+	LDA	NET_CK_HI
+	EOR	#$10
+	STA	NET_CK_HI
+NTF_CNEXT
+	DEX
+	BNE	NTF_CBIT
+	INY
+	JMP	NTF_CBYTE
+NTF_CEND
+	LDA	NET_CK_LO
+	STA	NET_TX_RAW,Y
+	INY
+	LDA	NET_CK_HI
+	STA	NET_TX_RAW,Y
+	INY
+	STY	NET_TX_RAWLEN
+	LDY	#0
+	STY	NET_TX_IDX
+	STY	NET_TX_CI
+	LDA	#1
+	STA	NET_TX_CODE
+	STA	NET_TX_BUF
+	LDA	#1
+	STA	NET_TX_WR
+NTF_ENC
+	LDY	NET_TX_IDX
+	CPY	NET_TX_RAWLEN
+	BCS	NTF_FIN
+	LDA	NET_TX_RAW,Y
+	BEQ	NTF_ZERO
+	LDY	NET_TX_WR
+	STA	NET_TX_BUF,Y
+	INC	NET_TX_WR
+	INC	NET_TX_CODE
+	INC	NET_TX_IDX
+	JMP	NTF_ENC
+NTF_ZERO
+	LDY	NET_TX_CI
+	LDA	NET_TX_CODE
+	STA	NET_TX_BUF,Y
+	LDA	#1
+	STA	NET_TX_CODE
+	LDY	NET_TX_WR
+	STY	NET_TX_CI
+	INC	NET_TX_WR
+	INC	NET_TX_IDX
+	JMP	NTF_ENC
+NTF_FIN
+	LDY	NET_TX_CI
+	LDA	NET_TX_CODE
+	STA	NET_TX_BUF,Y
+	LDY	NET_TX_WR
+	LDA	#0
+	STA	NET_TX_BUF,Y
+	INY
+	STY	NET_TX_STATE
 	LDA	#0
 	STA	NET_TX_IDX
-	STA	NET_NAME_PEND
 	RTS
 ;
 NET_LOCAL_INPUT_PUSH
@@ -1502,9 +1602,9 @@ NET_LOCAL_INPUT_PUSH
 	ADC	NET_PEND_HEAD
 	AND	#$07
 	TAX
-	LDA	NET_TX_BUF+1
+	LDA	NET_TX_RAW+1
 	STA	NET_PEND_SEQ,X
-	LDA	NET_TX_BUF+3
+	LDA	NET_TX_RAW+3
 	STA	NET_PEND_JOY,X
 	LDA	NET_PEND_COUNT
 	CMP	#8
@@ -1561,10 +1661,10 @@ NET_SHOT_PREDICT
 	LDX	NET_LOCAL_PID
 	CPX	#4
 	BCS	NSP_X
-	LDA	NET_TX_BUF+3
+	LDA	NET_TX_RAW+3
 	AND	#$10	;fire intent in outgoing DELTA?
 	BEQ	NSP_X
-	LDA	NET_TX_BUF+3
+	LDA	NET_TX_RAW+3
 	AND	#$0F
 	CMP	#$0F	;server requires a direction to fire
 	BEQ	NSP_X
@@ -1575,7 +1675,7 @@ NET_SHOT_PREDICT
 	BNE	NSP_X
 	LDA	ACTFLAG,X	;shot already drawn for our slot
 	BMI	NSP_X
-	LDA	NET_TX_BUF+3
+	LDA	NET_TX_RAW+3
 	JSR	NET_JOYDIRA
 	CMP	#$FF
 	BEQ	NSP_X
@@ -1656,7 +1756,7 @@ NET_RX_DONE	RTS
 ; COBS FRAMING
 ; ------------
 ; Bytes accumulate until a zero delimiter, then the frame is COBS-decoded, its
-; checksum checked, and it is dispatched by type. COBS guarantees no zero
+; CRC-16 checked, and it is dispatched by type. COBS guarantees no zero
 ; appears inside an encoded frame, so the delimiter always realigns the parser.
 ;
 ; The old parser scanned the stream for a type marker and then took a fixed
@@ -1686,10 +1786,10 @@ NET_FRAME_END
 	BNE	NFE_BAD
 	JSR	NET_COBS_DECODE	;A = decoded length, C set if malformed
 	BCS	NFE_BAD
-	CMP	#2		;type byte plus checksum at minimum
+	CMP	#3		;type byte plus two CRC-16 trailer bytes at minimum
 	BCC	NFE_BAD
 	STA	NET_FRAME_LEN
-	JSR	NET_FRAME_CKSUM
+	JSR	NET_FRAME_CRC16
 	BCS	NFE_BAD
 	JSR	NET_FRAME_DISPATCH
 	JMP	NFE_RESET
@@ -1746,30 +1846,54 @@ NCD_OK	LDA	NET_COBS_WR
 NCD_BAD	SEC
 	RTS
 ;
-; Sum every byte but the last and compare against it.
-NET_FRAME_CKSUM
+; CRC-16/CCITT-FALSE over every payload byte, then compare low/high trailer.
+; The bit loop costs 8 shifts per byte: 408 shifts for BRICK_FULL, well below
+; one VBI frame at the existing 60-byte parser bound.
+NET_FRAME_CRC16
 	LDA	NET_FRAME_LEN
 	SEC
-	SBC	#1
+	SBC	#2
 	STA	NET_CK_LEN
-	LDA	#0
-	STA	NET_CK_SUM
+	LDA	#$FF
+	STA	NET_CK_LO
+	STA	NET_CK_HI
 	LDY	#0
-NFC_LP	CPY	NET_CK_LEN
-	BCS	NFC_END
+NFCRC_BYTE
+	CPY	NET_CK_LEN
+	BCS	NFCRC_END
 	LDA	NET_FRAME_BUF,Y
-	CLC
-	ADC	NET_CK_SUM
-	STA	NET_CK_SUM
+	EOR	NET_CK_HI
+	STA	NET_CK_HI
+	LDX	#8
+NFCRC_BIT
+	ASL	NET_CK_LO
+	ROL	NET_CK_HI
+	BCC	NFCRC_NEXT
+	LDA	NET_CK_LO
+	EOR	#$21
+	STA	NET_CK_LO
+	LDA	NET_CK_HI
+	EOR	#$10
+	STA	NET_CK_HI
+NFCRC_NEXT
+	DEX
+	BNE	NFCRC_BIT
 	INY
-	JMP	NFC_LP
-NFC_END	LDY	NET_CK_LEN
+	JMP	NFCRC_BYTE
+NFCRC_END
+	LDY	NET_CK_LEN
 	LDA	NET_FRAME_BUF,Y
-	CMP	NET_CK_SUM
-	BEQ	NFC_OK
+	CMP	NET_CK_LO
+	BNE	NFCRC_BAD
+	INY
+	LDA	NET_FRAME_BUF,Y
+	CMP	NET_CK_HI
+	BEQ	NFCRC_OK
+NFCRC_BAD
 	SEC
 	RTS
-NFC_OK	CLC
+NFCRC_OK
+	CLC
 	RTS
 ;
 ; A = expected length. C set (and counted) when it does not match.
@@ -1811,8 +1935,8 @@ NFCP_I	STA	$FFFF,Y
 NFCP_X	RTS
 ;
 ; Hand the decoded frame to the collector buffer its apply path already reads.
-; The whole frame is copied, payload plus the trailing checksum, so each of
-; those buffers is declared one byte longer than its payload. They were sized
+; The whole frame is copied, payload plus the two-byte CRC trailer, so each of
+; those buffers is declared two bytes longer than its payload. They were sized
 ; before the checksum existed, and the overflow landed on the variable that
 ; happened to follow: NET_NAME_PKT wrote over NET_NAMES[0], so the first
 ; character of the first name changed once a second as the server rotated
@@ -1834,9 +1958,11 @@ NET_FRAME_DISPATCH
 	BEQ	NFD_BRK
 	CMP	#$52
 	BEQ	NFD_RESP
-	RTS			;unknown type: ignore, the stream stays aligned
+	CMP	#$53
+	BEQ	NFD_REL
+NFD_X	RTS			;unknown type: ignore, the stream stays aligned
 NFD_SNAP
-	LDA	#21
+	LDA	#22
 	JSR	NET_FRAME_LENCK
 	BCS	NFD_X
 	LDA	# <NET_SNAP_BUF
@@ -1844,7 +1970,7 @@ NFD_SNAP
 	JSR	NET_FRAME_COPY
 	JMP	NET_RX_40DONE
 NFD_SHOT
-	LDA	#7
+	LDA	#8
 	JSR	NET_FRAME_LENCK
 	BCS	NFD_X
 	LDA	# <NET_SHOT_PKT
@@ -1852,7 +1978,7 @@ NFD_SHOT
 	JSR	NET_FRAME_COPY
 	JMP	NET_RX_42DONE
 NFD_NAME
-	LDA	#NAME_PKT_LEN+1
+	LDA	#NAME_PKT_LEN+2
 	JSR	NET_FRAME_LENCK
 	BCS	NFD_X
 	LDA	# <NET_NAME_PKT
@@ -1860,7 +1986,7 @@ NFD_NAME
 	JSR	NET_FRAME_COPY
 	JMP	NET_RX_43DONE
 NFD_SEAT
-	LDA	#4
+	LDA	#5
 	JSR	NET_FRAME_LENCK
 	BCS	NFD_X
 	LDA	# <NET_SEAT_PKT
@@ -1868,7 +1994,7 @@ NFD_SEAT
 	JSR	NET_FRAME_COPY
 	JMP	NET_RX_44DONE
 NFD_FULL
-	LDA	#52
+	LDA	#53
 	JSR	NET_FRAME_LENCK
 	BCS	NFD_X
 	LDA	# <NET_BRICK_BUF
@@ -1876,7 +2002,7 @@ NFD_FULL
 	JSR	NET_FRAME_COPY
 	JMP	NET_RX_50DONE
 NFD_BRK
-	LDA	#5
+	LDA	#6
 	JSR	NET_FRAME_LENCK
 	BCS	NFD_X
 	LDA	# <NET_SNAP_BUF
@@ -1884,14 +2010,25 @@ NFD_BRK
 	JSR	NET_FRAME_COPY
 	JMP	NET_RX_51DONE
 NFD_RESP
-	LDA	#7
+	LDA	#8
 	JSR	NET_FRAME_LENCK
 	BCS	NFD_X
 	LDA	# <NET_RESP_PKT
 	LDX	# >NET_RESP_PKT
 	JSR	NET_FRAME_COPY
 	JMP	NET_RX_52DONE
-NFD_X	RTS
+NFD_REL
+	LDA	NET_FRAME_LEN
+	CMP	#10
+	BCC	NFD_X
+	CMP	#REL_PKT_MAX+1
+	BCC	NFD_REL_OK
+	JMP	NFD_X
+NFD_REL_OK
+	LDA	# <NET_REL_PKT
+	LDX	# >NET_REL_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_53DONE
 ;
 NET_RX_40DONE
 	JSR	NET_SNAP_APPLY
@@ -1981,6 +2118,128 @@ NET_RX_52DONE
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_RESP_IDX
+	RTS
+NET_RX_53DONE
+	JSR	NET_REL_APPLY
+	LDA	#0
+	STA	NET_RX_STATE
+	RTS
+;
+; 0x53 RELIABLE_EVENT: [type, seq, rev_lo, rev_hi, inner-event...].
+; Apply only the next revision. Future or duplicate revisions re-ACK the
+; highest applied revision so the server can fast-retransmit the gap.
+NET_REL_APPLY
+	LDA	NET_REL_REV_LO
+	CLC
+	ADC	#1
+	STA	NET_RX_TMP0
+	LDA	NET_REL_REV_HI
+	ADC	#0
+	STA	NET_RX_TMP1
+	LDA	NET_REL_PKT+2
+	CMP	NET_RX_TMP0
+	BNE	NREL_ACK
+	LDA	NET_REL_PKT+3
+	CMP	NET_RX_TMP1
+	BNE	NREL_ACK
+	JSR	NET_REL_INNER
+	BCS	NREL_ACK
+	LDA	NET_REL_PKT+2
+	STA	NET_REL_REV_LO
+	LDA	NET_REL_PKT+3
+	STA	NET_REL_REV_HI
+NREL_ACK
+	LDA	#1
+	STA	NET_REL_ACK_PEND
+	RTS
+;
+NET_REL_INNER
+	LDA	NET_REL_PKT+4
+	CMP	#$43
+	BEQ	NREL_NAME
+	CMP	#$51
+	BEQ	NREL_BRK
+	CMP	#$52
+	BEQ	NREL_RESP
+	SEC
+	RTS
+NREL_NAME
+	LDA	NET_FRAME_LEN
+	CMP	#REL_PKT_MAX
+	BEQ	NREL_NAME_LENOK
+	JMP	NREL_BAD
+NREL_NAME_LENOK
+	LDA	NET_REL_PKT+6	;inner NAME pid
+	CMP	#4
+	BCC	NREL_NAME_PIDOK
+	JMP	NREL_BAD
+NREL_NAME_PIDOK
+	LDX	#0
+NREL_NCP
+	LDA	NET_REL_PKT+4,X
+	STA	NET_NAME_PKT,X
+	INX
+	CPX	#NAME_PKT_LEN
+	BCC	NREL_NCP
+	JSR	NET_NAME_APPLY
+	CLC
+	RTS
+NREL_BRK
+	LDA	NET_FRAME_LEN
+	CMP	#10
+	BNE	NREL_BAD
+	LDA	NET_REL_PKT+6	;inner brick x
+	CMP	#20
+	BCS	NREL_BAD
+	LDA	NET_REL_PKT+7	;inner brick y
+	CMP	#19
+	BCS	NREL_BAD
+	LDX	#0
+NREL_BCP
+	LDA	NET_REL_PKT+4,X
+	STA	NET_SNAP_BUF,X
+	INX
+	CPX	#4
+	BCC	NREL_BCP
+	LDA	NET_BRICK_DONE
+	BEQ	NREL_OK
+	JSR	NET_BRICK_DELTA_APPLY
+NREL_OK
+	CLC
+	RTS
+NREL_RESP
+	LDA	NET_FRAME_LEN
+	CMP	#12
+	BNE	NREL_BAD
+	LDA	NET_REL_PKT+6	;inner respawn pid
+	CMP	#4
+	BCS	NREL_BAD
+	LDA	NET_REL_PKT+9	;inner respawn flags
+	CMP	#1
+	BEQ	NREL_RESP_OK
+	CMP	#3
+	BNE	NREL_BAD
+	LDA	NET_REL_PKT+7	;final x must be interior
+	BEQ	NREL_BAD
+	CMP	#19
+	BCS	NREL_BAD
+	LDA	NET_REL_PKT+8	;final y must be interior
+	BEQ	NREL_BAD
+	CMP	#18
+	BCS	NREL_BAD
+NREL_RESP_OK
+	LDX	#0
+NREL_RCP
+	LDA	NET_REL_PKT+4,X
+	STA	NET_RESP_PKT,X
+	INX
+	CPX	#6
+	BCC	NREL_RCP
+	JSR	NET_RESP_APPLY
+	CLC
+	RTS
+NREL_BAD
+	SEC
 	RTS
 ; The net runtime block is all .DS, so on a cold boot it holds whatever the RAM
 ; powered up with. Most of it is written before use, but NET_ACTIVE and
@@ -6465,6 +6724,10 @@ SCORE	.DS	69
 NET_TICK	.DS	1	;frame divider for periodic DELTA TX
 NET_TX_STATE	.DS	1	;bytes remaining in NET_TX_BUF
 NET_TX_IDX	.DS	1	;next NET_TX_BUF index to send
+NET_TX_WR	.DS	1	;COBS encoder output cursor
+NET_TX_CI	.DS	1	;COBS encoder current code-byte cursor
+NET_TX_CODE	.DS	1	;COBS encoder code value
+NET_TX_RAWLEN	.DS	1	;payload plus CRC length during encode
 NET_SEQ	.DS	1	;client TX sequence counter
 NET_RX_STATE	.DS	1	;RX collector mode (0 idle, 1/2/3/4/5 by packet type)
 NET_ACTIVE	.DS	1	;netstream active flag
@@ -6480,7 +6743,8 @@ NET_RX_YSAVE	.DS	1	;mainline RX Y save scratch
 NET_RX_PTR	.DS	2	;mainline RX pointer scratch
 NET_RX_PTR0	.DS	2	;mainline RX pointer scratch
 NET_RX_SCRPTR	.DS	2	;mainline RX screen pointer scratch
-NET_TX_BUF	.DS	NAME_PKT_LEN	;outbound DELTA/hello/NAME packet bytes
+NET_TX_RAW	.DS	NET_TX_RAW_MAX	;payload staging plus CRC-16 trailer
+NET_TX_BUF	.DS	NET_TX_BUF_MAX	;COBS output, including delimiter
 NET_RX_SEQ	.DS	1	;last accepted snapshot sequence
 NET_RX_STICK	.DS	1	;debounced local stick nibble
 NET_RX_TRIG	.DS	1	;debounced local trigger (0 pressed / 1 released)
@@ -6493,9 +6757,10 @@ NET_BF_WRITES	.DS	1	;cells the last repair rewrote
 NET_BD_CNT	.DS	1	;brick deltas applied
 NET_BF_ROW	.DS	1	;repair walk row, saved across the actor test
 NET_BF_CELLX	.DS	1	;repair walk column
-NET_CK_SUM	.DS	1	;running checksum of the packet being collected
-NET_CK_BAD	.DS	1	;frames rejected by checksum or framing
-NET_CK_LEN	.DS	1	;index of a decoded frame's checksum byte
+NET_CK_LO	.DS	1	;CRC-16 low accumulator / trailer check
+NET_CK_HI	.DS	1	;CRC-16 high accumulator / trailer check
+NET_CK_BAD	.DS	1	;frames rejected by CRC or framing
+NET_CK_LEN	.DS	1	;index of a decoded frame's CRC trailer
 NET_FRAME_IDX	.DS	1	;bytes buffered for the frame in flight
 NET_FRAME_OVF	.DS	1	;frame ran past NET_FRAME_MAX
 NET_FRAME_LEN	.DS	1	;decoded frame length
@@ -6548,27 +6813,31 @@ NET_NAME_OFF	.DS	1	;slot*8 while checking the server's echo
 NET_NAME_CHK	.DS	1	;expected character while checking the echo
 HOST_COL	.DS	1	;TXT_DRAW screen column
 HOST_SRC	.DS	1	;TXT_DRAW buffer index
-NET_NAME_PKT	.DS	NAME_PKT_LEN+1	;name packet staging + trailing checksum
+NET_NAME_PKT	.DS	NAME_PKT_LEN+2	;name packet staging + CRC-16 trailer
 NET_NAMES	.DS	4*NAME_LEN	;per-slot display name, all spaces/0 = unnamed
+NET_REL_PKT	.DS	REL_PKT_MAX	;reliable-event wrapper staging + CRC trailer
+NET_REL_REV_LO	.DS	1	;highest applied reliable revision, low byte
+NET_REL_REV_HI	.DS	1	;highest applied reliable revision, high byte
+NET_REL_ACK_PEND	.DS	1	;send a $45 cumulative reliable ACK when idle
 NET_SCORE_PEND	.DS	1	;request HUD role-label refresh
-NET_SEAT_PKT	.DS	4	;seat-mask packet staging + trailing checksum
+NET_SEAT_PKT	.DS	5	;seat-mask packet staging + CRC-16 trailer
 NET_SEAT_MASK	.DS	1	;slots a client actually holds, bit n = slot n
 NET_VACANT_MASK	.DS	1	;slots hidden by NET_VACANT_UPDATE, not by a respawn
 NET_GAME_SHOW	.DS	1	;0 until first full-map + snapshot commit is ready to display
 NET_SNAP_IDX	.DS	1	;snapshot / brick-delta collector index
-NET_SNAP_BUF	.DS	21	;snapshot staging buffer + trailing checksum
+NET_SNAP_BUF	.DS	22	;snapshot staging buffer + CRC-16 trailer
 NET_SHOT_IDX	.DS	1	;shot collector index
-NET_SHOT_PKT	.DS	7	;incoming shot packet staging + trailing checksum
+NET_SHOT_PKT	.DS	8	;incoming shot packet staging + CRC-16 trailer
 NET_SHOT_SEQ	.DS	4	;per-slot odd/even publish sequence from mainline RX
 NET_SHOT_APPLYSEQ	.DS	4	;last fully applied shot publish sequence
 NET_RESP_IDX	.DS	1	;respawn collector index
-NET_RESP_PKT	.DS	7	;respawn staging buffer + trailing checksum
+NET_RESP_PKT	.DS	8	;respawn staging buffer + CRC-16 trailer
 NET_RESP_BUF	.DS	24	;4 * 6-byte latest-respawn cache
 NET_RESP_SEQ	.DS	4	;per-slot odd/even publish sequence from mainline RX
 NET_RESP_APPLYSEQ	.DS	4	;last fully applied respawn publish sequence
 NET_RESP_WRK	.DS	6	;working copy passed to NET_RESP_APPLY_WRK
 NET_BRICK_IDX	.DS	1	;brick-full collector index
-NET_BRICK_BUF	.DS	52	;brick-full staging buffer + trailing checksum
+NET_BRICK_BUF	.DS	53	;brick-full staging buffer + CRC-16 trailer
 NET_BRICK_DONE	.DS	1	;set after first full-map sync
 NET_BRICK_RESYNC	.DS	1	;this BRICK_FULL is a repair, not the first sync
 NET_BRICK_GLYPH	.DS	1	;screen glyph staged for the cell being applied

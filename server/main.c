@@ -1,6 +1,8 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -11,6 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../net/tcp_stream.h"
 #include "transport_stats.h"
 #include "transport_normalize.h"
 
@@ -20,21 +23,16 @@ enum {
   PKT_SHOT = 0x42,
   PKT_NAME = 0x43,
   PKT_SEATS = 0x44,
+  PKT_RELIABLE_ACK = 0x45,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
-  PKT_RESPAWN = 0x52
+  PKT_RESPAWN = 0x52,
+  PKT_RELIABLE_EVENT = 0x53
 };
 
 enum { MAX_PLAYERS = 4 };
-/* A slot must be released fast enough that a reconnecting player does not
-   sit beside their own ghost -- FujiNet picks a fresh UDP source port every
-   time it reopens the stream, so a reconnect always lands in a new slot and
-   the old one lingers until it times out. It must also survive the longest
-   legitimate quiet stretch: clients are not required to send continuously,
-   and only speak when they act. 15s is ~150 missed packets from the 10Hz
-   Atari client, and sits just past the client's own ~13s give-up watchdog,
-   so the slot frees shortly after the client has stopped sending. */
-enum { CLIENT_TIMEOUT_MS = 15000 };
+/* Keep a silence timeout for a vanished SIO peer even when TCP stays open. */
+enum { CLIENT_TIMEOUT_MS = 15000, CLIENT_HANDSHAKE_MS = 3000 };
 enum { INPUT_STALE_MS = 500 };
 /* Client inputs are queued and applied one per tick, in order, instead of the
    newest arrival overwriting whatever had not been read yet. Overwriting lost
@@ -87,6 +85,13 @@ enum { RESPAWN_ECHO_REPEATS = 2 };
 /* Display name length. The Atari HUD gives each slot columns 4..11 of its
    20-column line before the score digit at column 15, so 8 is what fits. */
 #define NAME_LEN 8
+enum {
+  RELIABLE_QUEUE_MAX = 24,
+  RELIABLE_EVENT_MAX = 3 + NAME_LEN,
+  RELIABLE_PKT_MAX = 4 + RELIABLE_EVENT_MAX,
+  RELIABLE_RESEND_MS = 300,
+  RELIABLE_FAST_MS = 75
+};
 
 #define ZOMBIE_THINK_MS 575
 #define ZOMBIE_MOVE_MS 275
@@ -115,9 +120,18 @@ struct shot_state {
 
 struct client_slot {
   int in_use;
+  int fd; /* -1 when free, initialized explicitly at startup and reset */
+  struct tcp_tx tx;
+  struct tcp_frame_rx frame_rx;
+  uint64_t connected_ms;
+  int received_packet;
   /* All-zero means unnamed: the client never sent a NAME, or the slot changed
      hands. Clients fall back to their WIZARD/ZOMBIE label in that case. */
   uint8_t name[NAME_LEN];
+  /* Kept for logging (the peer address accept() handed back) and for
+     nothing else -- a TCP client's identity is its fd, not its address, so
+     nothing here is ever matched against an incoming address the way the UDP
+     server's addr_equal() used to. */
   struct sockaddr_in addr;
   socklen_t addr_len;
   uint64_t last_seen_ms;
@@ -135,6 +149,18 @@ struct client_slot {
   } input_q[INPUT_QUEUE_MAX];
   uint8_t input_head;
   uint8_t input_count;
+  uint16_t reliable_next_rev;
+  uint16_t reliable_acked_rev;
+  uint64_t reliable_last_send_ms;
+  uint64_t reliable_last_fast_ms;
+  struct {
+    uint16_t rev;
+    uint8_t pkt[RELIABLE_PKT_MAX];
+    uint8_t len;
+    uint8_t retries;
+  } reliable_q[RELIABLE_QUEUE_MAX];
+  uint8_t reliable_head;
+  uint8_t reliable_count;
 };
 
 static volatile sig_atomic_t g_running = 1;
@@ -174,80 +200,85 @@ static void log_client_event(const char *event, int slot,
          (unsigned)ntohs(addr->sin_port));
 }
 
-static int addr_equal(const struct sockaddr_in *a,
-                      const struct sockaddr_in *b) {
-  return a->sin_family == b->sin_family && a->sin_port == b->sin_port &&
-         a->sin_addr.s_addr == b->sin_addr.s_addr;
-}
-
-static int find_or_add_client(struct client_slot *clients,
-                              const struct sockaddr_in *addr,
-                              socklen_t addr_len,
-                              uint64_t now,
-                              int zombies,
-                              int *is_new) {
-  for (int i = 0; i < MAX_PLAYERS; i++) {
-    if (clients[i].in_use && addr_equal(&clients[i].addr, addr)) {
-      clients[i].last_seen_ms = now;
-      if (is_new) {
-        *is_new = 0;
-      }
-      return i;
-    }
-  }
+/* Find a slot for a just-accepted TCP connection. Unlike the old UDP
+   find_or_add_client(), there is no "is this the same client sending again"
+   lookup here: a TCP accept() is unconditionally a new connection with its
+   own fd, so every call to this function is the "allocate a fresh slot"
+   case. Same two-pass preference as before -- a free non-zombie slot first,
+   any free slot otherwise -- so --zombies N still shrinks only once the free
+   slots genuinely run out. */
+static int alloc_client_slot(const struct client_slot *clients, int zombies) {
   uint8_t zombie_mask[MAX_PLAYERS];
   compute_zombie_mask(clients, zombies, zombie_mask);
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use && !zombie_mask[i]) {
-      clients[i].in_use = 1;
-      clients[i].addr = *addr;
-      clients[i].addr_len = addr_len;
-      clients[i].last_seen_ms = now;
-      clients[i].sent_bricks = 0;
-      clients[i].have_delta_seq = 0;
-      clients[i].last_delta_seq = 0;
-      clients[i].have_applied_input_seq = 0;
-      clients[i].applied_input_seq = 0;
-      clients[i].input_head = 0;
-      clients[i].input_count = 0;
-      memset(clients[i].name, 0, NAME_LEN); /* the seat's previous occupant */
-      if (is_new) {
-        *is_new = 1;
-      }
       return i;
     }
   }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use) {
-      clients[i].in_use = 1;
-      clients[i].addr = *addr;
-      clients[i].addr_len = addr_len;
-      clients[i].last_seen_ms = now;
-      clients[i].sent_bricks = 0;
-      clients[i].have_delta_seq = 0;
-      clients[i].last_delta_seq = 0;
-      clients[i].have_applied_input_seq = 0;
-      clients[i].applied_input_seq = 0;
-      clients[i].input_head = 0;
-      clients[i].input_count = 0;
-      memset(clients[i].name, 0, NAME_LEN); /* the seat's previous occupant */
-      if (is_new) {
-        *is_new = 1;
-      }
       return i;
     }
-  }
-  if (is_new) {
-    *is_new = 0;
   }
   return -1;
 }
 
+/* Populate a freshly allocated slot for an accepted connection. Mirrors what
+   the old UDP find_or_add_client() set up for a new address. */
+static void init_client_slot(struct client_slot *client, int fd,
+                             const struct sockaddr_in *addr,
+                             socklen_t addr_len, uint64_t now) {
+  client->in_use = 1;
+  client->fd = fd;
+  client->addr = *addr;
+  client->addr_len = addr_len;
+  client->last_seen_ms = now;
+  client->connected_ms = now;
+  client->sent_bricks = 0;
+  client->have_delta_seq = 0;
+  client->last_delta_seq = 0;
+  client->have_applied_input_seq = 0;
+  client->applied_input_seq = 0;
+  client->input_head = 0;
+  client->input_count = 0;
+  client->reliable_next_rev = 1;
+  client->reliable_acked_rev = 0;
+  client->reliable_last_send_ms = 0;
+  client->reliable_last_fast_ms = 0;
+  client->reliable_head = 0;
+  client->reliable_count = 0;
+  memset(client->reliable_q, 0, sizeof(client->reliable_q));
+  memset(client->name, 0, NAME_LEN); /* the seat's previous occupant */
+}
+
+/* Closes the fd (if any) and zeroes everything else, leaving the slot ready
+   for reuse. -1 is the only valid "no fd" value for this struct (see the
+   field comment on client_slot.fd), so this is the one place that writes it
+   outside of init_client_slot(). */
 static void reset_client_slot(struct client_slot *client) {
   if (!client) {
     return;
   }
+  if (client->fd >= 0) {
+    close(client->fd);
+  }
   memset(client, 0, sizeof(*client));
+  client->fd = -1;
+}
+
+/* The one place a client leaves a slot, whatever the reason: timeout, a
+   clean TCP close (recv() == 0), or a socket error. Logs, closes the fd
+   (via reset_client_slot()), and hands the slot a clean actor so it falls
+   back to AI control without any of the departed human's leftover state. */
+static void drop_client(struct client_slot *clients, int i, int debug,
+                        struct player_state *players, struct shot_state *shots,
+                        uint64_t *last_input_ms, uint64_t now) {
+  log_client_event("disconnected", i, &clients[i].addr);
+  if (debug) {
+    log_transport_summary_if_nonzero(i, &clients[i].transport);
+  }
+  reset_client_slot(&clients[i]);
+  reset_slot_gameplay(i, players, shots, last_input_ms, now);
 }
 
 static void reap_timed_out_clients(struct client_slot *clients, uint64_t now,
@@ -258,17 +289,13 @@ static void reap_timed_out_clients(struct client_slot *clients, uint64_t now,
     if (!clients[i].in_use) {
       continue;
     }
-    if (now - clients[i].last_seen_ms < CLIENT_TIMEOUT_MS) {
+    if (!clients[i].tx.failed &&
+        now - clients[i].last_seen_ms < CLIENT_TIMEOUT_MS &&
+        (clients[i].received_packet ||
+         now - clients[i].connected_ms < CLIENT_HANDSHAKE_MS)) {
       continue;
     }
-    log_client_event("disconnected", i, &clients[i].addr);
-    if (debug) {
-      log_transport_summary_if_nonzero(i, &clients[i].transport);
-    }
-    reset_client_slot(&clients[i]);
-    /* The slot falls back to AI control on the next tick, so hand the zombie a
-       clean actor rather than the departed human's leftover state. */
-    reset_slot_gameplay(i, players, shots, last_input_ms, now);
+    drop_client(clients, i, debug, players, shots, last_input_ms, now);
   }
 }
 
@@ -414,8 +441,12 @@ static void build_brick_delta(uint8_t seq, uint8_t x, uint8_t y,
                               uint8_t *out, size_t out_len);
 static void broadcast_packet(int sock, struct client_slot *clients,
                              const uint8_t *pkt, size_t len);
-static ssize_t send_checked(int sock, const struct sockaddr *addr,
-                            socklen_t addrlen, const uint8_t *pkt, size_t len);
+static ssize_t send_checked(struct client_slot *client,
+                            const uint8_t *pkt, size_t len);
+static void broadcast_reliable_event(struct client_slot *clients,
+                                     const uint8_t *event, size_t event_len,
+                                     uint8_t *seq, uint64_t now, int debug);
+static void reliable_tick(struct client_slot *clients, uint64_t now, int debug);
 
 /* Pending brick-destruction echoes. Single-threaded server, one game, so a
    file-scope queue keeps the three break sites from having to thread it. */
@@ -768,7 +799,8 @@ static void reset_slot_gameplay(int slot, struct player_state *players,
    Empty slots are announced as blank rather than skipped, so a client stops
    showing a name once that player leaves. */
 static void broadcast_next_name(int sock, struct client_slot *clients,
-                                uint8_t *seq, int *rotate) {
+                                uint8_t *seq, int *rotate, int debug) {
+  (void)sock;
   static const uint8_t blank[NAME_LEN] = {' ', ' ', ' ', ' ',
                                           ' ', ' ', ' ', ' '};
   int i = *rotate % MAX_PLAYERS;
@@ -782,24 +814,24 @@ static void broadcast_next_name(int sock, struct client_slot *clients,
     if (!clients[t].in_use) {
       continue;
     }
-    send_checked(sock, (struct sockaddr *)&clients[t].addr,
-                 clients[t].addr_len, pkt, sizeof(pkt));
+    send_checked(&clients[t], pkt, sizeof(pkt));
   }
+  broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now_ms(), debug);
 }
 
-/* Every server->client packet carries a trailing sum checksum.
+/* Every frame carries a CRC-16/CCITT-FALSE trailer.
    The Atari receives over SIO as a byte stream, so a dropped or duplicated
    byte shifts framing and payload bytes start being read as packet type
    markers. Bounds checks alone let far too much of that through: corrupt
    positions landed actors on the border and erased it, corrupt scores
    flickered, a corrupt brick delta cleared a random cell, and a corrupt
    sequence number parked the client ~100 ticks in the future so every real
-   snapshot was dropped as stale for seconds. A checksum makes a misframed
+   snapshot was dropped as stale for seconds. A CRC makes a misframed
    packet fail closed instead. */
 enum { PKT_CKSUM_MAX = 64 };
 
 /* COBS: encode so no zero byte can appear inside a frame, then terminate with
-   one. The checksum makes a corrupt frame fail closed, but it cannot realign a
+   one. The CRC makes a corrupt frame fail closed, but it cannot realign a
    parser that has lost byte alignment -- it still hunts for a type marker and a
    payload byte that looks like one starts a false packet. With a zero
    delimiter the next boundary always resynchronises, so a byte lost, gained or
@@ -827,36 +859,129 @@ static size_t cobs_encode(const uint8_t *in, size_t n, uint8_t *out) {
   return wr;
 }
 
-static ssize_t send_checked(int sock, const struct sockaddr *addr,
-                            socklen_t addrlen, const uint8_t *pkt, size_t len) {
+static ssize_t send_checked(struct client_slot *client,
+                            const uint8_t *pkt, size_t len) {
   uint8_t raw[PKT_CKSUM_MAX];
   uint8_t buf[PKT_CKSUM_MAX + PKT_CKSUM_MAX / 254 + 2];
-  if (len + 1 > sizeof(raw)) {
+  size_t payload_len = len;
+  if (len + 2 > sizeof(raw)) {
     return -1;
   }
   memcpy(raw, pkt, len);
-  uint8_t sum = 0;
-  for (size_t i = 0; i < len; i++) {
-    sum = (uint8_t)(sum + pkt[i]);
-  }
-  raw[len] = sum;
-  size_t enc = cobs_encode(raw, len + 1, buf);
+  uint16_t crc = crc16_ccitt_false(raw, len);
+  raw[len++] = (uint8_t)crc;
+  raw[len++] = (uint8_t)(crc >> 8);
+  size_t enc = cobs_encode(raw, len, buf);
   buf[enc++] = 0x00; /* frame delimiter */
-  ssize_t n = sendto(sock, buf, enc, 0, addr, addrlen);
+  int result = tcp_tx_queue(client->fd, &client->tx, buf, enc);
   /* Report the payload length callers passed in, not the wire length: framing
      is transport, and every call site checks the result against the size of the
      packet it built. */
-  return (n == (ssize_t)enc) ? (ssize_t)len : -1;
+  return result == 0 ? (ssize_t)payload_len : -1;
 }
 
 static void broadcast_packet(int sock, struct client_slot *clients,
                              const uint8_t *pkt, size_t len) {
+  (void)sock;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use) {
       continue;
     }
-    send_checked(sock, (struct sockaddr *)&clients[i].addr,
-                 clients[i].addr_len, pkt, len);
+    send_checked(&clients[i], pkt, len);
+  }
+}
+
+static void reliable_send_from(struct client_slot *client, uint64_t now,
+                               const char *reason, int slot, int debug) {
+  if (client->reliable_count == 0) {
+    return;
+  }
+  uint8_t idx = client->reliable_head;
+  send_checked(client, client->reliable_q[idx].pkt, client->reliable_q[idx].len);
+  client->reliable_q[idx].retries++;
+  if (debug) {
+    uint16_t rev = client->reliable_q[idx].rev;
+    printf("TX reliable %s slot=%d rev=%u type=%02X retry=%u\n", reason,
+           slot, (unsigned)rev, (unsigned)client->reliable_q[idx].pkt[4],
+           (unsigned)client->reliable_q[idx].retries);
+  }
+  client->reliable_last_send_ms = now;
+}
+
+static void reliable_tick(struct client_slot *clients, uint64_t now, int debug) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (!clients[i].in_use || clients[i].reliable_count == 0) {
+      continue;
+    }
+    if (now - clients[i].reliable_last_send_ms >= RELIABLE_RESEND_MS) {
+      reliable_send_from(&clients[i], now, "timeout", i, debug);
+    }
+  }
+}
+
+static void reliable_ack(struct client_slot *client, int slot, uint16_t ack,
+                         uint64_t now, int debug) {
+  if (ack == client->reliable_acked_rev &&
+      client->reliable_count > 0 &&
+      now - client->reliable_last_fast_ms >= RELIABLE_FAST_MS) {
+    client->reliable_last_fast_ms = now;
+    reliable_send_from(client, now, "fast", slot, debug);
+    return;
+  }
+  while (client->reliable_count > 0) {
+    uint8_t idx = client->reliable_head;
+    uint16_t rev = client->reliable_q[idx].rev;
+    if ((uint16_t)(ack - rev) >= 0x8000u) {
+      break;
+    }
+    client->reliable_head = (uint8_t)((client->reliable_head + 1) %
+                                      RELIABLE_QUEUE_MAX);
+    client->reliable_count--;
+    client->reliable_acked_rev = rev;
+    if (debug) {
+      printf("ACK reliable slot=%d rev=%u\n", slot, (unsigned)rev);
+    }
+  }
+  if (client->reliable_count > 0) {
+    reliable_send_from(client, now, "advance", slot, debug);
+  }
+}
+
+static void reliable_enqueue_client(struct client_slot *client, int slot,
+                                    const uint8_t *event, size_t event_len,
+                                    uint8_t *seq, uint64_t now, int debug) {
+  if (!client->in_use || event_len == 0 || event_len > RELIABLE_EVENT_MAX ||
+      client->reliable_count >= RELIABLE_QUEUE_MAX) {
+    return;
+  }
+  uint8_t idx = (uint8_t)((client->reliable_head + client->reliable_count) %
+                          RELIABLE_QUEUE_MAX);
+  uint16_t rev = client->reliable_next_rev++;
+  uint8_t *pkt = client->reliable_q[idx].pkt;
+  pkt[0] = PKT_RELIABLE_EVENT;
+  pkt[1] = (*seq)++;
+  pkt[2] = (uint8_t)rev;
+  pkt[3] = (uint8_t)(rev >> 8);
+  memcpy(&pkt[4], event, event_len);
+  client->reliable_q[idx].rev = rev;
+  client->reliable_q[idx].len = (uint8_t)(4 + event_len);
+  client->reliable_q[idx].retries = 0;
+  client->reliable_count++;
+  if (client->reliable_count == 1) {
+    send_checked(client, pkt, client->reliable_q[idx].len);
+    client->reliable_last_send_ms = now;
+  }
+  if (debug) {
+    printf("TX reliable new slot=%d rev=%u type=%02X\n", slot, (unsigned)rev,
+           (unsigned)event[0]);
+  }
+}
+
+static void broadcast_reliable_event(struct client_slot *clients,
+                                     const uint8_t *event, size_t event_len,
+                                     uint8_t *seq, uint64_t now, int debug) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    reliable_enqueue_client(&clients[i], i, event, event_len, seq, now, debug);
   }
 }
 
@@ -867,6 +992,12 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
                                  uint64_t now, uint64_t *last_input_ms,
                                  struct transport_counters *global_transport,
                                  int lag_ms) {
+  if (len == 4 && pkt[0] == PKT_RELIABLE_ACK) {
+    uint16_t ack = (uint16_t)pkt[2] | ((uint16_t)pkt[3] << 8);
+    reliable_ack(&clients[slot], slot, ack, now, debug);
+    return;
+  }
+
   if (pkt[0] == PKT_DELTA) {
     uint8_t pid = (uint8_t)slot;
     if (pid < MAX_PLAYERS) {
@@ -964,6 +1095,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
     uint8_t out[3 + NAME_LEN];
     build_name((*seq)++, (uint8_t)slot, clients[slot].name, out, sizeof(out));
     broadcast_packet(sock, clients, out, sizeof(out));
+    broadcast_reliable_event(clients, out, sizeof(out), seq, now, debug);
     if (debug) {
       printf("NAME slot=%d name=\"%.*s\"\n", slot, NAME_LEN,
              (const char *)clients[slot].name);
@@ -981,6 +1113,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
       players[pid].y = sy;
       build_respawn((*seq)++, pid, sx, sy, 0x03, out, sizeof(out));
       broadcast_packet(sock, clients, out, sizeof(out));
+      broadcast_reliable_event(clients, out, sizeof(out), seq, now, debug);
       queue_respawn_echo(out);
       if (debug) {
         printf("TX respawn pid=%u x=%u y=%u\n", pid, sx, sy);
@@ -998,6 +1131,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
       queue_brick_echo(x, y);
       build_brick_delta((*seq)++, x, y, out, sizeof(out));
       broadcast_packet(sock, clients, out, sizeof(out));
+      broadcast_reliable_event(clients, out, sizeof(out), seq, now, debug);
       if (debug) {
         printf("TX brick_delta x=%u y=%u\n", x, y);
       }
@@ -1016,20 +1150,21 @@ static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
   struct client_slot *c = &clients[slot];
   for (size_t i = 0; i < n; i++) {
     uint8_t pkt[16]; /* NAME is the longest inbound packet at 11 bytes */
-    size_t pkt_len = 0;
-    enum transport_rx_result result =
-        transport_rx_push_byte(&c->rx, (uint8_t)slot, buf[i], pkt,
-                               sizeof(pkt), &pkt_len);
-    uint32_t resyncs = transport_rx_take_resync_count(&c->rx);
-    if (resyncs > 0) {
-      c->transport.delta_resync += resyncs;
-      global_transport->delta_resync += resyncs;
+    int pkt_len = tcp_frame_push_byte(&c->frame_rx, buf[i], pkt, sizeof(pkt));
+    if (pkt_len < 0) {
+      c->transport.delta_resync++;
+      global_transport->delta_resync++;
+      continue;
     }
-    if (result == TRANSPORT_RX_PACKET && pkt_len > 0) {
-      handle_client_packet(slot, pkt, pkt_len, players, brick_bits, sock,
-                           clients, seq, debug, now, last_input_ms,
-                           global_transport, lag_ms);
+    if (pkt_len == 0) {
+      continue;
     }
+    /* The CRC/COBS layer establishes frame boundaries.  Retain the legacy
+       DELTA layouts only as payload compatibility, not as a raw stream scan. */
+    c->received_packet = 1;
+    handle_client_packet(slot, pkt, (size_t)pkt_len, players, brick_bits, sock,
+                         clients, seq, debug, now, last_input_ms,
+                         global_transport, lag_ms);
   }
 }
 
@@ -1249,6 +1384,7 @@ static void start_shot(int shooter, struct player_state *players,
       uint8_t pkt[4];
       build_brick_delta((*seq)++, (uint8_t)sx, (uint8_t)sy, pkt, sizeof(pkt));
       broadcast_packet(sock, clients, pkt, sizeof(pkt));
+      broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now_ms(), debug);
       if (debug) {
         printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
         {
@@ -1279,6 +1415,8 @@ static void start_shot(int shooter, struct player_state *players,
           uint8_t rpkt[6];
           build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, rpkt, sizeof(rpkt));
           broadcast_packet(sock, clients, rpkt, sizeof(rpkt));
+          broadcast_reliable_event(clients, rpkt, sizeof(rpkt), seq, now_ms(),
+                                   debug);
           queue_respawn_echo(rpkt);
         }
         /* Defensive clear: ensure any stale client-side shot sprite is removed. */
@@ -1339,6 +1477,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
         uint8_t pkt[4];
         build_brick_delta((*seq)++, (uint8_t)nx, (uint8_t)ny, pkt, sizeof(pkt));
         broadcast_packet(sock, clients, pkt, sizeof(pkt));
+        broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
         if (debug) {
           printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
           {
@@ -1368,6 +1507,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
         uint8_t pkt[6];
         build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, pkt, sizeof(pkt));
         broadcast_packet(sock, clients, pkt, sizeof(pkt));
+        broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
         queue_respawn_echo(pkt);
         if (debug) {
           printf("TX respawn pending pid=%u\n", (unsigned)p);
@@ -1514,6 +1654,7 @@ static void step_players(struct player_state *players, struct shot_state *shots,
       uint8_t pkt[6];
       build_respawn((*seq)++, (uint8_t)i, sx, sy, 0x03, pkt, sizeof(pkt));
       broadcast_packet(sock, clients, pkt, sizeof(pkt));
+      broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
       queue_respawn_echo(pkt);
       if (debug) {
         printf("TX respawn pid=%u x=%u y=%u\n", (unsigned)i, sx, sy);
@@ -1662,11 +1803,7 @@ static int load_brick_layout(const char *path, uint8_t *bits, size_t bits_len) {
 static void usage(const char *argv0) {
   fprintf(stderr,
           "Usage: %s [--port PORT] [--bind ADDR] [--tick-hz N] [--zombies N] [--brick PATH] [--lag-ms N] [--debug]\n"
-          "  --bind ADDR  bind a specific address instead of all interfaces.\n"
-          "               When FujiNet-PC runs on this host it wants the same\n"
-          "               netstream port. Start this server first and it keeps\n"
-          "               the port; otherwise bind a loopback alias the client\n"
-          "               targets directly, e.g. --bind 127.0.0.2\n",
+          "  --bind ADDR  bind a specific IPv4 address instead of all interfaces.\n",
           argv0);
 }
 
@@ -1720,19 +1857,20 @@ int main(int argc, char **argv) {
 
   signal(SIGINT, on_sigint);
   signal(SIGTERM, on_sigint);
+  signal(SIGPIPE, SIG_IGN);
 
-  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) {
     perror("socket");
     return 1;
   }
 
-  /* Deliberately no SO_REUSEADDR: UDP has no TIME_WAIT to work around, and
-     without it the kernel refuses a second bind to this address/port. That
-     matters because FujiNet-PC's netstream also binds the destination port
-     locally, and when both sockets are allowed to share it the client's
-     datagrams are silently swallowed instead of reaching the game. Failing
-     the bind is what turns that into a visible error. */
+  int reuse = 1;
+  if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+    perror("SO_REUSEADDR");
+    close(sock);
+    return 1;
+  }
 
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
@@ -1749,13 +1887,13 @@ int main(int argc, char **argv) {
 
   if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     perror("bind");
-    fprintf(stderr,
-            "Could not bind %s:%d. Another process already holds that port -- "
-            "on a host also running FujiNet-PC this is usually its netstream "
-            "socket. Start the server before the client opens a stream, or "
-            "bind a loopback alias the client targets directly "
-            "(--bind 127.0.0.2).\n",
-            bind_addr ? bind_addr : "0.0.0.0", port);
+    close(sock);
+    return 1;
+  }
+
+  if (listen(sock, MAX_PLAYERS) < 0 ||
+      fcntl(sock, F_SETFL, O_NONBLOCK) < 0) {
+    perror("listen/nonblocking");
     close(sock);
     return 1;
   }
@@ -1766,6 +1904,7 @@ int main(int argc, char **argv) {
   uint64_t last_input_ms[MAX_PLAYERS];
   struct transport_counters global_transport;
   memset(clients, 0, sizeof(clients));
+  for (int i = 0; i < MAX_PLAYERS; i++) clients[i].fd = -1;
   memset(players, 0, sizeof(players));
   memset(shots, 0, sizeof(shots));
   memset(last_input_ms, 0, sizeof(last_input_ms));
@@ -1801,64 +1940,86 @@ int main(int argc, char **argv) {
   const uint64_t tick_ms = 1000ULL / (uint64_t)tick_hz;
 
   setvbuf(stdout, NULL, _IOLBF, 0);
-  printf("maze-war server listening on UDP port %d, %d Hz, zombies=%d\n",
+  printf("maze-war server listening on TCP port %d, %d Hz, zombies=%d\n",
          port, tick_hz, zombies);
 
   while (g_running) {
-    struct pollfd pfd;
-    pfd.fd = sock;
-    pfd.events = POLLIN;
-    pfd.revents = 0;
-
-    uint64_t now = now_ms();
-    int timeout_ms = 0;
-    if (next_tick > now) {
-      uint64_t delta = next_tick - now;
-      timeout_ms = (delta > 1000) ? 1000 : (int)delta;
+    reap_timed_out_clients(clients, now_ms(), debug, players, shots,
+                           last_input_ms);
+    struct pollfd pfds[MAX_PLAYERS + 1];
+    pfds[0] = (struct pollfd){.fd = sock, .events = POLLIN};
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+      pfds[i + 1] = (struct pollfd){
+          .fd = clients[i].fd,
+          .events = POLLIN | (clients[i].tx.len ? POLLOUT : 0)};
     }
-
-    int pr = poll(&pfd, 1, timeout_ms);
-    if (pr > 0 && (pfd.revents & POLLIN)) {
-      uint8_t buf[256];
+    uint64_t now = now_ms();
+    int timeout_ms = next_tick > now ? (int)(next_tick - now) : 0;
+    if (timeout_ms > 1000) timeout_ms = 1000;
+    int pr = poll(pfds, MAX_PLAYERS + 1, timeout_ms);
+    now = now_ms();
+    if (pr < 0 && errno != EINTR) {
+      perror("poll");
+      break;
+    }
+    /* Service existing peers before accepting, so reused slots cannot inherit
+       poll events from their previous fd. One bounded read per peer per tick. */
+    for (int i = 0; pr > 0 && i < MAX_PLAYERS; i++) {
+      if (!clients[i].in_use) continue;
+      short events = pfds[i + 1].revents;
+      int failed = (events & (POLLERR | POLLNVAL)) != 0;
+      if (!failed && (events & (POLLIN | POLLHUP))) {
+        uint8_t buf[256];
+        ssize_t n = recv(clients[i].fd, buf, sizeof(buf), 0);
+        if (n > 0) {
+          clients[i].last_seen_ms = now;
+          if (debug) printf("RX(%zd) from slot %d\n", n, i);
+          transport_stats_note_raw_bytes(&clients[i].transport, (size_t)n);
+          transport_stats_note_raw_bytes(&global_transport, (size_t)n);
+          process_client_bytes(i, buf, (size_t)n, players, brick_bits, sock,
+                               clients, &seq, debug, now, last_input_ms,
+                               &global_transport, lag_ms);
+        } else if (n == 0 || (errno != EINTR && errno != EAGAIN &&
+                              errno != EWOULDBLOCK)) {
+          failed = 1;
+        }
+      }
+      if (!failed && (events & POLLOUT)) {
+        failed = tcp_tx_flush(clients[i].fd, &clients[i].tx) < 0;
+      }
+      if (failed || clients[i].tx.failed) {
+        drop_client(clients, i, debug, players, shots, last_input_ms, now);
+      }
+    }
+    if (pr > 0 && (pfds[0].revents & POLLIN)) {
       struct sockaddr_in src;
       socklen_t src_len = sizeof(src);
-      ssize_t n = recvfrom(sock, buf, sizeof(buf), 0,
-                           (struct sockaddr *)&src, &src_len);
-      if (n > 0) {
-        int is_new = 0;
-        int slot = find_or_add_client(clients, &src, src_len, now, zombies, &is_new);
-        if (debug) {
-          printf("RX(%zd) from slot %d\n", n, slot);
-        }
-        if (slot >= 0 && is_new) {
+      int fd = accept(sock, (struct sockaddr *)&src, &src_len);
+      if (fd >= 0) {
+        int slot = alloc_client_slot(clients, zombies);
+        if (slot < 0 || tcp_configure(fd) < 0) {
+          close(fd);
+        } else {
+          init_client_slot(&clients[slot], fd, &src, src_len, now);
           log_client_event("connected", slot, &clients[slot].addr);
-          /* Clear the slot before the newcomer is told about the world, so the
-             brick/snapshot state it receives already describes its own actor
-             and not the zombie it just displaced. */
           reset_slot_gameplay(slot, players, shots, last_input_ms, now);
           uint8_t bfull[51];
           build_brick_full(seq++, brick_bits, bfull, sizeof(bfull));
-          send_checked(sock, (struct sockaddr *)&clients[slot].addr,
-                       clients[slot].addr_len, bfull, sizeof(bfull));
+          send_checked(&clients[slot], bfull, sizeof(bfull));
           clients[slot].sent_bricks = 1;
-          if (debug) {
-            printf("TX brick_full -> slot %d\n", slot);
-          }
+          if (debug) printf("TX brick_full -> slot %d\n", slot);
         }
-        if (slot >= 0) {
-          transport_stats_note_raw_bytes(&clients[slot].transport, (size_t)n);
-          transport_stats_note_raw_bytes(&global_transport, (size_t)n);
-          process_client_bytes(slot, buf, (size_t)n, players, brick_bits, sock,
-                               clients, &seq, debug, now,
-                               last_input_ms, &global_transport, lag_ms);
-        }
+      } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+        perror("accept");
       }
     }
 
     if (now_ms() - last_name_rotate_ms >= NAME_ROTATE_MS) {
       last_name_rotate_ms = now_ms();
-      broadcast_next_name(sock, clients, &seq, &name_rotate);
+      broadcast_next_name(sock, clients, &seq, &name_rotate, debug);
     }
+
+    reliable_tick(clients, now_ms(), debug);
 
     if (now_ms() - last_brick_resync_ms >= BRICK_RESYNC_MS) {
       last_brick_resync_ms = now_ms();
@@ -1928,8 +2089,7 @@ int main(int argc, char **argv) {
         if (clients[i].have_applied_input_seq) {
           pkt[2] |= 0x80u;
         }
-        ssize_t wn = send_checked(sock, (struct sockaddr *)&clients[i].addr,
-                                  clients[i].addr_len, pkt, sizeof(pkt));
+        ssize_t wn = send_checked(&clients[i], pkt, sizeof(pkt));
         if (debug && wn == (ssize_t)sizeof(pkt)) {
           printf("TX snapshot -> slot %d\n", i);
         }
@@ -1941,6 +2101,7 @@ int main(int argc, char **argv) {
   if (debug) {
     log_transport_summaries(clients, &global_transport);
   }
+  for (int i = 0; i < MAX_PLAYERS; i++) reset_client_slot(&clients[i]);
   close(sock);
   if (debug) {
     puts("server stopped");

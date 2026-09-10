@@ -1,3 +1,8 @@
+> Branch note (2026-09-09): the Phase 7 server on `realm-net` now uses TCP.
+> The historical UDP bots/relay in this directory have not been migrated;
+> use `tests/tcp_transport_smoke.sh` and the Phase 7 validation notes for TCP.
+> The Atari AI-socket inspection helpers remain usable.
+
 # Rig: reproducing lag and rendering faults on the emulator
 
 Not part of `make test`. These are the instruments the Phase 4 measurements in

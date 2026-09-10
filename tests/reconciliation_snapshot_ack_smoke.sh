@@ -2,6 +2,9 @@
 
 set -eu
 
+ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$ROOT_DIR/tests${PYTHONPATH:+:$PYTHONPATH}"
+
 PORT=9103
 LOG_FILE=$(mktemp)
 SERVER_PID=
@@ -24,6 +27,7 @@ sleep 1
 
 python3 - <<'PY' "${PORT}"
 import socket
+from tcp_frames import recv_frame, send_frame
 
 
 def cobs_decode(pkt):
@@ -56,7 +60,7 @@ port = int(sys.argv[1])
 def expect_snapshot(sock, expected_slot, expected_ack):
     deadline = time.time() + 5.0
     while time.time() < deadline:
-        packet = cobs_decode(sock.recv(256))
+        packet = cobs_decode(recv_frame(sock, 256))
         if len(packet) < 20 or packet[0] != 0x40:
             continue
         flags = packet[2]
@@ -77,14 +81,14 @@ def expect_snapshot(sock, expected_slot, expected_ack):
 
 sockets = []
 for _ in range(2):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect(("127.0.0.1", port))
     sock.settimeout(0.5)
     sockets.append(sock)
 
 try:
-    sockets[0].send(bytes([0x41, 7, 0, 0x07]))
-    sockets[1].send(bytes([0x41, 33, 1, 0x0E]))
+    send_frame(sockets[0], bytes([0x41, 7, 0, 0x07]))
+    send_frame(sockets[1], bytes([0x41, 33, 1, 0x0E]))
     expect_snapshot(sockets[0], 0, 7)
     expect_snapshot(sockets[1], 1, 33)
 finally:
@@ -92,5 +96,6 @@ finally:
       sock.close()
 PY
 
-grep -F "TX snapshot -> slot 0" "${LOG_FILE}" >/dev/null
-grep -F "TX snapshot -> slot 1" "${LOG_FILE}" >/dev/null
+# The assertions above inspect each recipient's actual TCP frame and ack. Do
+# not require debug lines after both peers have closed: EOF handoff can run
+# before the server reaches its next diagnostic print.

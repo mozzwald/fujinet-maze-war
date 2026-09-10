@@ -20,6 +20,7 @@ set -eu
 
 PORT=9174
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$ROOT_DIR/tests${PYTHONPATH:+:$PYTHONPATH}"
 SERVER_BIN="$ROOT_DIR/build/maze-war-server"
 LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/respawn-echo.XXXXXX.log")
 BRICK_FILE=$(mktemp "${TMPDIR:-/tmp}/respawn-echo-bricks.XXXXXX.txt")
@@ -74,6 +75,7 @@ sleep 1
 
 python3 - "$PORT" <<'PYEOF'
 import socket, sys, time
+from tcp_frames import recv_frame, send_frame
 
 
 def cobs_decode(pkt):
@@ -110,7 +112,7 @@ def fail(m):
 
 class C:
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect(("127.0.0.1", port))
         self.sock.settimeout(0.02)
         self.seq = 0
@@ -119,7 +121,7 @@ class C:
         self.respawns = []      # (pid, flags)
 
     def send(self, joy):
-        self.sock.send(bytes([PKT_DELTA, self.seq,
+        send_frame(self.sock, bytes([PKT_DELTA, self.seq,
                               self.pid if self.pid is not None else 0, joy]))
         self.seq = (self.seq + 1) & 0xFF
 
@@ -127,7 +129,7 @@ class C:
         end = time.time() + secs
         while time.time() < end:
             try:
-                p = cobs_decode(self.sock.recv(256))
+                p = cobs_decode(recv_frame(self.sock, 256))
             except socket.timeout:
                 continue
             if len(p) >= 20 and p[0] == PKT_SNAPSHOT:

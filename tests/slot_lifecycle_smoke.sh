@@ -10,6 +10,7 @@ set -eu
 
 PORT=9131
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$ROOT_DIR/tests${PYTHONPATH:+:$PYTHONPATH}"
 SERVER_BIN="$ROOT_DIR/build/maze-war-server"
 LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/slot-lifecycle-smoke.XXXXXX.log")
 SERVER_PID=
@@ -39,6 +40,7 @@ sleep 1
 
 python3 - "$PORT" <<'PYEOF'
 import socket
+from tcp_frames import recv_frame, send_frame
 
 
 def cobs_decode(pkt):
@@ -76,7 +78,7 @@ SETTLE_S = 1.5
 
 class Client:
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect(("127.0.0.1", port))
         self.sock.settimeout(0.02)
         self.pid = None
@@ -104,12 +106,12 @@ class Client:
         deadline = time.time() + duration
         while time.time() < deadline:
             try:
-                self.handle(cobs_decode(self.sock.recv(256)))
+                self.handle(cobs_decode(recv_frame(self.sock, 256)))
             except socket.timeout:
                 pass
 
     def send(self, joy):
-        self.sock.send(bytes([0x41, self.seq & 0xFF, self.pid or 0, joy]))
+        send_frame(self.sock, bytes([0x41, self.seq & 0xFF, self.pid or 0, joy]))
         self.seq += 1
 
     def keepalive(self, duration):
@@ -133,7 +135,7 @@ def fail(msg):
 
 # --- observer joins slot 0 and watches the rest of the match ---------------
 obs = Client()
-obs.sock.send(bytes([0x41, 1, 0, 0x0F]))
+send_frame(obs.sock, bytes([0x41, 1, 0, 0x0F]))
 obs.seq = 2
 obs.wait_ready()
 if obs.pid != 0:
@@ -155,7 +157,7 @@ pre = dict(obs.players[1])
 
 # --- a human takes over slot 1 --------------------------------------------
 taker = Client()
-taker.sock.send(bytes([0x41, 1, 1, 0x0F]))
+send_frame(taker.sock, bytes([0x41, 1, 1, 0x0F]))
 taker.seq = 2
 taker.wait_ready()
 if taker.pid != 1:
@@ -289,6 +291,7 @@ CORPSE_PID=$!
 sleep 1
 python3 - 9152 <<'PYEOF2'
 import socket, sys, time
+from tcp_frames import recv_frame, send_frame
 
 def cobs_decode(pkt):
     """Server frames are COBS encoded with a trailing $00 delimiter."""
@@ -314,29 +317,29 @@ def cobs_decode(pkt):
 PORT = int(sys.argv[1])
 
 def mk():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect(("127.0.0.1", PORT))
     s.settimeout(0.02)
     return s
 
 a, b = mk(), mk()
-a.send(bytes([0x41, 1, 0, 0x0F]))
-b.send(bytes([0x41, 1, 0, 0x0F]))
+send_frame(a, bytes([0x41, 1, 0, 0x0F]))
+send_frame(b, bytes([0x41, 1, 0, 0x0F]))
 pos, dead = {}, set()
 overlaps = deaths = 0
 seq, i = 2, 0
 dirs = [0x07, 0x0D, 0x0B, 0x0E]
 t0 = time.time()
 while time.time() - t0 < 30:
-    a.send(bytes([0x41, seq & 0xFF, 0, dirs[(i // 7) % 4]]))
-    b.send(bytes([0x41, seq & 0xFF, 0, dirs[(i // 5) % 4] | 0x10]))
+    send_frame(a, bytes([0x41, seq & 0xFF, 0, dirs[(i // 7) % 4]]))
+    send_frame(b, bytes([0x41, seq & 0xFF, 0, dirs[(i // 5) % 4] | 0x10]))
     seq += 1
     i += 1
     end = time.time() + 0.1
     while time.time() < end:
         for s in (a, b):
             try:
-                p = cobs_decode(s.recv(256))
+                p = cobs_decode(recv_frame(s, 256))
             except socket.timeout:
                 continue
             if len(p) >= 6 and p[0] == 0x52:

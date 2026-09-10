@@ -1,10 +1,10 @@
-# Maze War UDP Protocol (v1)
+# Maze War Protocol (v1 payloads over TCP)
 
 This document matches current server behavior in `server/main.c`.
 
 ## Overview
 
-- Transport: UDP
+- Transport: TCP on port 9000; Atari `NET_FLAGS=$05`, 57600 baud
 - Endianness: byte-wise, no multi-byte integers
 - Players: 4 slots (`pid` 0..3)
 - Playfield: 20 columns (`x=0..19`), 19 rows (`y=0..18`)
@@ -19,22 +19,20 @@ This document matches current server behavior in `server/main.c`.
 | 0x42 | SHOT        | S->C  | 6    | Shot state update |
 | 0x43 | NAME        | S<->C | 11   | Per-slot display name |
 | 0x44 | SEATS       | S->C  | 3    | Which slots a client holds |
+| 0x45 | RELIABLE_ACK | C->S | 4    | Cumulative reliable-event ACK |
 | 0x50 | BRICK_FULL  | S->C  | 51   | Full brick bitset |
 | 0x51 | BRICK_DELTA | S<->C | 4    | Brick removed |
 | 0x52 | RESPAWN     | S<->C | 6    | Respawn request/event |
+| 0x53 | RELIABLE_EVENT | S->C | 8..15 | Ordered wrapper for reliable events |
 
 ## Framing and Integrity (server -> client)
 
-Every server-to-client packet is COBS encoded, followed by a single `$00`
-delimiter byte. Inside the encoded frame the payload carries one extra trailing
-byte: the sum of all preceding bytes of that packet, modulo 256. The lengths in
-the table above are payload lengths; on the wire each is the encoded length
-plus the checksum and delimiter.
+Every packet in both directions is COBS encoded and followed by a single `$00`
+delimiter byte. Inside the encoded frame, the payload carries a two-byte
+CRC-16/CCITT-FALSE trailer: polynomial `$1021`, initial value `$FFFF`, low byte
+first. The lengths in the table above are payload lengths; on the wire each is
+the encoded length plus the CRC and delimiter.
 
-
-Every server-to-client packet carries one extra trailing byte: the sum of all
-preceding bytes of that packet, modulo 256. The lengths in the table above are
-payload lengths; on the wire each is one byte longer.
 
 This exists for the Atari. Its receive path is a byte stream over SIO rather
 than discrete datagrams, so a single dropped or duplicated byte shifts framing
@@ -48,18 +46,25 @@ in the future so every genuine snapshot was dropped as stale for seconds.
 COBS is what makes the stream self-synchronising: no zero byte can appear
 inside an encoded frame, so the next delimiter is always a frame boundary. The
 client buffers bytes until a delimiter, decodes in place, checks the trailing
-sum, and dispatches on the type byte. A byte lost, gained or flipped costs
+CRC, and dispatches on the type byte. A byte lost, gained or flipped costs
 exactly one frame and the parser realigns immediately -- verified by
 tests/cobs_resync_smoke.sh against a literal transcription of the 6502 decoder.
 
-The checksum alone was not enough: it makes a damaged packet fail closed, but a
+The CRC alone is not enough: it makes a damaged packet fail closed, but a
 parser that scans for a type marker stays misaligned until a payload byte
 happens to look like one, which is how spurious BRICK_DELTAs and corrupt
 positions kept getting through.
 
-Client-to-server packets are unchanged: they arrive as UDP datagrams with the
-kernel's own checksum, and the inbound path accepts several historical DELTA
-framings that a length change would disturb.
+Client-to-server payloads retain their existing packet types and historical
+DELTA compatibility forms, inside the same COBS+CRC frame. The server retains a
+frame parser per accepted connection across arbitrary partial or combined reads.
+
+All host sockets use TCP_NODELAY and nonblocking I/O after connecting. Send
+queues preserve partial writes; queue overflow disconnects the affected peer
+instead of dropping part of a frame or blocking the game tick. Linux clients
+retain incomplete receive frames, dispatch all complete frames in order, and
+validate CRC-16. Neither TCP nor its CRC protects
+the SIO hop between Atari and FujiNet.
 
 ## Common Encoding
 
@@ -143,7 +148,7 @@ Internal canonical DELTA form after normalization:
 ```
 
 Server behavior:
-- Client identity is bound to UDP source address/port (slot), not trusted from payload.
+- Client identity is bound to the accepted TCP connection (slot), not trusted from payload.
 - Incoming DELTA is accepted only if payload `pid` (or swapped `pid`) matches that slot.
 - DELTA seq is filtered per slot: duplicate or too-old packets are dropped.
 - Invalid `joy` bytes (bits 5..7 set or invalid stick nibble) are dropped.
@@ -153,7 +158,8 @@ Server behavior:
 
 When the server runs with `--debug`, it logs `transport accepted slot=` for each accepted DELTA and `transport summary slot=` every 2000 ms plus on disconnect/shutdown. Summary lines expose these normalization counters:
 
-- `raw_datagrams`
+- `raw_datagrams` (legacy counter name: counts nonempty socket reads on TCP,
+  not packets; split or coalesced reads change this value)
 - `raw_bytes`
 - `delta_primary`
 - `delta_swapped`
@@ -238,6 +244,23 @@ Behavior:
 - Clients must assume their own slot is occupied regardless of the mask, so the
   HUD is right before the first `SEATS` arrives.
 
+### 0x45 RELIABLE_ACK (4 bytes, C->S)
+
+```
+[0] type = 0x45
+[1] seq
+[2] highest applied reliable revision, low byte
+[3] highest applied reliable revision, high byte
+```
+
+Behavior:
+- Sent by clients after applying a `RELIABLE_EVENT`, and also when a later
+  revision arrives before the missing next revision.
+- The ACK is cumulative: revision `N` means every reliable event through `N`
+  has been applied in order.
+- A duplicate ACK for the previous revision triggers a rate-limited fast
+  retransmit of the unacknowledged stream before the timeout path fires.
+
 ### 0x50 BRICK_FULL (51 bytes, S->C)
 
 Full brick layout bitset (`20*19=380` bits => 48 bytes).
@@ -302,13 +325,36 @@ Current server behavior:
   coordinates still hold the cell it died in, so counting it as an obstacle
   would make that cell an invisible wall for the whole respawn delay.
 
+### 0x53 RELIABLE_EVENT (8..15 bytes, S->C)
+
+```
+[0] type = 0x53
+[1] seq
+[2] stream revision, low byte
+[3] stream revision, high byte
+[4..] inner event payload: NAME, BRICK_DELTA, or RESPAWN
+```
+
+Behavior:
+- Each TCP client has its own ordered reliable-event stream. Revisions start at
+  1 for a new connection and are acknowledged with `RELIABLE_ACK`.
+- The server currently enqueues `NAME`, `BRICK_DELTA`, and `RESPAWN` payloads
+  into this stream. Retransmits are byte-identical copies of the stored wrapper
+  packet.
+- Clients apply only the next expected revision. A gap is not applied; the
+  client re-ACKs the highest applied revision so the server can retransmit.
+- The legacy direct packets, brick/respawn repeats, name rotation, and full map
+  resync remain in place as transition fallbacks while 07-04 is measured.
+
 ## Connection and Slot Semantics
 
-- Server tracks clients by UDP source address+port.
+- Server tracks clients by their accepted TCP socket; the peer address is logged only.
 - Display names are per slot and are cleared on handoff (see Slot handoff).
-- On first packet from a new endpoint, server assigns a slot (`pid`).
+- On accept, server assigns a slot (`pid`); excess connections are closed.
 - New clients immediately receive a `BRICK_FULL`.
-- Client timeout is 15 seconds without packets.
+- Client timeout is 15 seconds without received bytes; a new connection must
+  complete an inbound packet within 3 seconds. EOF and socket failures release
+  the seat immediately. Both Linux clients send idle keepalives.
 
 ### Slot allocation order
 
@@ -325,7 +371,7 @@ Current server behavior:
 ### Slot handoff
 
 A slot changes hands when a human takes over a zombie seat, or when a human
-times out and the zombie backfills it. On both transitions the server resets
+disconnects or times out and the zombie backfills it. On both transitions the server resets
 the slot's transient state so the new occupant does not inherit the old one's:
 
 - an in-flight shot is retired with the usual three-tick clear burst,
@@ -340,9 +386,10 @@ than stale state, so the wizard becomes a zombie (or vice versa) where it
 stands, and other clients see no unexplained jump. A pending respawn is left to
 finish through the normal `RESPAWN` path.
 
-Because slot identity is address+port, and FujiNet chooses a fresh source port
-each time it reopens a stream, a reconnecting player lands in a **new** slot;
-their previous slot persists until the timeout above expires.
+Each reconnect is a new connection and uses the normal free-slot preference.
+A cleanly closed old connection releases its slot immediately. An old half-open
+connection can still occupy a seat until the silence timeout; TCP is not a
+persistent player identity or session-resume mechanism.
 
 ## Client Input Model
 

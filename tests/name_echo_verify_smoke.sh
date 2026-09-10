@@ -2,10 +2,10 @@
 
 # The client must re-announce its name when the server echoes a different one.
 #
-# Server->client frames are COBS framed and checksummed; client->server packets
-# are a raw byte stream with neither. So a damaged NAME reaches the server, is
-# accepted verbatim, stored, and then rebroadcast to every client for the rest
-# of the game -- one session ran start to finish showing MOZZEMU as FDZZEMU.
+# Every client/server frame is COBS framed and CRC-16 protected. The name retry
+# still must compare the server's accepted echo with what the player typed: a
+# stale or different echoed NAME should be corrected rather than treated as
+# settled for the rest of the game.
 #
 # The retry used to ask only whether our slot had *any* name, so a wrong name
 # looked settled and was never corrected. It has to compare the echo against
