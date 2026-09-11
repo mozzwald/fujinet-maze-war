@@ -32,6 +32,7 @@ DLIST	=	$0230
 DMACTL	=	$022F
 GPRIOR	=	$026F
 GRACTL	=	$D01D
+HPOSM0	=	$D004
 HPOSP0	=	$D000
 KEYCODES	=	$79
 KEYIN	=	$02FC
@@ -43,6 +44,7 @@ PCOLR3	=	$02C3
 PMBASE	=	$D407
 RANDOM	=	$D20A
 RTCLOK	=	$14
+SIZEM	=	$D00C
 SIZEP0	=	$D008
 SKCTL	=	$D20F
 STICK0	=	$0278
@@ -96,6 +98,8 @@ NET_TX_RAW_MAX	=	NAME_PKT_LEN+2	;payload plus CRC-16 trailer
 NET_TX_BUF_MAX	=	NET_TX_RAW_MAX+2	;COBS code byte and delimiter worst case
 NET_WAIT_MAX	=	3	;~13s (3*256 frames) with no server data before giving up
 NET_INIT_TRIES	=	3	;NS_INIT attempts before falling back to the host prompt
+HUD_MISSILE_X	=	58	;small shirt-colour swatches beside the HUD names
+HUD_MISSILE_Y0	=	192	;PM Y for the first 20-column HUD row
 ;
 ;CUSTOM CHARACTER SET (1K-aligned RAM)
 ;
@@ -495,10 +499,8 @@ PMCLR_LP
 	STA	PMBASE	; DMACTL, GRACTL,
 	LDA	#$3E	; AND GPRIOR
 	STA	DMACTL
-	LDA	#$02	;players only.  Bit 0 used to enable missile DMA as
-	STA	GRACTL	;well, but the client never writes HPOSM0-3 or any
-			;missile graphics, so that DMA only ever fetched
-			;whatever happened to be at PMBASE+$300.
+	LDA	#$02	;player output only; HUD missiles start when GAME is shown
+	STA	GRACTL
 	LDA	HOST_DONE	;AUDCTL/SKCTL BELONG TO THE
 	BNE	INITPSK	;NETSTREAM HANDLER AFTER FIRST
 	LDA	#0	;NET INIT; COLD START ONLY
@@ -606,6 +608,10 @@ ERASBOT	STA	(SCRPTR),Y
 	STA	NET_SEAT_MASK
 	STA	NET_VACANT_MASK
 	STA	NET_STAGE_LOCAL_PID
+	LDX	#3		;NET_NAMES lives after NET_INIT_ARGS, outside
+STNCLR	JSR	NET_NAME_CLR	;NET_STATE_CLEAR; blank it before the first HUD draw
+	DEX
+	BPL	STNCLR
 	JSR	NET_SCORE_INIT
 ;
 ;INITIALIZE ACTIVE PARTICIPANTS
@@ -1096,10 +1102,8 @@ NHR_PMCLR
 	INX
 	BNE	NHR_PMCLR
 	JSR	HOST_BOOT	;RE-PROMPT, SHOWING HOST_MSG
-	LDA	#$02	;START DOES NOT REPROGRAM GRACTL, SO RESTORE
-	STA	GRACTL	;PLAYER OUTPUT BEFORE PLAY RESUMES.  Players only,
-			;matching INITPLR: enabling missiles here too was
-			;what brought the artefact back on the resume path.
+	LDA	#$02	;RESTORE PLAYER OUTPUT ONLY; HUD MISSILES START
+	STA	GRACTL	;WHEN THE GAME DISPLAY IS SHOWN AGAIN.
 	JMP	START
 ;
 ;SILENCE WATCHDOG (ONE CALL PER FRAME FROM NET_POLL)
@@ -2048,7 +2052,7 @@ NET_RX_50DONE
 	LDA	#1
 	STA	NET_BRICK_DONE
 NET_RX_50BAD
-	LDA	#$40	;first authoritative full sync received: enable DLI+VBI ($40 to disable, $C0 to enable)
+	LDA	#$40	;first authoritative full sync received: enable VBI, keep DLI off
 	STA	NMIEN
 	LDA	#0
 	STA	NET_RX_STATE
@@ -2572,25 +2576,17 @@ NSLBWL
 	LDA	# >PLRTXT
 	STA	POINTER+1
 NSLBC
-	TXA
-	ASL
-	STA	COUNT
-	ASL
-	CLC
-	ADC	COUNT		;slot*6 source offset
-	CLC
-	ADC	POINTER
-	STA	POINTER
-	BCC	NSLB0
-	INC	POINTER+1
-NSLB0
 	LDA	LBLDSTLO,X
 	STA	SCRPTR
 	LDA	LBLDSTHI,X
 	STA	SCRPTR+1
+	LDA	NAMECOL,X
+	STA	HOLDIT		;fallback labels use the same blue text colour as names
 	LDY	#0
 NSLBCL
 	LDA	(POINTER),Y
+	JSR	NAME_SCR
+	ORA	HOLDIT
 	STA	(SCRPTR),Y
 	INY
 	CPY	#6
@@ -2738,9 +2734,8 @@ NNC_LP
 	RTS
 ;
 ; X=slot -> draw its 8-char name into the HUD label field, padded to the 11
-; columns the field owns. Mode 6 takes the colour from the top two bits of each
-; character, which is how PLRTXT gets four colours out of one word, so the
-; name is OR'd with the same per-slot band. Preserves X.
+; columns the field owns. Text is one readable blue band for every row; the PMG
+; missile swatch beside the row carries the per-slot shirt colour. Preserves X.
 NET_NAME_DRAW
 	TXA
 	PHA
@@ -4513,6 +4508,9 @@ VBI	JSR	NET_STAGE_COMMIT
 	STA	DLIST
 	LDA	# >GAME
 	STA	DLIST+1
+	JSR	HUD_PM_INIT	;shirt-colour HUD swatches, after host/connect screens
+	LDA	#$03
+	STA	GRACTL	;players + initialized missiles
 	LDA	#1
 	STA	NET_GAME_SHOW
 	LDA	#0	;boot diagnostic over: border black
@@ -6402,6 +6400,46 @@ ADOFSLP	LDA	SCRPTR	;OFFSET AS MANY
 	BNE	ADOFSLP
 	RTS
 ;
+;HUD PLAYER-COLOUR MARKERS
+;-------------------------
+; Four missile PMGs make small shirt-colour squares beside the bottom HUD rows.
+; Missiles 0..3 share the colours of players 0..3 while GPRIOR keeps fifth-
+; player mode clear, so this provides per-slot colour identity without a DLI.
+;
+HUD_PM_INIT
+	LDA	#HUD_MISSILE_X
+	STA	HPOSM0
+	STA	HPOSM0+1
+	STA	HPOSM0+2
+	STA	HPOSM0+3
+	LDA	#$55		;double-width all four missiles for visible squares
+	STA	SIZEM
+	LDA	#0
+	LDY	#0
+HPM_CLR
+	STA	PMAREA+$300,Y
+	INY
+	BNE	HPM_CLR
+	LDX	#0
+HPM_ROW
+	LDY	HUD_MISSILE_Y,X
+	LDA	HUD_MISSILE_BITS,X
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INX
+	CPX	#4
+	BCC	HPM_ROW
+	RTS
+;
 ;*****************
 ;** DLI ROUTINE **
 ;*****************
@@ -6476,9 +6514,11 @@ NET_HARDSNAP_TBL	.BYTE	NET_HARD_P0,NET_RECON_P1,NET_RECON_P1,NET_RECON_P1
 ;SCREEN INDEX TO SCORES
 ;
 SCRINDX	.BYTE	4,24,44,64
-NAMECOL	.BYTE	$00,$40,$00,$C0	;mode 6 colour band per slot, matching PLRTXT
+NAMECOL	.BYTE	$40,$40,$40,$40	;blue HUD text; PM missiles carry shirt colours
 LBLDSTLO	.BYTE	<[BOTSCRN+4],<[BOTSCRN+24],<[BOTSCRN+44],<[BOTSCRN+64]
 LBLDSTHI	.BYTE	>[BOTSCRN+4],>[BOTSCRN+24],>[BOTSCRN+44],>[BOTSCRN+64]
+HUD_MISSILE_Y	.BYTE	HUD_MISSILE_Y0,HUD_MISSILE_Y0+8,HUD_MISSILE_Y0+16,HUD_MISSILE_Y0+24
+HUD_MISSILE_BITS	.BYTE	$03,$0C,$30,$C0
 ;
 ;SHAPE TABLES
 ;------------
@@ -6709,14 +6749,8 @@ MAZEDAT	.BYTE	$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0
 ;TEXT MESSAGES
 ;-------------
 ;
-PLRTXT	.BYTE	"WIZARDwizardWIZARD"
-	.BYTE	$F7,$E9,$FA,$E1,$F2,$E4
-ZOMTXT	.BYTE	"ZOMBIEzombieZOMBIE"
-	.BYTE	$FA,$EF,$ED,$E2,$E9,$E5
-WIZLBL	.BYTE	"WIZARDwizardWIZARD"
-	.BYTE	$F7,$E9,$FA,$E1,$F2,$E4
-ZOMLBL	.BYTE	"ZOMBIEzombieZOMBIE"
-	.BYTE	$FA,$EF,$ED,$E2,$E9,$E5
+PLRTXT	.BYTE	87,73,90,65,82,68	;ATASCII "WIZARD" for NAME_SCR
+ZOMTXT	.BYTE	90,79,77,66,73,69	;ATASCII "ZOMBIE" for NAME_SCR
 ENDTXT	.BYTE	"WINS"
 ;
 ;GAME SCREEN SPACE

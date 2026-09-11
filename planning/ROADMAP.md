@@ -14,7 +14,7 @@ This roadmap follows the dependency chain identified in research: normalize tran
 - [x] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded. Final real-Atari verification approved the cadence/fire-direction replay fix and closed RECN-01 through RECN-04.
 - [x] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients. Human mixed-session checkpoint approved 2026-09-03.
 - [x] **Phase 3.1: Netstream Handler Refresh and POKEY Channel Isolation (INSERTED)** - Update to the latest netstream handler (built from source) and remap all sound to POKEY channels 1+2 so the game can never corrupt the handler's channel 3+4 baud timer. See `ref/net-fix-plan.md` for full analysis. Completed 2026-09-02; all four criteria verified (see STATE.md).
-- [ ] **Phase 4: Render-State Separation** - Reopened 2026-09-10 after persistent remote lag on hardware and emulation. The first timing/recovery repair pass is user-tested and greatly improved play: two-computer emulation is almost flawless, real Atari XL + hardware FujiNet still occasionally jumps one or two cells. Bounded timed playback remains the next step only if that residual hardware jumpiness needs more work. See [lag review and repair sequence](phases/04-render-state-separation/04-LAG-REVIEW.md).
+- [ ] **Phase 4: Render-State Separation** - Reopened 2026-09-10 after persistent remote lag on hardware and emulation. The first timing/recovery repair pass is user-tested and greatly improved play: two-computer emulation is almost flawless, real Atari XL + hardware FujiNet still occasionally jumps one or two cells. Bounded timed playback remains the next step only if that residual hardware jumpiness needs more work. HUD name color matching is implemented as a small presentation side quest. See [lag review and repair sequence](phases/04-render-state-separation/04-LAG-REVIEW.md).
 - [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff received 2026-09-04.
 - [x] **Phase 5.1: Link Integrity and Frame Resynchronisation (INSERTED)** - Make the Atari receive path robust to a lossy SIO byte stream: per-packet checksum, COBS framing with a zero delimiter so the parser always realigns, actor-state validation, and the boot/render faults these exposed. Unplanned; driven by real-hardware symptoms that emulation could not reproduce. Completed and human-confirmed 2026-09-04. See STATE.md "Phase 5.1".
 - [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow. A minimal validation pass (scripted emulator sessions including join/leave handoff) runs after Phase 5; full hardening runs after Phase 4.
@@ -44,7 +44,7 @@ Plans:
   2. When a correction is needed, the Atari wizard settles back to authoritative state without large teleports and with no more than about one maze cell of visible correction in normal play.
   3. Original Maze War movement and turning cadence remains recognizable on Atari while client prediction is active.
   4. Movement disagreements caused by stale local input are resolved by replaying only unacknowledged inputs instead of repeated snap-threshold retuning.
-**Plans**: 5 plans
+**Plans**: 6 plans
 Plans:
 - [x] `02-01-PLAN.md` — Extend SNAPSHOT with recipient-specific `ack_seq`, update Linux ack decoding, and add a real-server ack smoke harness.
 - [x] `02-02-PLAN.md` — Add the Atari pending-input ring, ack discard helpers, and replay wiring at the staged authoritative commit seam.
@@ -99,6 +99,7 @@ Plans:
 - [x] `04-04` — Clear all player-missile memory before PM DMA is enabled, and stop enabling missile DMA the game never uses. Hardware artefact check remains useful during the phase acceptance pass.
 - [x] `04-05` — Complete the embedded font for characters text can use, including player-name and prompt/status text coverage.
 - [x] `04-06` — RETRACTED 2026-09-09, not executed. Proposed a bounded catch-up for `REMOTE_FOLLOW` on the premise that a diverged remote actor gets permanently stuck; that premise was traced to two bugs in the measurement rig itself (documented in `04-RESEARCH.md` and `tests/rig/README.md`), and a corrected instrument shows reconciliation converges to zero gap in 100% of samples once a remote actor is still, at every loss rate tested including 50%. No catch-up mechanism is needed. Kept in the plan list for the record.
+- [x] `04-07` — Mark each bottom HUD player row with a shirt-color PMG missile swatch while keeping gameplay DLI disabled.
 
 **Status note (2026-09-09)**: The remote-actor lag investigation (requested
 separately from the phase's original plans) is closed. See `04-RESEARCH.md`
@@ -247,6 +248,6 @@ Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) 
 | 3. Combat and World Authority | 3/3 | Complete | 2026-09-03 |
 | 3.1 Netstream Handler Refresh and POKEY Channel Isolation | 2/2 | Complete | 2026-09-02 |
 | 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
-| 4. Render-State Separation | 4/5; 04-03 partially open; 04-06 retracted | First lag repair pass user-tested 2026-09-10: emulation almost flawless, real Atari XL + hardware FujiNet greatly improved with occasional one-to-two-cell jumps | - |
+| 4. Render-State Separation | 5/6; 04-03 open; 04-06 retracted | First lag repair pass user-tested 2026-09-10: emulation almost flawless, real Atari XL + hardware FujiNet greatly improved with occasional one-to-two-cell jumps; HUD name-color side quest implemented | - |
 | 6. Mixed-Session Validation and Hardening | 0/TBD | Not started | - |
 | 7. Realtime Transport Reliability (EXPERIMENTAL, branch `realm-net`) | 4/5 | 07-01 TCP, 07-02 clients/hardware acceptance, 07-03 CRC, and 07-04 reliable events complete; 07-05 deferred | - |

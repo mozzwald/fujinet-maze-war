@@ -200,6 +200,18 @@ grep -E "NAME_LEN[$TAB ]*=[$TAB ]*8" "$ATARI_SRC" >/dev/null
 grep -E "^NET_NAME_DRAW" "$ATARI_SRC" >/dev/null
 grep -E "^NET_NAME_RETRY" "$ATARI_SRC" >/dev/null
 grep -E "^NET_TX_BUILD_NAME" "$ATARI_SRC" >/dev/null
+# Stored HUD names are outside NET_STATE_CLEAR's zeroed block; START must blank
+# them to spaces so stale RAM cannot render junk before name packets arrive.
+grep -A70 -E "^START" "$ATARI_SRC" | grep -E "JSR[$TAB ]+NET_NAME_CLR" >/dev/null || {
+    echo "FAIL: START does not blank stored HUD names" >&2; exit 1; }
+# Fallback labels are plain ASCII. The old pre-colored variants made zombie slot
+# 2 start at a lowercase/precolored byte and render as a semicolon-like glyph.
+grep -F 'PLRTXT	.BYTE	87,73,90,65,82,68' "$ATARI_SRC" >/dev/null || {
+    echo "FAIL: WIZARD fallback label is not clean ATASCII" >&2; exit 1; }
+grep -F 'ZOMTXT	.BYTE	90,79,77,66,73,69' "$ATARI_SRC" >/dev/null || {
+    echo "FAIL: ZOMBIE fallback label is not clean ATASCII" >&2; exit 1; }
+grep -F 'NAMECOL	.BYTE	$40,$40,$40,$40' "$ATARI_SRC" >/dev/null || {
+    echo "FAIL: HUD names are not all blue text" >&2; exit 1; }
 # zombie slots keep their ZOMBIE label whatever name is stored
 grep -A12 -E "^NSLBLP" "$ATARI_SRC" | grep -F "ZOMTXT" >/dev/null
 

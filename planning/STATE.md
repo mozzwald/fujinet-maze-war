@@ -8,8 +8,8 @@ last_updated: "2026-09-10T00:00:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 6
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 16
+  completed_plans: 16
 ---
 
 # Project State
@@ -100,6 +100,7 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 - Phase 4 first lag repair is user-tested and much improved. Decide whether to checkpoint/commit it as-is or pursue bounded timed playback for the remaining occasional real-hardware jumps.
+- Human visual check: confirm Phase 4 side quest `04-07` shows PMG missile swatches beside each HUD name, keeps text stable with DLI off, and removes the zombie semicolon artifact.
 - Phase 6 minimal validation: scripted emulator sessions including join/leave handoff.
 - Update `.planning/REQUIREMENTS.md` if the Phase 3.1 invariant and the 5.1 link-integrity invariant should become tracked requirement IDs.
 
