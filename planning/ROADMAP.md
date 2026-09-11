@@ -14,11 +14,12 @@ This roadmap follows the dependency chain identified in research: normalize tran
 - [x] **Phase 2: Reconciliation Contract** - Add acknowledged-input reconciliation so Atari movement can stay smooth and bounded. Final real-Atari verification approved the cadence/fire-direction replay fix and closed RECN-01 through RECN-04.
 - [x] **Phase 3: Combat and World Authority** - Freeze action ordering and authoritative world outcomes so firing behaves identically across clients. Human mixed-session checkpoint approved 2026-09-03.
 - [x] **Phase 3.1: Netstream Handler Refresh and POKEY Channel Isolation (INSERTED)** - Update to the latest netstream handler (built from source) and remap all sound to POKEY channels 1+2 so the game can never corrupt the handler's channel 3+4 baud timer. See `ref/net-fix-plan.md` for full analysis. Completed 2026-09-02; all four criteria verified (see STATE.md).
-- [ ] **Phase 4: Render-State Separation** - Reopened 2026-09-10 after persistent remote lag on hardware and emulation. The first timing/recovery repair pass is user-tested and greatly improved play: two-computer emulation is almost flawless, real Atari XL + hardware FujiNet still occasionally jumps one or two cells. Bounded timed playback remains the next step only if that residual hardware jumpiness needs more work. HUD name color matching is implemented as a small presentation side quest. See [lag review and repair sequence](phases/04-render-state-separation/04-LAG-REVIEW.md).
+- [x] **Phase 4: Render-State Separation** - Closed as good enough for now after user testing on 2026-09-11. The timing/recovery repair pass is greatly improved: two-computer emulation is almost flawless, real Atari XL + hardware FujiNet is acceptable with only occasional one-to-two-cell jumps, and the HUD marker side quest is user-verified. If the game moves to a cloud-hosted server and the added WAN latency makes remote movement feel worse, revisit bounded timed remote-sample playback from `04-03`. See [lag review and repair sequence](phases/04-render-state-separation/04-LAG-REVIEW.md).
 - [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff received 2026-09-04.
 - [x] **Phase 5.1: Link Integrity and Frame Resynchronisation (INSERTED)** - Make the Atari receive path robust to a lossy SIO byte stream: per-packet checksum, COBS framing with a zero delimiter so the parser always realigns, actor-state validation, and the boot/render faults these exposed. Unplanned; driven by real-hardware symptoms that emulation could not reproduce. Completed and human-confirmed 2026-09-04. See STATE.md "Phase 5.1".
 - [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow. A minimal validation pass (scripted emulator sessions including join/leave handoff) runs after Phase 5; full hardening runs after Phase 4.
-- [ ] **Phase 7: Realtime Transport Reliability (FujiRealm-informed, EXPERIMENTAL, branch `realm-net`)** - Not part of the v1 execution order below; lives on its own branch off `a8-net-fix` so it doesn't disturb v1's near-complete track. TCP migration, client conversion, CRC-16 framing, and the acknowledged reliable-event stream are complete. The remaining 07-05 client-authoritative movement plan is documented but not recommended. The work is informed by a close read of FujiRealm's own networking (`~/fujicode/fujirealm-game-demo`). Explicitly does **not** adopt FujiRealm's client-authoritative movement model by default — see `planning/phases/07-realtime-transport-reliability/07-RESEARCH.md` for why.
+- [x] **Phase 7: Realtime Transport Reliability (FujiRealm-informed)** - TCP migration, client conversion, CRC-16 framing, and the acknowledged reliable-event stream are merged into `a8-net-fix`. The remaining 07-05 client-authoritative movement proposal is documented and intentionally deferred because it is not recommended.
+- [ ] **Phase 8: Lobby and Round Polish** - Add isolated multi-room TCP hosting, authoritative rounds, nonblocking Atari game-over presentation, clean leave/grace behavior, build-time endpoints, Lobby AppKeys/publication/browser integration, and repeatable room switching. Begins only after Phase 6 closes. See `phases/08-lobby-rounds-polish/08-RESEARCH.md` and plans 08-01 through 08-11.
 
 ## Phase Details
 
@@ -95,7 +96,7 @@ Plans:
 Plans:
 - [x] `04-01` — Repair implemented and user-tested: NTSC sends now match the server's 10 Hz tick, animation has enough phase capacity, and server tick deadlines no longer drift from late loop iterations.
 - [x] `04-02` — Introduce render-only actor position distinct from `LOCX/LOCY`; collision, shot origin and slot state stay on simulation truth while draw/erase uses `RNDX/RNDY`.
-- [ ] `04-03` — Partial repair accepted as a major improvement: fallback direction and recovery-distance bugs are fixed and instrumented. Bounded timed playback remains unimplemented and is reserved for the remaining occasional real-hardware jumps.
+- [x] `04-03` — Accepted as good enough for the current local-server target: fallback direction and recovery-distance bugs are fixed and instrumented. Bounded timed remote-sample playback remains unimplemented by design and is reserved as the first revisit if future cloud-hosted server latency makes remote motion feel worse.
 - [x] `04-04` — Clear all player-missile memory before PM DMA is enabled, and stop enabling missile DMA the game never uses. Hardware artefact check remains useful during the phase acceptance pass.
 - [x] `04-05` — Complete the embedded font for characters text can use, including player-name and prompt/status text coverage.
 - [x] `04-06` — RETRACTED 2026-09-09, not executed. Proposed a bounded catch-up for `REMOTE_FOLLOW` on the premise that a diverged remote actor gets permanently stuck; that premise was traced to two bugs in the measurement rig itself (documented in `04-RESEARCH.md` and `tests/rig/README.md`), and a corrected instrument shows reconciliation converges to zero gap in 100% of samples once a remote actor is still, at every loss rate tested including 50%. No catch-up mechanism is needed. Kept in the plan list for the record.
@@ -158,14 +159,14 @@ Plans:
   1. A live session with 1 Atari client, 1 Linux client, and 2 AI zombies runs without movement-desync bugs that block normal play.
   2. Deterministic validation covers move-then-fire, turn-then-fire, zombie replacement, and human disconnect replacement cases and can be rerun after changes.
   3. The project can be validated through the current FujiNet-PC or FujiNet emulator workflow without needing Linux-only protocol shortcuts.
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] `06-01` — Freeze and validate the merged TCP baseline with repeatable mixed-session, emulator/FujiNet-PC, delay/loss, and user hardware evidence.
 
-### Phase 7: Realtime Transport Reliability (FujiRealm-informed) — EXPERIMENTAL, branch `realm-net`
+### Phase 7: Realtime Transport Reliability (FujiRealm-informed)
 
-**Not part of the v1 phase sequence above.** Lives on branch `realm-net`
-(diverged from `a8-net-fix`) precisely so it can be explored without touching
-v1's near-complete track on `a8-net-fix`/`master`. Requirements are tracked
-under v2 (`RTP-*`), not v1.
+The completed TCP/CRC/reliable-event work was developed on `realm-net` and is
+now merged into `a8-net-fix`. Requirements remain tracked under v2 (`RTP-*`).
 
 **Goal**: Adopt the parts of FujiRealm's networking that genuinely serve
 maze-war's own stated goal (smooth, server-authoritative, reliable movement)
@@ -195,6 +196,36 @@ Plans:
 - [x] `07-04` — Replace `BRICK_DELTA`/`RESPAWN`/`NAME` echo hacks with one ordered, cumulatively-acknowledged reliable-event stream. See `07-04-SUMMARY.md`.
 - [ ] `07-05` — NOT RECOMMENDED, documented only: full client-authoritative local movement. Do not execute without an explicit separate go-ahead.
 
+### Phase 8: Lobby and Round Polish
+
+**Goal**: Turn the stable four-player network game into a round-based, multi-room FujiNet Lobby title without weakening server authority or the verified Atari TCP path.
+**Depends on**: Phase 6; Phase 7 plans 07-01 through 07-04
+**Reference**: `ref/mazewar_lobby_rounds_implementation_plan.md`
+**Research**: `phases/08-lobby-rounds-polish/08-RESEARCH.md`
+**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; next overall is 06-01 on `gpt-5.6-terra` with medium reasoning.
+**Round boundary contract**: [08-PROTOCOL.md](phases/08-lobby-rounds-polish/08-PROTOCOL.md)
+**Success Criteria**:
+  1. One server process runs isolated four-seat rooms on distinct TCP ports.
+  2. The server authoritatively ends and resets rounds at a configurable kill limit, and every client agrees on the frozen result.
+  3. Atari game-over presentation remains nonblocking with VBI, networking, and DLI-disabled rendering intact.
+  4. Voluntary leave, unexpected loss, no-human grace, and Zombie replacement follow distinct tested contracts.
+  5. Atari can obtain Lobby username/room AppKeys, browse validated QA rooms, tear down NetStream, and repeatedly join the same or another room.
+  6. Lobby publication cannot stall simulation and remains opt-in until explicit production promotion.
+  7. Obsolete unreachable title/game-over code is removed and its measured space is reused under enforced memory-layout limits.
+**Plans**: 11 plans
+Plans:
+- [ ] `08-01` — Remove unreachable title/game-over implementation and establish measured Atari memory headroom.
+- [ ] `08-02` — Encapsulate behavior in one Room, then add isolated multi-room TCP listeners.
+- [ ] `08-03` — Add authoritative MATCH_END/ROUND_START protocol and complete round reset.
+- [ ] `08-04` — Add the nonblocking Atari/SDL round-end presentation and results.
+- [ ] `08-05` — Add voluntary leave acknowledgement, orthogonal no-human grace, and shared session teardown/reset.
+- [ ] `08-06` — Generate build configuration and replace the old title with title/direct-connect UI.
+- [ ] `08-07` — Add Lobby AppKeys, strict TCP URL validation, and startup routing.
+- [ ] `08-08` — Publish rooms asynchronously to QA Lobby with opt-in lifecycle management.
+- [ ] `08-09` — Add the bounded-memory Atari QA Lobby room browser.
+- [ ] `08-10` — Integrate shared reset and validate repeated switching/external QA launch.
+- [ ] `08-11` — Promote tested artifacts and registrations to production with explicit approval.
+
 ## Traceability
 
 | Requirement | Phase |
@@ -220,6 +251,20 @@ Plans:
 | VALD-01 | Phase 6 |
 | VALD-02 | Phase 6 |
 | VALD-03 | Phase 6 |
+| MEM-01 | Phase 8 |
+| ROOM-01 | Phase 8 |
+| ROOM-02 | Phase 8 |
+| ROND-01 | Phase 8 |
+| ROND-02 | Phase 8 |
+| ROND-03 | Phase 8 |
+| GRCE-01 | Phase 8 |
+| CONF-01 | Phase 8 |
+| APKY-01 | Phase 8 |
+| APKY-02 | Phase 8 |
+| LOBY-01 | Phase 8 |
+| LOBY-02 | Phase 8 |
+| SWCH-01 | Phase 8 |
+| PROD-01 | Phase 8 |
 
 **Coverage:**
 - v1 requirements: 21 total
@@ -229,17 +274,16 @@ Plans:
 ## Progress
 
 **Execution Order:**
-1 -> 2 -> 3 (code) -> 3.1 (INSERTED) -> 5 -> 3 human checkpoint -> 6 (minimal validation) -> 4 -> 6 (full hardening)
+1 -> 2 -> 3 -> 3.1 -> 5 -> 5.1 -> 7.1-7.4 -> 4 -> 6 -> 8
 
-Phases 1, 2, 3, 3.1 and 5 are done. Next: Phase 4 lag repair and user acceptance, then Phase 6 validation.
+Phases 1, 2, 3, 3.1, 4, 5, 5.1, and the executable Phase 7 scope are done. Next: Phase 6 validation, then Phase 8 Lobby and round polish.
 
 Phase 5 was brought forward ahead of the Phase 3 human checkpoint: both need the same
 mixed session to verify, and running the checkpoint before the slot work would have
 meant running it twice.
 
-"Reliably playable" is reached after the minimal Phase 6 validation pass; Phase 4 and full
-Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) make it
-"Lobby-releasable".
+"Reliably playable" is reached after the minimal Phase 6 validation pass; full
+Phase 6 hardening freezes the baseline; Phase 8 makes it Lobby-releasable.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -248,6 +292,7 @@ Phase 6 hardening (plus FujiNet Lobby integration, out of roadmap scope for v1) 
 | 3. Combat and World Authority | 3/3 | Complete | 2026-09-03 |
 | 3.1 Netstream Handler Refresh and POKEY Channel Isolation | 2/2 | Complete | 2026-09-02 |
 | 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
-| 4. Render-State Separation | 5/6; 04-03 open; 04-06 retracted | First lag repair pass user-tested 2026-09-10: emulation almost flawless, real Atari XL + hardware FujiNet greatly improved with occasional one-to-two-cell jumps; HUD name-color side quest implemented | - |
-| 6. Mixed-Session Validation and Hardening | 0/TBD | Not started | - |
-| 7. Realtime Transport Reliability (EXPERIMENTAL, branch `realm-net`) | 4/5 | 07-01 TCP, 07-02 clients/hardware acceptance, 07-03 CRC, and 07-04 reliable events complete; 07-05 deferred | - |
+| 4. Render-State Separation | 5/5 effective; 04-06 retracted | Closed as good enough for now after 2026-09-11 user testing; revisit bounded timed remote-sample playback if a future cloud-hosted server makes WAN latency visible | 2026-09-11 |
+| 6. Mixed-Session Validation and Hardening | 0/1 | Next; baseline gate for Phase 8 | - |
+| 7. Realtime Transport Reliability | 4/4 executable | Complete as scoped and merged; 07-05 remains a deferred, not-recommended design note | 2026-09-10 |
+| 8. Lobby and Round Polish | 0/11 | Planned; blocked on Phase 6 | - |

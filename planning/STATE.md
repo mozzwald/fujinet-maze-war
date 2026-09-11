@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: 2026-09-10 - Phase 4 first lag repair pass user-tested: emulation/emulation almost flawless, real Atari XL + hardware FujiNet greatly improved with occasional one-to-two-cell jumps. See 04-LAG-REVIEW.md.
-last_updated: "2026-09-10T00:00:00.000Z"
+stopped_at: 2026-09-11 - 06-01 forced build, two full host-network smoke-suite passes, and TCP cadence probes passed. Managed Atari800/FujiNet-PC BIN loading left NetStream inactive because no bootable ATR/container exists; awaiting the required real Atari/FujiNet mixed-session checkpoint. After acceptance, use gpt-5.6-terra with high reasoning for 08-01.
+last_updated: "2026-09-11T00:00:00.000Z"
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 6
-  total_plans: 16
+  total_plans: 28
   completed_plans: 16
 ---
 
@@ -19,11 +19,11 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** Phase 4 remote movement checkpoint after successful first lag repair testing. See [lag review](phases/04-render-state-separation/04-LAG-REVIEW.md). Phase 7 remains committed; 07-05 remains deferred.
+**Current focus:** Await the Phase 6 real Atari/FujiNet mixed-session checkpoint after passing the automated TCP baseline. Phase 8 Lobby and round polish begins only after acceptance. Bounded timed remote-sample playback remains the first revisit if future cloud-hosted WAN testing makes remote movement worse.
 
-## Current branch: realm-net (2026-09-10)
+## Current branch: a8-net-fix (2026-09-11)
 
-Phase 4 is reopened: the user saw substantial remote lag and jumpiness, including emulator-to-emulator sessions. The first repair pass fixes the confirmed follower direction/distance defects, raises render/send capacity for 10 Hz NTSC play, restores pending replay reachability, and makes server tick deadlines fixed with bounded overrun recovery. User testing on 2026-09-10 found two-computer emulation almost flawless and real Atari XL with hardware FujiNet greatly improved, with occasional one-to-two-cell remote jumps remaining. Bounded timed playback remains the next step only if the residual hardware jumps need more work before Phase 6. 07-01, 07-02, 07-03, and 07-04 are complete. TCP runs with `$05`, REGISTER clear,
+Phase 4 is closed as good enough for now: the first repair pass fixed the confirmed follower direction/distance defects, raised render/send capacity for 10 Hz NTSC play, restored pending replay reachability, and made server tick deadlines fixed with bounded overrun recovery. User testing found two-computer emulation almost flawless and real Atari XL with hardware FujiNet acceptable, with only occasional one-to-two-cell remote jumps. Bounded timed remote-sample playback was not implemented and is now explicitly reserved as the first revisit if a future cloud-hosted server adds enough WAN latency to make remote motion feel worse. 07-01, 07-02, 07-03, and 07-04 are complete and merged into `a8-net-fix`. TCP runs with `$05`, REGISTER clear,
 57600 baud, and the unchanged handler. The user confirmed the Atari/FujiNet
 hardware path works; MCP-managed Atari/FujiNet-PC also validated the CRC wire
 format with zero network or CRC errors. Reliable NAME, BRICK_DELTA, and RESPAWN
@@ -39,7 +39,28 @@ Phase: 03.1 (handler-refresh-pokey-isolation) — COMPLETE 2026-09-02. All four 
 Phase: 05 (slot-lifecycle-and-zombie-handoff) — COMPLETE. Code 2026-09-02 (LIFE-01..04 addressed), smoke suite green including `slot_lifecycle_smoke.sh`. Human confirmation of live join/leave handoff received 2026-09-04; human testing continues alongside each change from here.
 Phase: 05.1 (link-integrity-and-frame-resync) — COMPLETE 2026-09-04. Unplanned, driven by real-hardware symptoms. See "Phase 5.1" below.
 
-Execution order going forward: decide whether to checkpoint/commit this Phase 4 repair or pursue bounded timed playback for the remaining real-hardware jumps -> Phase 6 minimal -> Phase 6 full. Phases 3, 3.1, 5 and 5.1 are closed and human-approved.
+Execution order going forward: Phase 6 (`06-01`) -> Phase 8 plans 08-01 through 08-11. Phases 3, 3.1, 4, 5, 5.1, and Phase 7's executable scope are closed and merged.
+
+## Phase 8 planning note (2026-09-11)
+
+Review update: `phases/08-lobby-rounds-polish/08-MODELS.md` lists model/effort
+recommendations for every step and requires the next recommendation in each
+closing summary, followed by a pause for the user to switch. Next is **06-01:
+gpt-5.6-terra, medium reasoning**; after its hardware acceptance use **08-01:
+gpt-5.6-terra, high reasoning**. The round synchronization contract now lives
+in `08-PROTOCOL.md`; shared teardown moves earlier to 08-05. Planning review
+does not mark implementation or hardware checkpoints complete.
+
+The source-grounded plan is in `planning/phases/08-lobby-rounds-polish/`.
+It corrects the reference proposal to use the current TCP NetStream path, makes
+Lobby publishing asynchronous, defines frozen round/participant state, and
+handles no-human grace orthogonally to round state. Atari memory reclamation is
+part of 08-01: the unreachable blocking `GAMEOVR` block at `$467C..$4776` is
+removed, and the unreachable old title data at `$8060..$81EF` is replaced by
+the new reachable title/menu/results assets. Existing `HOSTDISP`, `GAME`,
+screen buffers, shared vaporization primitives, and DLI-disabled rendering are
+preserved. Large Lobby buffers are planned as lifetime-checked aliases of
+inactive NetStream storage rather than unconditional new allocations.
 
 ## Performance Metrics
 
@@ -99,9 +120,8 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Phase 4 first lag repair is user-tested and much improved. Decide whether to checkpoint/commit it as-is or pursue bounded timed playback for the remaining occasional real-hardware jumps.
-- Human visual check: confirm Phase 4 side quest `04-07` shows PMG missile swatches beside each HUD name, keeps text stable with DLI off, and removes the zombie semicolon artifact.
 - Phase 6 minimal validation: scripted emulator sessions including join/leave handoff.
+- Future cloud-server revisit: if WAN latency makes remote movement visibly laggy or jumpy, reopen Phase 4's bounded timed remote-sample playback idea from `04-03`.
 - Update `.planning/REQUIREMENTS.md` if the Phase 3.1 invariant and the 5.1 link-integrity invariant should become tracked requirement IDs.
 
 ### Phase 3.1 implementation notes (2026-07-19)
