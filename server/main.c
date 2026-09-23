@@ -1971,7 +1971,9 @@ static void start_shot(struct room *room, int shooter, uint8_t joy, int debug) {
   }
 }
 
-static void step_shots(struct room *room, int debug) {
+static void step_shots(struct room *room, int debug,
+                       const uint8_t *pre_move_x,
+                       const uint8_t *pre_move_y) {
   struct player_state *players = room->players;
   struct shot_state *shots = room->shots;
   uint8_t *bricks = room->brick_bits;
@@ -1992,6 +1994,53 @@ static void step_shots(struct room *room, int debug) {
                  sizeof(pkt));
       broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
       continue;
+    }
+    /* Movement happens before projectiles advance. Without this swept check a
+       player moving onto the current projectile cell while it advances away
+       can exchange cells with it (A->B while the shot moves B->A) untouched.
+       Current-cell collision retains the usual destination test below. */
+    for (int p = 0; p < MAX_PLAYERS; p++) {
+      if (p == i || !slot_on_board(room, p)) {
+        continue;
+      }
+      int hit_destination =
+          players[p].x == (uint8_t)nx && players[p].y == (uint8_t)ny;
+      int hit_swept =
+          players[p].x == shots[i].x && players[p].y == shots[i].y &&
+          (pre_move_x[p] != players[p].x || pre_move_y[p] != players[p].y);
+      if (!hit_destination && !hit_swept) {
+        continue;
+      }
+      int round_ended = award_score(room, i, now, debug);
+      if (round_ended) {
+        return;
+      }
+      players[p].respawn_at_ms = now + 2000;
+      uint8_t pkt[RESPAWN_LEN];
+      build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, room->round_id, pkt,
+                    sizeof(pkt));
+      broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
+      broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
+      queue_respawn_echo(room, pkt);
+      if (debug) {
+        printf("TX respawn pending pid=%u\n", (unsigned)p);
+        {
+          char detail[96];
+          snprintf(detail, sizeof(detail), "victim=%d x=%u y=%u%s", p,
+                   (unsigned)(hit_swept ? shots[i].x : nx),
+                   (unsigned)(hit_swept ? shots[i].y : ny),
+                   hit_swept ? " swept" : "");
+          debug_combat_event(debug, hit_swept ? "swept-hit" : "moving-hit",
+                             i, detail);
+        }
+      }
+      shots[i].active = 0;
+      shots[i].clear_burst = 3;
+      uint8_t spkt[SHOT_LEN];
+      build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, spkt,
+                 sizeof(spkt));
+      broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
+      goto next_shot;
     }
     if (is_brick(bricks, nx, ny)) {
       if (!is_outer_wall_cell(nx, ny)) {
@@ -2018,42 +2067,6 @@ static void step_shots(struct room *room, int debug) {
                  sizeof(spkt));
       broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
       continue;
-    }
-    for (int p = 0; p < MAX_PLAYERS; p++) {
-      if (p == i) {
-        continue;
-      }
-      if (!slot_on_board(room, p)) {
-        continue;
-      }
-      if (players[p].x == (uint8_t)nx && players[p].y == (uint8_t)ny) {
-        int round_ended = award_score(room, i, now, debug);
-        if (round_ended) {
-          return;
-        }
-        players[p].respawn_at_ms = now + 2000;
-        uint8_t pkt[RESPAWN_LEN];
-        build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, room->round_id, pkt,
-                      sizeof(pkt));
-        broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
-        broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
-        queue_respawn_echo(room, pkt);
-        if (debug) {
-          printf("TX respawn pending pid=%u\n", (unsigned)p);
-          {
-            char detail[96];
-            snprintf(detail, sizeof(detail), "victim=%d x=%d y=%d", p, nx, ny);
-            debug_combat_event(debug, "moving-hit", i, detail);
-          }
-        }
-        shots[i].active = 0;
-        shots[i].clear_burst = 3;
-        uint8_t spkt[SHOT_LEN];
-        build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, spkt,
-                   sizeof(spkt));
-        broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
-        goto next_shot;
-      }
     }
     shots[i].x = (uint8_t)nx;
     shots[i].y = (uint8_t)ny;
@@ -2196,6 +2209,14 @@ static void step_players(struct room *room, int debug) {
         }
       }
     }
+  }
+  /* Respawns are authoritative placement, not ordinary movement. Snapshot the
+     board after they settle, immediately before this tick's move phase. */
+  uint8_t pre_move_x[MAX_PLAYERS];
+  uint8_t pre_move_y[MAX_PLAYERS];
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    pre_move_x[i] = players[i].x;
+    pre_move_y[i] = players[i].y;
   }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     /* Only for a slot with no client left in it. While a client is connected
@@ -2382,7 +2403,7 @@ static void step_players(struct room *room, int debug) {
       }
     }
   }
-  step_shots(room, debug);
+  step_shots(room, debug, pre_move_x, pre_move_y);
 }
 
 static void build_brick_full(uint8_t seq, const uint8_t *bits, uint8_t round_id,
