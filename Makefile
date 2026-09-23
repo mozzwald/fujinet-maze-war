@@ -1,7 +1,7 @@
 MADS ?= mads
 CC ?= gcc
 PYTHON ?= python3
-CFLAGS ?= -O2 -Wall -Wextra
+CFLAGS ?= -O2 -Wall -Wextra -pthread
 NCURSES_LIBS ?= -lncurses
 SDL_CONFIG ?= sdl-config
 SDL_CFLAGS ?= $(shell $(SDL_CONFIG) --cflags 2>/dev/null)
@@ -29,14 +29,15 @@ ROOM_PORT_BASE ?= 9000
 ROOM_COUNT ?= 1
 DEFAULT_PORT ?= $(ROOM_PORT_BASE)
 LOBBY_BASE ?= https://lobby.fujinet.online
-MAZEWAR_APPKEY ?= 0x0000
+MAZEWAR_CREATOR_ID ?= 0x3022
+MAZEWAR_APP_ID ?= 0x03
 KILL_LIMIT ?= 5
 BUILD_FLAVOR ?= LAN
 
 # Export values through Make's environment rather than interpolating command
 # line input into a shell recipe. The generator validates every value before
 # it emits MADS source; shell expansion never reparses an environment value.
-export HOST ROOM_PORT_BASE ROOM_COUNT DEFAULT_PORT LOBBY_BASE MAZEWAR_APPKEY KILL_LIMIT BUILD_FLAVOR
+export HOST ROOM_PORT_BASE ROOM_COUNT DEFAULT_PORT LOBBY_BASE MAZEWAR_CREATOR_ID MAZEWAR_APP_ID KILL_LIMIT BUILD_FLAVOR
 
 .PHONY: all clean test FORCE
 
@@ -52,7 +53,7 @@ $(HANDLER): $(NETSTREAM_DIR)/handler/mads/netstream.s
 endif
 
 $(ATARI_CONFIG) $(ATARI_CONFIG_DATA) &: FORCE scripts/generate_atari_config.py | build
-	$(PYTHON) scripts/generate_atari_config.py --output $(ATARI_CONFIG) --data-output $(ATARI_CONFIG_DATA) --host "$$HOST" --room-port-base "$$ROOM_PORT_BASE" --room-count "$$ROOM_COUNT" --default-port "$$DEFAULT_PORT" --lobby-base "$$LOBBY_BASE" --mazewar-appkey "$$MAZEWAR_APPKEY" --kill-limit "$$KILL_LIMIT" --build-flavor "$$BUILD_FLAVOR"
+	$(PYTHON) scripts/generate_atari_config.py --output $(ATARI_CONFIG) --data-output $(ATARI_CONFIG_DATA) --host "$$HOST" --room-port-base "$$ROOM_PORT_BASE" --room-count "$$ROOM_COUNT" --default-port "$$DEFAULT_PORT" --lobby-base "$$LOBBY_BASE" --mazewar-creator-id "$$MAZEWAR_CREATOR_ID" --mazewar-app-id "$$MAZEWAR_APP_ID" --kill-limit "$$KILL_LIMIT" --build-flavor "$$BUILD_FLAVOR"
 
 $(OUT): $(SRC) $(ATARI_CONFIG) $(ATARI_CONFIG_DATA) | build
 	$(MADS) $(SRC) -t:build/maze-war.lab -o:$@
@@ -60,8 +61,8 @@ $(OUT): $(SRC) $(ATARI_CONFIG) $(ATARI_CONFIG_DATA) | build
 $(NET): $(HANDLER) $(OUT) | build
 	cat $(HANDLER) $(OUT) > $@
 
-$(SERVER): net/tcp_stream.h server/main.c server/transport_normalize.c server/transport_normalize.h server/transport_stats.c server/transport_stats.h | build
-	$(CC) $(CFLAGS) -o $@ server/main.c server/transport_normalize.c server/transport_stats.c
+$(SERVER): net/tcp_stream.h server/main.c server/lobby_publisher.c server/lobby_publisher.h server/transport_normalize.c server/transport_normalize.h server/transport_stats.c server/transport_stats.h | build
+	$(CC) $(CFLAGS) -o $@ server/main.c server/lobby_publisher.c server/transport_normalize.c server/transport_stats.c
 
 $(CLIENT): clients/linux/main.c net/tcp_stream.h | build
 	$(CC) $(CFLAGS) -o $@ $< $(NCURSES_LIBS)
@@ -82,6 +83,7 @@ test: all
 	    fail=1; \
 	  fi; \
 	done; \
+	$(MAKE) --no-print-directory all >/dev/null || exit $$?; \
 	if [ $$fail -ne 0 ]; then echo 'smoke suite FAILED' >&2; exit 1; fi; \
 	echo 'smoke suite passed'
 

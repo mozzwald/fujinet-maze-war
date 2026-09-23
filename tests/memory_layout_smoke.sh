@@ -101,16 +101,25 @@ for name, size in (("GAMESCR", 760), ("BOTSCRN", 11 + 69)):
 # 5. The fixed loaded-core, zero-page and NetStream-state budgets must retain
 # their existing safety margins. The handler uses $EE, while state may grow
 # only up to $7F00. Round presentation plus 08-05 session teardown occupy the
-# deliberately isolated high-code reserve through $8BFF. Phase 08-06 adds the
-# reachable title/direct-connect flow and its immutable generated defaults.
+# deliberately isolated high-code reserve. Phase 08-06 adds the reachable
+# title/direct-connect flow and immutable defaults; 08-07 extends the guarded
+# segment below $A000 for direct-SIO AppKey, Lobby browser, and URL validation.
 if sym["CORE_DATA_END"] > 0x6F00:
     fail(f"loaded core ends at ${sym['CORE_DATA_END']:04X}, leaving less than $100 before display buffers")
 if sym["ZP_END"] > 0xE9:
     fail(f"zero page ends at ${sym['ZP_END']:04X}, leaving less than five bytes before handler $EE")
 if sym["NET_STATE_END"] > 0x7F00:
     fail(f"NetStream state ends at ${sym['NET_STATE_END']:04X}, leaving less than $100 before $8000")
-if sym["NET_HIGH_CODE_END"] > 0x8C00:
-    fail(f"high code ends at ${sym['NET_HIGH_CODE_END']:04X}, past its guarded $8400-$8BFF reserve")
+if sym["NET_HIGH_CODE_END"] > 0xA000:
+    fail(f"high code ends at ${sym['NET_HIGH_CODE_END']:04X}, at or above the BASIC ROM window")
+
+# The default AppKey response is a two-byte count plus up to 64 payload bytes;
+# one more byte is needed for a local terminator. It aliases packet staging only
+# while NetStream is stopped instead of becoming a permanent 67-byte buffer.
+if sym["APPKEY_BUF"] != sym["NET_BRICK_BUF"]:
+    fail("AppKey scratch no longer aliases inactive brick staging")
+if sym["APPKEY_BUF"] + 67 > sym["NET_STATE_END"]:
+    fail("AppKey response and terminator exceed contiguous runtime state")
 
 # 6. Segments must not overlap each other either.
 for j in range(len(segs)):

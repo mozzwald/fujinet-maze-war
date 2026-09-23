@@ -48,7 +48,7 @@ state_clear = block(asm, "NET_STATE_CLEAR", "; --- NET snapshot apply")
 assert "NET_INIT_ARGS" in state_clear
 assert "HOSTBUF" not in state_clear and "PORTBUF" not in state_clear
 
-endc = block(asm, "NET_ENDC", "; OPTION is the temporary")
+endc = block(asm, "NET_ENDC", "; OPTION, ESC, and Q leave")
 assert "JSR\tNS_END" in endc and "JSR\tNET_FW_CLOSE" in endc
 fw_close = block(asm, "NET_FW_CLOSE", "NET_HIGH_CODE_END")
 for token in ("#$70", "#$3F", "STA\tDDEVIC", "STA\tDCOMND", "JSR\tSIOV"):
@@ -57,6 +57,9 @@ for token in ("#$70", "#$3F", "STA\tDDEVIC", "STA\tDCOMND", "JSR\tSIOV"):
 for label, end in (("RESTART", "STIMER"), ("NET_HOSTRET", ";SILENCE WATCHDOG")):
     teardown = block(asm, label, end)
     assert teardown.index("JSR\tVBIOFF") < teardown.index("JSR\tNET_ENDC")
+
+host_return = block(asm, "NET_HOSTRET", "NHR_PMCLR")
+assert host_return.index("JSR\tNET_ENDC") < host_return.index("JSR\tAPPKEY_ROOM_CLEAR")
 
 for source in (linux, sdl):
     assert "PKT_LEAVE_ROOM = 0x56" in source

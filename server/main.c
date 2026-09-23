@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -14,6 +15,7 @@
 #include <unistd.h>
 
 #include "../net/tcp_stream.h"
+#include "lobby_publisher.h"
 #include "transport_stats.h"
 #include "transport_normalize.h"
 
@@ -2380,6 +2382,12 @@ static void usage(const char *argv0) {
           "          [--tick-hz N] [--brick PATH] [--lag-ms N]\n"
           "          [--kill-limit N] [--intermission-ms N]\n"
           "          [--no-human-grace-ms N] [--debug]\n"
+          "          [--lobby-enabled --lobby-base URL --lobby-creator-id N]\n"
+          "          [--lobby-app-id N]\n"
+          "          [--lobby-client-url URL --lobby-public-host HOST]\n"
+          "          [--lobby-game NAME --lobby-region CC]\n"
+          "          [--lobby-room-names NAME[,NAME...] --lobby-refresh-ms N]\n"
+          "          [--lobby-timeout-ms N --lobby-shutdown-ms N]\n"
           "  --port PORT       one-room compatibility form (default 9000).\n"
           "  --port-base PORT  first listener; later rooms use consecutive ports.\n"
           "  --room-count N    number of isolated rooms (1-%d, default 1).\n"
@@ -2404,6 +2412,18 @@ static int parse_int_arg(const char *text, int *out) {
   return 0;
 }
 
+static int parse_hex_or_decimal_arg(const char *text, int *out) {
+  char *end = NULL;
+  errno = 0;
+  long value = strtol(text, &end, 0);
+  if (errno != 0 || end == text || *end != '\0' || value < 0 ||
+      value > INT_MAX) {
+    return -1;
+  }
+  *out = (int)value;
+  return 0;
+}
+
 static int parse_room_zombies(const char *text, int room_count, int *out) {
   const char *p = text;
   for (int room_index = 0; room_index < room_count; room_index++) {
@@ -2421,6 +2441,55 @@ static int parse_room_zombies(const char *text, int room_count, int *out) {
       return -1;
     }
     p = end + 1;
+  }
+  return -1;
+}
+
+static int copy_printable(char *out, size_t out_len, const char *text,
+                          size_t min_len) {
+  size_t len = strlen(text);
+  if (len < min_len || len >= out_len) return -1;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)text[i];
+    if (c < 0x20 || c > 0x7e) return -1;
+  }
+  memcpy(out, text, len + 1);
+  return 0;
+}
+
+static int valid_lobby_base(const char *text) {
+  return strncmp(text, "https://", 8) == 0 || strncmp(text, "http://", 7) == 0;
+}
+
+static int valid_lobby_host(const char *text) {
+  size_t len = strlen(text);
+  if (len == 0 || len > LOBBY_HOST_MAX) return 0;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)text[i];
+    if (!(c == '.' || c == '-' || (c >= '0' && c <= '9') ||
+          (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int parse_lobby_room_names(const char *text, int room_count,
+                                  char (*out)[LOBBY_ROOM_NAME_MAX + 1]) {
+  const char *at = text;
+  for (int i = 0; i < room_count; i++) {
+    const char *comma = strchr(at, ',');
+    size_t len = comma ? (size_t)(comma - at) : strlen(at);
+    if (len < 2 || len > LOBBY_ROOM_NAME_MAX) return -1;
+    for (size_t p = 0; p < len; p++) {
+      unsigned char c = (unsigned char)at[p];
+      if (c < 0x20 || c > 0x7e) return -1;
+    }
+    memcpy(out[i], at, len);
+    out[i][len] = '\0';
+    if (i + 1 == room_count) return comma == NULL ? 0 : -1;
+    if (comma == NULL) return -1;
+    at = comma + 1;
   }
   return -1;
 }
@@ -2660,6 +2729,19 @@ int main(int argc, char **argv) {
   const char *brick_path = "server/brick_layout.txt";
   const char *bind_addr = NULL;
   const char *room_zombies_arg = NULL;
+  const char *lobby_base_arg = NULL;
+  const char *lobby_client_url_arg = NULL;
+  const char *lobby_public_host_arg = NULL;
+  const char *lobby_game_arg = "Maze War";
+  const char *lobby_region_arg = "us";
+  const char *lobby_room_names_arg = NULL;
+  int lobby_enabled = 0;
+  int lobby_creator_id = 0x3022;
+  int lobby_app_id = 0x03;
+  int lobby_refresh_ms = 240000;
+  int lobby_timeout_ms = 1500;
+  int lobby_shutdown_ms = 2000;
+  int lobby_options_seen = 0;
   int saw_port = 0;
   int saw_port_base = 0;
   int saw_zombies = 0;
@@ -2697,6 +2779,42 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--no-human-grace-ms") == 0 &&
                i + 1 < argc) {
       if (parse_int_arg(argv[++i], &no_human_grace_ms) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--lobby-enabled") == 0) {
+      lobby_enabled = 1;
+    } else if (strcmp(argv[i], "--lobby-base") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      lobby_base_arg = argv[++i];
+    } else if ((strcmp(argv[i], "--lobby-app-id") == 0 ||
+                strcmp(argv[i], "--lobby-appkey") == 0) && i + 1 < argc) {
+      lobby_options_seen = 1;
+      if (parse_hex_or_decimal_arg(argv[++i], &lobby_app_id) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--lobby-creator-id") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      if (parse_hex_or_decimal_arg(argv[++i], &lobby_creator_id) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--lobby-client-url") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      lobby_client_url_arg = argv[++i];
+    } else if (strcmp(argv[i], "--lobby-public-host") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      lobby_public_host_arg = argv[++i];
+    } else if (strcmp(argv[i], "--lobby-game") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      lobby_game_arg = argv[++i];
+    } else if (strcmp(argv[i], "--lobby-region") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      lobby_region_arg = argv[++i];
+    } else if (strcmp(argv[i], "--lobby-room-names") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      lobby_room_names_arg = argv[++i];
+    } else if (strcmp(argv[i], "--lobby-refresh-ms") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      if (parse_int_arg(argv[++i], &lobby_refresh_ms) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--lobby-timeout-ms") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      if (parse_int_arg(argv[++i], &lobby_timeout_ms) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--lobby-shutdown-ms") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      if (parse_int_arg(argv[++i], &lobby_shutdown_ms) != 0) goto bad_args;
     } else if (strcmp(argv[i], "--debug") == 0) {
       debug = 1;
     } else if (strcmp(argv[i], "--help") == 0) {
@@ -2713,9 +2831,55 @@ int main(int argc, char **argv) {
       zombies >= MAX_PLAYERS || kill_limit < 1 || kill_limit > 10 ||
       intermission_ms < 100 || intermission_ms > 600000 ||
       no_human_grace_ms < 100 || no_human_grace_ms > 600000 ||
+      lobby_refresh_ms < 1000 || lobby_refresh_ms > 3600000 ||
+      lobby_timeout_ms < 100 || lobby_timeout_ms > 60000 ||
+      lobby_shutdown_ms < 100 || lobby_shutdown_ms > 60000 ||
       (saw_port && (saw_port_base || room_count != 1)) ||
-      (saw_zombies && room_zombies_arg != NULL)) {
+      (saw_zombies && room_zombies_arg != NULL) ||
+      (!lobby_enabled && lobby_options_seen)) {
     goto bad_args;
+  }
+
+  struct lobby_config lobby_config;
+  memset(&lobby_config, 0, sizeof(lobby_config));
+  if (lobby_enabled) {
+    if (!lobby_base_arg || !lobby_client_url_arg || !lobby_public_host_arg ||
+        lobby_creator_id < 1 || lobby_creator_id > 65535 ||
+        lobby_app_id < 1 || lobby_app_id > 255 ||
+        !valid_lobby_base(lobby_base_arg) ||
+        !valid_lobby_host(lobby_public_host_arg) ||
+        strstr(lobby_client_url_arg, "://") == NULL ||
+        copy_printable(lobby_config.base_url, sizeof(lobby_config.base_url),
+                       lobby_base_arg, 8) != 0 ||
+        copy_printable(lobby_config.public_host,
+                       sizeof(lobby_config.public_host), lobby_public_host_arg,
+                       1) != 0 ||
+        copy_printable(lobby_config.client_url,
+                       sizeof(lobby_config.client_url), lobby_client_url_arg,
+                       1) != 0 ||
+        copy_printable(lobby_config.game, sizeof(lobby_config.game),
+                       lobby_game_arg, 2) != 0 ||
+        copy_printable(lobby_config.region, sizeof(lobby_config.region),
+                       lobby_region_arg, 2) != 0) {
+      goto bad_args;
+    }
+    lobby_config.enabled = 1;
+    lobby_config.creator_id = (unsigned)lobby_creator_id;
+    lobby_config.app_id = (unsigned)lobby_app_id;
+    lobby_config.refresh_ms = lobby_refresh_ms;
+    lobby_config.timeout_ms = lobby_timeout_ms;
+    lobby_config.shutdown_ms = lobby_shutdown_ms;
+    if (lobby_room_names_arg != NULL) {
+      if (parse_lobby_room_names(lobby_room_names_arg, room_count,
+                                 lobby_config.room_names) != 0) {
+        goto bad_args;
+      }
+    } else {
+      for (int i = 0; i < room_count; i++) {
+        snprintf(lobby_config.room_names[i],
+                 sizeof(lobby_config.room_names[i]), "Maze War Room %d", i + 1);
+      }
+    }
   }
 
   int *room_zombies = calloc((size_t)room_count, sizeof(*room_zombies));
@@ -2784,6 +2948,26 @@ int main(int argc, char **argv) {
     rooms_started++;
     printf("maze-war room %d listening on TCP port %d, %d Hz, zombies=%d\n",
            i, config.port, config.tick_hz, config.zombies);
+  }
+
+  struct lobby_publisher lobby_publisher;
+  memset(&lobby_publisher, 0, sizeof(lobby_publisher));
+  if (lobby_enabled) {
+    int lobby_ports[LOBBY_MAX_ROOMS];
+    for (int i = 0; i < room_count; i++) lobby_ports[i] = rooms[i].config.port;
+    if (lobby_publisher_start(&lobby_publisher, &lobby_config, room_count,
+                              lobby_ports) != 0) {
+      fprintf(stderr, "Failed to start Lobby publisher.\n");
+      for (int i = 0; i < room_count; i++) destroy_room(&rooms[i], debug);
+      free(room_zombies);
+      free(rooms);
+      free(pfds);
+      free(refs);
+      return 1;
+    }
+    printf("lobby publisher enabled base=%s creator=$%04X app=$%02X refresh_ms=%d\n",
+           lobby_config.base_url, lobby_config.creator_id,
+           lobby_config.app_id, lobby_config.refresh_ms);
   }
 
   while (g_running) {
@@ -2896,10 +3080,17 @@ int main(int argc, char **argv) {
     }
     /* Every due room advances once before any room can advance again. */
     for (int r = 0; r < room_count; r++) {
-      if (now >= rooms[r].next_tick) tick_room(&rooms[r], debug, now);
+      if (now >= rooms[r].next_tick) {
+        tick_room(&rooms[r], debug, now);
+        if (lobby_enabled) {
+          lobby_publisher_submit(&lobby_publisher, r,
+                                 room_human_count(&rooms[r]));
+        }
+      }
     }
   }
 
+  if (lobby_enabled) lobby_publisher_stop(&lobby_publisher);
   for (int i = 0; i < room_count; i++) destroy_room(&rooms[i], debug);
   free(room_zombies);
   free(rooms);

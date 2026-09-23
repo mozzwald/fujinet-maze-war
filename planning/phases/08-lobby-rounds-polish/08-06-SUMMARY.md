@@ -1,8 +1,9 @@
 # 08-06 — Build configuration and reachable title/direct-connect UI
 
-Status: implementation complete on 2026-09-12; physical Atari/FujiNet
-acceptance is pending. CONF-01 and plan 08-06 remain open until that checkpoint
-passes.
+Status: complete and accepted on physical Atari/FujiNet against emulation on
+2026-09-13. CONF-01 and plan 08-06 are closed. The rare new-round shirt-only
+spawn remains explicitly deferred to Phase 4 trace work and does not block the
+accepted configuration, title, Direct Connect, or movement behavior.
 
 ## Hardware regression follow-up
 
@@ -65,7 +66,8 @@ write sequence.
 ## Delivered behavior
 
 `make build/maze-war-net.xex` now accepts `HOST`, `ROOM_PORT_BASE`,
-`ROOM_COUNT`, `DEFAULT_PORT`, `LOBBY_BASE`, `MAZEWAR_APPKEY`, `KILL_LIMIT`, and
+`ROOM_COUNT`, `DEFAULT_PORT`, `LOBBY_BASE`, `MAZEWAR_CREATOR_ID`,
+`MAZEWAR_APP_ID`, `KILL_LIMIT`, and
 `BUILD_FLAVOR` (`LAN`, `QA`, or `PRODUCTION`).
 
 `scripts/generate_atari_config.py` validates every value before producing the
@@ -103,19 +105,13 @@ per-player state was added.
   ROM-character-set title content; the MCP text renderer does not decode that
   character set reliably.
 
-## Required physical checkpoint
+## Physical acceptance
 
-1. Build the network XEX with the desired LAN values, for example
-   `make HOST=192.168.1.120 ROOM_PORT_BASE=9000 ROOM_COUNT=1 DEFAULT_PORT=9000 build/maze-war-net.xex`.
-2. On real Atari/FujiNet, confirm the title is stable and readable, OPTION
-   opens setup only once per press, and ESC returns to the title.
-3. Edit host, port, and name. Confirm RETURN from the title joins the selected
-   direct TCP server, invalid port text stays in setup with its diagnostic, and
-   an unavailable server returns to the title with its connection diagnostic.
-4. Confirm a normal game OPTION leave still returns safely to this title and a
-   later RETURN reconnects without a reset or stale game state.
+The user accepted the repaired 08-06 build after four mixed real Atari/FujiNet
+and emulator rounds. Remote movement remains fixed. The single observed
+shirt-only actor occurred at a new-round spawn and is retained as the already
+documented deferred render trace rather than reopening this phase.
 
-After acceptance, mark CONF-01 and 08-06 complete. The conditional next step
-is **08-07: `gpt-5.6-sol`, high reasoning** for AppKey direct-SIO buffers, URL
-validation, and startup recovery. Pause for the user's model switch before
-starting it.
+Next: **08-07: `gpt-5.6-sol`, high reasoning** for AppKey direct-SIO buffers,
+URL validation, and startup recovery. The user switched models and authorized
+08-07 on 2026-09-13.

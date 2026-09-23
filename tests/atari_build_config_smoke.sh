@@ -10,7 +10,8 @@ XEX="$ROOT_DIR/build/maze-war.xex"
 LAB="$ROOT_DIR/build/maze-war.lab"
 
 make -C "$ROOT_DIR" HOST=10.24.3.8 ROOM_PORT_BASE=9100 ROOM_COUNT=3 \
-    DEFAULT_PORT=9101 LOBBY_BASE=https://qa.example.test MAZEWAR_APPKEY=0x2A \
+    DEFAULT_PORT=9101 LOBBY_BASE=https://qa.example.test MAZEWAR_CREATOR_ID=0x3022 \
+    MAZEWAR_APP_ID=0x2A \
     KILL_LIMIT=7 BUILD_FLAVOR=QA build/maze-war.xex >/dev/null
 
 python3 - "$XEX" "$LAB" <<'PYEOF'
@@ -46,7 +47,8 @@ assert blob("NET_PORT_ARG_A", 2) == bytes((0x23, 0x8D)), blob("NET_PORT_ARG_A", 
 assert symbols["CFG_ROOM_PORT_BASE"] == 9100
 assert symbols["CFG_ROOM_COUNT"] == 3
 assert symbols["CFG_BUILD_FLAVOR"] == 1
-assert symbols["CFG_MAZEWAR_APPKEY"] == 0x2A
+assert symbols["CFG_MAZEWAR_CREATOR_ID"] == 0x3022
+assert symbols["CFG_MAZEWAR_APP_ID"] == 0x2A
 assert symbols["CFG_KILL_LIMIT"] == 7
 print("generated Atari configuration bytes passed")
 PYEOF
@@ -54,7 +56,8 @@ PYEOF
 before=$(stat -c %Y "$XEX")
 sleep 1
 make -C "$ROOT_DIR" HOST=10.24.3.8 ROOM_PORT_BASE=9100 ROOM_COUNT=3 \
-    DEFAULT_PORT=9101 LOBBY_BASE=https://qa.example.test MAZEWAR_APPKEY=0x2A \
+    DEFAULT_PORT=9101 LOBBY_BASE=https://qa.example.test MAZEWAR_CREATOR_ID=0x3022 \
+    MAZEWAR_APP_ID=0x2A \
     KILL_LIMIT=7 BUILD_FLAVOR=QA build/maze-war.xex >/dev/null
 after=$(stat -c %Y "$XEX")
 [ "$before" = "$after" ] || {
@@ -70,7 +73,9 @@ for bad in \
     "ROOM_PORT_BASE=65535 ROOM_COUNT=2" \
     "DEFAULT_PORT=9104" \
     "KILL_LIMIT=11" \
-    "MAZEWAR_APPKEY=not-a-key"; do
+    "MAZEWAR_CREATOR_ID=not-a-key" \
+    "MAZEWAR_CREATOR_ID=0x10000" \
+    "MAZEWAR_APP_ID=0x100"; do
     if make -C "$ROOT_DIR" $bad build/maze-war.xex >/dev/null 2>&1; then
         echo "FAIL: invalid build configuration was accepted: $bad" >&2
         exit 1

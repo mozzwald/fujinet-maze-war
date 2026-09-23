@@ -13,7 +13,10 @@ grep -E "^PORT_MAX[$TAB ]*=[${TAB} ]*5" "$SRC" >/dev/null
 grep -E "^PORTPROMPT[$TAB ]+\.BYTE[$TAB ]+\"PORT: \"" "$SRC" >/dev/null
 grep -F '$39,$30,$30,$30,0' "$SRC" >/dev/null
 grep -A18 -E "^PORT_FIELD" "$SRC" | grep -F 'HOSTSCR+40' >/dev/null
-grep -A24 -E "^HOST_BOOT" "$SRC" | grep -E "JSR[$TAB ]+PORT_PARSE" >/dev/null
+# 08-07 moved the controller into guarded high code to retain the core/display
+# margin; HOST_SETUP remains the stable entry point used by the title.
+grep -A45 -E "^UI_HOST_SETUP" "$SRC" | grep -E "JSR[$TAB ]+PORT_PARSE" >/dev/null
+grep -A2 -E "^HOST_SETUP" "$SRC" | grep -E "JMP[$TAB ]+UI_HOST_SETUP" >/dev/null
 grep -A12 -E "^PORT_PARSE" "$SRC" | grep -E "CMP[$TAB ]+#'9'\+1" >/dev/null
 
 # The parsed high/low host-order bytes must replace the former immediate

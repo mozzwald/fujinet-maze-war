@@ -219,10 +219,10 @@ Plans:
 - [x] `08-03` — Add authoritative MATCH_END/ROUND_START protocol and complete round reset. Accepted in mixed real Atari/FujiNet and emulator testing, including reconnect, redraw, bullet-lifecycle, and idle-sound follow-ups, 2026-09-12.
 - [x] `08-04` — Add the nonblocking Atari/SDL round-end presentation and results. Accepted with human and Zombie wins, five-second dance, and eight-second result display on 2026-09-12.
 - [x] `08-05` — Add voluntary leave acknowledgement, orthogonal no-human grace, and shared session teardown/reset. Accepted on real Atari/FujiNet and emulator testing in two rooms.
-- [ ] `08-06` — Generate build configuration and replace the old title with title/direct-connect UI.
-- [ ] `08-07` — Add Lobby AppKeys, strict TCP URL validation, and startup routing.
-- [ ] `08-08` — Publish rooms asynchronously to QA Lobby with opt-in lifecycle management.
-- [ ] `08-09` — Add the bounded-memory Atari QA Lobby room browser.
+- [x] `08-06` — Generate build configuration and replace the old title with title/direct-connect UI. Accepted on real Atari/FujiNet against emulation 2026-09-13; rare new-round shirt-only spawn remains explicitly deferred to Phase 4 trace work.
+- [x] `08-07` — Add Lobby AppKeys, strict TCP URL validation, and startup routing. Accepted on physical Atari/FujiNet and emulation with temporary key `$2A`, both configured room ports, persisted username, OPTION bypass, and failed-connection fallback on 2026-09-13.
+- [x] `08-08` — Publish rooms asynchronously to QA Lobby with opt-in lifecycle management. Accepted against the live QA Lobby, physical Atari/FujiNet, and emulation on 2026-09-13.
+- [x] `08-09` — Add the bounded-memory Atari QA Lobby room browser. Accepted on physical Atari/FujiNet and emulation against QA Lobby on 2026-09-13.
 - [ ] `08-10` — Integrate shared reset and validate repeated switching/external QA launch.
 - [ ] `08-11` — Promote tested artifacts and registrations to production with explicit approval.
 

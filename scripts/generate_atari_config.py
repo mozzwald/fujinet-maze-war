@@ -45,11 +45,13 @@ def integer(name: str, low: int, high: int):
     return parse
 
 
-def appkey(value: str) -> int:
-    match = APPKEY.fullmatch(value)
-    if not match:
-        fail("MAZEWAR_APPKEY must be a 0x0000..0xFFFF hexadecimal value")
-    return int(match.group(1), 16)
+def hexadecimal(name: str, high: int):
+    def parse(value: str) -> int:
+        match = APPKEY.fullmatch(value)
+        if not match or int(match.group(1), 16) > high:
+            fail(f"{name} must be a 0x00..0x{high:0{4 if high > 0xFF else 2}X} hexadecimal value")
+        return int(match.group(1), 16)
+    return parse
 
 
 def lobby_base(value: str) -> str:
@@ -84,7 +86,8 @@ def render_constants(args: argparse.Namespace) -> str:
         f"CFG_DEFAULT_PORT = {args.default_port}",
         f"CFG_DEFAULT_PORT_A = ${port_a:02X}",
         f"CFG_DEFAULT_PORT_X = ${port_x:02X}",
-        f"CFG_MAZEWAR_APPKEY = ${args.mazewar_appkey:04X}",
+        f"CFG_MAZEWAR_CREATOR_ID = ${args.mazewar_creator_id:04X}",
+        f"CFG_MAZEWAR_APP_ID = ${args.mazewar_app_id:02X}",
         f"CFG_KILL_LIMIT = {args.kill_limit}",
         "",
     ]
@@ -116,7 +119,10 @@ def main() -> int:
     parser.add_argument("--room-count", required=True, type=integer("ROOM_COUNT", 1, 64))
     parser.add_argument("--default-port", required=True, type=integer("DEFAULT_PORT", 1, 65535))
     parser.add_argument("--lobby-base", required=True, type=lobby_base)
-    parser.add_argument("--mazewar-appkey", required=True, type=appkey)
+    parser.add_argument("--mazewar-creator-id", required=True,
+                        type=hexadecimal("MAZEWAR_CREATOR_ID", 0xFFFF))
+    parser.add_argument("--mazewar-app-id", required=True,
+                        type=hexadecimal("MAZEWAR_APP_ID", 0xFF))
     parser.add_argument("--kill-limit", required=True, type=integer("KILL_LIMIT", 1, 10))
     parser.add_argument("--build-flavor", required=True, choices=("LAN", "QA", "PRODUCTION"), type=str.upper)
     args = parser.parse_args()
