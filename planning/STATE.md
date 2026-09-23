@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: 2026-09-11 - 06-01 forced build, two full host-network smoke-suite passes, and TCP cadence probes passed. Managed Atari800/FujiNet-PC BIN loading left NetStream inactive because no bootable ATR/container exists; awaiting the required real Atari/FujiNet mixed-session checkpoint. After acceptance, use gpt-5.6-terra with high reasoning for 08-01.
+stopped_at: 2026-09-11 - User accepted 06-01 real Atari/FujiNet plus Linux/SDL mixed session. The first 08-01 hardware test found player-shirt PM trails after upward column movement. The deleted WINPLYR supplied both a missing eighth suit byte and the ninth clear byte for the final up frame; the completed frame plus SUITS_PAD now make both explicit. The fixed $8000 data origin preserves the 430-byte $8042-$81EF UI reserve. Await replacement hardware acceptance before 08-02. After acceptance, use gpt-5.6-sol with high reasoning for 08-02.
 last_updated: "2026-09-11T00:00:00.000Z"
 progress:
   total_phases: 9
@@ -19,7 +19,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** Await the Phase 6 real Atari/FujiNet mixed-session checkpoint after passing the automated TCP baseline. Phase 8 Lobby and round polish begins only after acceptance. Bounded timed remote-sample playback remains the first revisit if future cloud-hosted WAN testing makes remote movement worse.
+**Current focus:** Await the replacement 08-01 real Atari/FujiNet regression checkpoint after correcting its upward-movement PM trail. Bounded timed remote-sample playback remains the first revisit if future cloud-hosted WAN testing makes remote movement worse.
 
 ## Current branch: a8-net-fix (2026-09-11)
 
@@ -39,15 +39,15 @@ Phase: 03.1 (handler-refresh-pokey-isolation) — COMPLETE 2026-09-02. All four 
 Phase: 05 (slot-lifecycle-and-zombie-handoff) — COMPLETE. Code 2026-09-02 (LIFE-01..04 addressed), smoke suite green including `slot_lifecycle_smoke.sh`. Human confirmation of live join/leave handoff received 2026-09-04; human testing continues alongside each change from here.
 Phase: 05.1 (link-integrity-and-frame-resync) — COMPLETE 2026-09-04. Unplanned, driven by real-hardware symptoms. See "Phase 5.1" below.
 
-Execution order going forward: Phase 6 (`06-01`) -> Phase 8 plans 08-01 through 08-11. Phases 3, 3.1, 4, 5, 5.1, and Phase 7's executable scope are closed and merged.
+Execution order going forward: Phase 8 plans 08-01 through 08-11. Phases 3, 3.1, 4, 5, 5.1, 6, and Phase 7's executable scope are closed and merged.
 
 ## Phase 8 planning note (2026-09-11)
 
 Review update: `phases/08-lobby-rounds-polish/08-MODELS.md` lists model/effort
 recommendations for every step and requires the next recommendation in each
-closing summary, followed by a pause for the user to switch. Next is **06-01:
-gpt-5.6-terra, medium reasoning**; after its hardware acceptance use **08-01:
-gpt-5.6-terra, high reasoning**. The round synchronization contract now lives
+closing summary, followed by a pause for the user to switch. **08-01 is ready
+for its hardware checkpoint; after acceptance use 08-02: gpt-5.6-sol, high
+reasoning.** The round synchronization contract now lives
 in `08-PROTOCOL.md`; shared teardown moves earlier to 08-05. Planning review
 does not mark implementation or hardware checkpoints complete.
 

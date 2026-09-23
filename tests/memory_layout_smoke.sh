@@ -53,9 +53,9 @@ while i + 4 <= len(d):
 if not segs:
     fail("no segments in the executable")
 
-# 1. The three display lists sit together, from a page boundary, so none of
+# 1. The live display lists sit together, from a page boundary, so neither
 #    them can cross a 1K boundary however the code before them grows.
-lists = ["TITLDISP", "HOSTDISP", "GAME"]
+lists = ["HOSTDISP", "GAME"]
 for n in lists:
     if n not in sym:
         fail(f"{n} is not in the symbol table")
@@ -71,7 +71,18 @@ for n in lists:
     if (a & 0xFC00) != ((a + 0x3F) & 0xFC00):
         fail(f"{n} at ${a:04X} can cross a 1K boundary; ANTIC would wrap it")
 
-# 2. Nothing may be loaded into the display buffers. They are reserved with .DS
+# 2. The removed title is a real future-UI allocation range, not bytes shifted
+# into the maze. No loaded segment may overlap it.
+ui_lo = sym["UI_DATA_START"]
+ui_hi = sym["MAZEDAT"] - 1
+if ui_hi - ui_lo + 1 < 0x100:
+    fail(f"reclaimed UI range is only {ui_hi - ui_lo + 1} bytes")
+for a, b in segs:
+    if a <= ui_hi and b >= ui_lo:
+        fail(f"segment ${a:04X}-${b:04X} overlaps reclaimed UI range "
+             f"${ui_lo:04X}-${ui_hi:04X}")
+
+# 3. Nothing may be loaded into the display buffers. They are reserved with .DS
 #    and written at runtime, so anything loaded there is shared memory.
 buf_lo = sym["HOSTSCR"]
 buf_hi = sym["SCORE"] + 69 - 1
@@ -80,14 +91,24 @@ for a, b in segs:
         fail(f"segment ${a:04X}-${b:04X} overlaps the display buffers "
              f"${buf_lo:04X}-${buf_hi:04X}")
 
-# 3. ANTIC fetches screen data with a 4K counter, so each buffer the game
+# 4. ANTIC fetches screen data with a 4K counter, so each buffer the game
 #    display list points at has to stay inside one 4K page.
 for name, size in (("GAMESCR", 760), ("BOTSCRN", 11 + 69)):
     a = sym[name]
     if (a & 0xF000) != ((a + size - 1) & 0xF000):
         fail(f"{name} at ${a:04X} crosses a 4K boundary")
 
-# 4. Segments must not overlap each other either.
+# 5. The fixed loaded-core, zero-page and NetStream-state budgets must retain
+# their existing safety margins. The handler uses $EE, while state may grow
+# only up to $7F00.
+if sym["CORE_DATA_END"] > 0x6F00:
+    fail(f"loaded core ends at ${sym['CORE_DATA_END']:04X}, leaving less than $100 before display buffers")
+if sym["ZP_END"] > 0xE9:
+    fail(f"zero page ends at ${sym['ZP_END']:04X}, leaving less than five bytes before handler $EE")
+if sym["NET_STATE_END"] > 0x7F00:
+    fail(f"NetStream state ends at ${sym['NET_STATE_END']:04X}, leaving less than $100 before $8000")
+
+# 6. Segments must not overlap each other either.
 for j in range(len(segs)):
     for k in range(j + 1, len(segs)):
         a1, b1 = segs[j]
@@ -97,6 +118,9 @@ for j in range(len(segs)):
 
 print("memory layout ok: lists at " +
       ", ".join(f"{n}=${sym[n]:04X}" for n in lists) +
+      f"; UI reserve ${ui_lo:04X}-${ui_hi:04X} ({ui_hi - ui_lo + 1} bytes)"
+      f"; core end ${sym['CORE_DATA_END']:04X}; ZP end ${sym['ZP_END']:04X}"
+      f"; state end ${sym['NET_STATE_END']:04X}"
       f"; buffers ${buf_lo:04X}-${buf_hi:04X} clear of every segment")
 PYEOF
 

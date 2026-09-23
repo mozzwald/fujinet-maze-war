@@ -43,9 +43,9 @@
 
 ### Validation
 
-- [ ] **VALD-01**: A live session with 1 Atari client, 1 Linux client, and 2 AI zombies runs without movement-desync bugs that block normal play.
-- [ ] **VALD-02**: Mixed-session validation includes deterministic checks for move-then-fire, turn-then-fire, zombie replacement, and human disconnect replacement cases.
-- [ ] **VALD-03**: The Atari client can be validated through the FujiNet-PC or current FujiNet emulator workflow without requiring protocol changes unique to Linux-only testing.
+- [x] **VALD-01**: A live session with 1 Atari client, 1 Linux client, and 2 AI zombies runs without movement-desync bugs that block normal play.
+- [x] **VALD-02**: Mixed-session validation includes deterministic checks for move-then-fire, turn-then-fire, zombie replacement, and human disconnect replacement cases.
+- [x] **VALD-03**: The Atari client can be validated through the FujiNet-PC or current FujiNet emulator workflow without requiring protocol changes unique to Linux-only testing.
 
 ## v2 Requirements
 
@@ -122,9 +122,9 @@
 | LIFE-04 | Phase 5 | Complete |
 | WRLD-01 | Phase 3 | Complete |
 | WRLD-02 | Phase 3 | Complete |
-| VALD-01 | Phase 6 | Pending |
-| VALD-02 | Phase 6 | Pending |
-| VALD-03 | Phase 6 | Pending |
+| VALD-01 | Phase 6 | Complete |
+| VALD-02 | Phase 6 | Complete |
+| VALD-03 | Phase 6 | Complete |
 | MEM-01 | Phase 8 | Pending |
 | ROOM-01 | Phase 8 | Pending |
 | ROOM-02 | Phase 8 | Pending |

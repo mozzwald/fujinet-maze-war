@@ -17,7 +17,7 @@ This roadmap follows the dependency chain identified in research: normalize tran
 - [x] **Phase 4: Render-State Separation** - Closed as good enough for now after user testing on 2026-09-11. The timing/recovery repair pass is greatly improved: two-computer emulation is almost flawless, real Atari XL + hardware FujiNet is acceptable with only occasional one-to-two-cell jumps, and the HUD marker side quest is user-verified. If the game moves to a cloud-hosted server and the added WAN latency makes remote movement feel worse, revisit bounded timed remote-sample playback from `04-03`. See [lag review and repair sequence](phases/04-render-state-separation/04-LAG-REVIEW.md).
 - [x] **Phase 5: Slot Lifecycle and Zombie Handoff** - Make four-slot zombie backfill and human takeover stable through joins and disconnects. Reordered ahead of Phase 4: correctness work (ghost shots, stale facing, inherited state) that blocks reliable play. Code complete 2026-09-02; human confirmation of a live handoff received 2026-09-04.
 - [x] **Phase 5.1: Link Integrity and Frame Resynchronisation (INSERTED)** - Make the Atari receive path robust to a lossy SIO byte stream: per-packet checksum, COBS framing with a zero delimiter so the parser always realigns, actor-state validation, and the boot/render faults these exposed. Unplanned; driven by real-hardware symptoms that emulation could not reproduce. Completed and human-confirmed 2026-09-04. See STATE.md "Phase 5.1".
-- [ ] **Phase 6: Mixed-Session Validation and Hardening** - Prove the acceptance scenario in the real Atari/FujiNet validation workflow. A minimal validation pass (scripted emulator sessions including join/leave handoff) runs after Phase 5; full hardening runs after Phase 4.
+- [x] **Phase 6: Mixed-Session Validation and Hardening** - Accepted after repeatable TCP validation and the user’s real Atari/FujiNet plus Linux/SDL mixed-session test.
 - [x] **Phase 7: Realtime Transport Reliability (FujiRealm-informed)** - TCP migration, client conversion, CRC-16 framing, and the acknowledged reliable-event stream are merged into `a8-net-fix`. The remaining 07-05 client-authoritative movement proposal is documented and intentionally deferred because it is not recommended.
 - [ ] **Phase 8: Lobby and Round Polish** - Add isolated multi-room TCP hosting, authoritative rounds, nonblocking Atari game-over presentation, clean leave/grace behavior, build-time endpoints, Lobby AppKeys/publication/browser integration, and repeatable room switching. Begins only after Phase 6 closes. See `phases/08-lobby-rounds-polish/08-RESEARCH.md` and plans 08-01 through 08-11.
 
@@ -161,7 +161,7 @@ Plans:
   3. The project can be validated through the current FujiNet-PC or FujiNet emulator workflow without needing Linux-only protocol shortcuts.
 **Plans**: 1 plan
 Plans:
-- [ ] `06-01` — Freeze and validate the merged TCP baseline with repeatable mixed-session, emulator/FujiNet-PC, delay/loss, and user hardware evidence.
+- [x] `06-01` — Freeze and validate the merged TCP baseline with repeatable mixed-session, emulator/FujiNet-PC, delay/loss, and user hardware evidence.
 
 ### Phase 7: Realtime Transport Reliability (FujiRealm-informed)
 
@@ -202,7 +202,7 @@ Plans:
 **Depends on**: Phase 6; Phase 7 plans 07-01 through 07-04
 **Reference**: `ref/mazewar_lobby_rounds_implementation_plan.md`
 **Research**: `phases/08-lobby-rounds-polish/08-RESEARCH.md`
-**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; next overall is 06-01 on `gpt-5.6-terra` with medium reasoning.
+**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-01 is in progress on `gpt-5.6-terra` with high reasoning.
 **Round boundary contract**: [08-PROTOCOL.md](phases/08-lobby-rounds-polish/08-PROTOCOL.md)
 **Success Criteria**:
   1. One server process runs isolated four-seat rooms on distinct TCP ports.
@@ -276,7 +276,7 @@ Plans:
 **Execution Order:**
 1 -> 2 -> 3 -> 3.1 -> 5 -> 5.1 -> 7.1-7.4 -> 4 -> 6 -> 8
 
-Phases 1, 2, 3, 3.1, 4, 5, 5.1, and the executable Phase 7 scope are done. Next: Phase 6 validation, then Phase 8 Lobby and round polish.
+Phases 1, 2, 3, 3.1, 4, 5, 5.1, 6, and the executable Phase 7 scope are done. Phase 8 Lobby and round polish is active.
 
 Phase 5 was brought forward ahead of the Phase 3 human checkpoint: both need the same
 mixed session to verify, and running the checkpoint before the slot work would have
@@ -293,6 +293,6 @@ Phase 6 hardening freezes the baseline; Phase 8 makes it Lobby-releasable.
 | 3.1 Netstream Handler Refresh and POKEY Channel Isolation | 2/2 | Complete | 2026-09-02 |
 | 5. Slot Lifecycle and Zombie Handoff | 1/1 | Code complete; human handoff confirmation wanted | 2026-09-02 |
 | 4. Render-State Separation | 5/5 effective; 04-06 retracted | Closed as good enough for now after 2026-09-11 user testing; revisit bounded timed remote-sample playback if a future cloud-hosted server makes WAN latency visible | 2026-09-11 |
-| 6. Mixed-Session Validation and Hardening | 0/1 | Next; baseline gate for Phase 8 | - |
+| 6. Mixed-Session Validation and Hardening | 1/1 | Complete; user mixed-session acceptance | 2026-09-11 |
 | 7. Realtime Transport Reliability | 4/4 executable | Complete as scoped and merged; 07-05 remains a deferred, not-recommended design note | 2026-09-10 |
-| 8. Lobby and Round Polish | 0/11 | Planned; blocked on Phase 6 | - |
+| 8. Lobby and Round Polish | 0/11 | 08-01 ready for hardware regression test | - |

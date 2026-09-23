@@ -17,6 +17,10 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ATARI_SRC="$ROOT_DIR/clients/atari/maze-war.asm"
+XEX="$ROOT_DIR/build/maze-war.xex"
+LAB="$ROOT_DIR/build/maze-war.lab"
+
+make -C "$ROOT_DIR" build/maze-war.xex >/dev/null
 
 python3 - "$ATARI_SRC" <<'PYEOF'
 import re, sys
@@ -100,6 +104,53 @@ for ref in ('HPOSM0', 'HPOSM0+1', 'HPOSM0+2', 'HPOSM0+3', 'SIZEM',
 
 print("  %d GRACTL writes; missile DMA only after HUD_PM_INIT" % len(enables))
 print("  PM clear covers all 8 pages and precedes PMBASE/DMACTL/GRACTL")
+PYEOF
+
+# SETSUIT copies bytes 8..0 from its eight-byte PM frames. The next frame's
+# leading zero supplies byte nine except for MOVEST=3/DIR=up, which needs an
+# explicit sentinel. WINPLYR accidentally supplied it before 08-01 deleted
+# that unreachable allocation; the next byte then became SMOKE's $1C and
+# produced a shirt-colour trail after upward movement.
+python3 - "$XEX" "$LAB" <<'PYEOF'
+import sys
+
+xex, lab = sys.argv[1:]
+sym = {}
+for line in open(lab):
+    fields = line.split()
+    if len(fields) >= 3:
+        try:
+            sym[fields[2]] = int(fields[1], 16)
+        except ValueError:
+            pass
+
+for name in ("SUITS", "SUITS_PAD", "SMOKE"):
+    if name not in sym:
+        raise SystemExit("FAIL: %s missing from symbol map" % name)
+
+if sym["SUITS_PAD"] != sym["SUITS"] + 0x80:
+    raise SystemExit("FAIL: SUITS_PAD is not the ninth byte after the final suit frame")
+if sym["SMOKE"] != sym["SUITS_PAD"] + 1:
+    raise SystemExit("FAIL: data was inserted between SUITS_PAD and SMOKE")
+
+data = open(xex, "rb").read()
+i = 2 if data[:2] == b"\xff\xff" else 0
+pad = None
+while i + 4 <= len(data):
+    lo = data[i] | (data[i + 1] << 8)
+    hi = data[i + 2] | (data[i + 3] << 8)
+    i += 4
+    size = hi - lo + 1
+    body = data[i:i + size]
+    i += size
+    if lo <= sym["SUITS_PAD"] <= hi:
+        pad = body[sym["SUITS_PAD"] - lo]
+        break
+if pad != 0:
+    value = 0xff if pad is None else pad
+    raise SystemExit("FAIL: final suit-frame clear byte is $%02X, not $00; upward movement leaves PM trails" % value)
+
+print("  final suit-frame ninth byte is an explicit zero in the assembled XEX")
 PYEOF
 
 echo "pm init smoke passed"

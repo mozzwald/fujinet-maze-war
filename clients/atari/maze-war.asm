@@ -149,7 +149,6 @@ HOLDIT	.DS	1	;GENL PURPOSE
 PLYRS	.DS	1	;# OF PLAYERS
 DIRSHFT	;		BACKLASH DIRECTION REG
 DX	;		ZOMBIE MOVE X DIST
-SAVEIT	;		WINNER # SAVE
 ZMBYS	.DS	1	;# OF ZOMBIES
 DIST	;		ZOMBIE MOVE CRNT SHORT DIST
 DIREC	.DS	1	;BACKLASH DIRECTION
@@ -185,6 +184,7 @@ INPROM	.DS	2	;TEXT FIELD: PROMPT STRING
 INROW	.DS	2	;TEXT FIELD: SCREEN ROW
 INMAX	.DS	1	;TEXT FIELD: MAX CHARACTERS
 INCURS	.DS	1	;TEXT FIELD: COLUMN THE NEXT CHARACTER LANDS IN
+ZP_END
 ;
 	ORG	CHRSET_BASE
 ;
@@ -425,14 +425,13 @@ SUITS	.BYTE	0,0,0,124,24,24,20,0
 	.BYTE	0,0,24,126,24,20,16,0
 	.BYTE	0,0,24,126,24,40,8,0
 	.BYTE	0,0,24,126,24,20,16,0
-	.BYTE	0,0,24,126,24,40,8
-;
-;WINNING PLAYER ALL IN PM
-;
-WINPLYR	.BYTE	0,0,0,124,24,24,20,0
-	.BYTE	0,0,3,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,54
-	.BYTE	24,24,16,2,64,0,0,0
+	.BYTE	0,0,24,126,24,40,8,0
+; SETSUIT copies bytes 8..0 from an eight-byte frame. The old final up-moving
+; frame had seven explicit bytes, then borrowed WINPLYR's first zero as byte
+; eight and its second as the ninth clear byte. 08-01 removed that unreachable
+; data, exposing SMOKE's $1C. Complete the frame here and retain an explicit
+; ninth zero so upward movement cannot leave PM fragments below a player.
+SUITS_PAD	.BYTE	0
 ;
 ;EVAPORATION DATA
 ;
@@ -690,153 +689,6 @@ STRTCN	;net-only: ignore START/SELECT/OPTION local restart path
 CHKSCRS
 	JSR	NET_POLL	;NETSTREAM TX/RX
 	JMP	STRTCN	;net-only main loop
-;
-;GAME END HANDLING ROUTINES
-;--------------------------
-;
-GAMEOVR	STX	SAVEIT
-	JSR	VBIOFF	;TURN OFF VBI
-	LDA	#0	;AND GAME SOUND (CH3/4 ARE NETSTREAM'S)
-	STA	AUDC1
-	STA	AUDC2
-;
-;SET WINNER MESSAGE
-;
-	LDX	SAVEIT
-	LDY	#3	;INDEX - TEXT SET
-	LDA	SCRINDX,X	;SET POINTER TO
-	CLC		;WINNER'S SCORE
-	ADC	# <SCORE-1
-	STA	SCRPTR
-	LDA	# >SCORE-1
-	STA	SCRPTR+1
-	BCC	STENDTX
-	INC	SCRPTR+1
-STENDTX	LDA	ENDTXT,Y	;AND SET IT
-	STA	(SCRPTR),Y	;TO "WINS"
-	DEY
-	BPL	STENDTX
-;
-;EVAPORATE ALL LOSERS
-;
-	LDA	#0	;CLEAR
-	STA	ACTFLAG,X	;WINNER ACTION
-	STX	SAVEIT	;SAVE WINNER #
-	LDX	ACTIVE	;GET # TO DO
-STALLEV	CPX	SAVEIT	;IF =WINNER,
-	BEQ	STNXTEV	;DO NEXT ONE
-	JSR	ERASMAN	;ELSE ERASE 'IM
-	LDA	#2	;ACTION=EVAPORATE
-	STA	ACTFLAG,X
-	LDA	#9	;MOVEST FOR EVAP
-	STA	MOVEST,X
-STNXTEV	DEX		;DO THE NEXT ONE
-	BPL	STALLEV
-;
-DOALLEV	LDA	RTCLOK
-DOAL2	CMP	RTCLOK
-	BEQ	DOAL2
-	LDA	#0	;INIT END COUNT=0
-	STA	COUNT
-	LDX	ACTIVE	;LOOP FOR ALL
-EVAPEM	LDA	COUNT	;ADD THIS ACTFLAG
-	CLC		;TO COUNT
-	ADC	ACTFLAG,X	;(FOR END CHK)
-	STA	COUNT
-	JSR	EVAPRTE	;AND DO EVAP
-	DEX
-	BPL	EVAPEM	;DO NEXT
-	LDA	COUNT	;IF COUNT=ACTIVE,
-	CMP	ACTIVE	;WE'RE DONE,
-	BNE	DOALLEV	;OTHERWISE LOOP
-;
-;SET WINNER AS ALL PM
-;
-	LDX	SAVEIT	;GET WINNER #
-	JSR	ERASMAN	;ERASE 'IM + SET
-	LDA	PCOLR0,X	;1ST PM COLOR
-	STA	PCOLR0	;TO WINNING COLOR
-	LDA	#PFCOL0	;AND OTHERS TO
-	STA	PCOLR1	;NORMAL PF COLORS
-	LDA	#PFCOL1
-	STA	PCOLR2
-	LDA	#PFCOL3
-	STA	PCOLR3
-	LDA	# <WINPLYR	;SET POINTER
-	STA	POINTER	;TO ALL PM IMAGES
-	LDA	# >WINPLYR
-	STA	POINTER+1
-	LDA	RNDY,X	;SET SCRPTR
-	ASL	;TO LOC
-	ASL
-	ASL
-	CLC
-	ADC	#$20
-	STA	SCRPTR
-	LDA	# >PL0
-	STA	SCRPTR+1
-	LDA	#3	;COUNT THRU
-	STA	COUNT	;ALL 3 PLYRS
-SETWINR	LDY	#7	;SET ONE COLOR
-SETPRTS	LDA	(POINTER),Y
-	STA	(SCRPTR),Y
-	DEY
-	BPL	SETPRTS
-	LDA	RNDX,X	;SET HORIZ LOC
-	ASL	;TO XLOC*8+48
-	ASL
-	ASL
-	CLC
-	ADC	#48
-	LDY	COUNT
-	STA	HPOSP0,Y
-	LDA	POINTER	;POINT TO NEXT
-	CLC		;COLOR'S IMAGES
-	ADC	#8
-	STA	POINTER
-	BCC	UDWNSCP
-	INC	POINTER+1
-UDWNSCP	INC	SCRPTR+1	;POINT TO NEXT
-	DEC	COUNT	;PLAYER
-	BPL	SETWINR	;AND DO IT
-;
-;FADE ALL COLORS TO BLACK
-;
-	LDA	#16	;SET COLOR LUM
-	STA	COUNT	;LEVELS TO 16
-FADEALL	LDX	#3	;FADE COLRS=0..3
-FADACOL	LDA	COLOR0,X	;GET THE COLOR
-	AND	#$0F	;IF LUM <>0, CUT
-	BNE	CUTCOLR	;IT DOWN
-	STA	COLOR0,X	;SET TO BLACK
-	BEQ	FADNXCL
-CUTCOLR	DEC	COLOR0,X
-FADNXCL	LDY	RTCLOK	;WAIT FOR A BIT
-	INY
-	INY
-FADN2	CPY	RTCLOK
-	BNE	FADN2
-	DEX
-	BPL	FADACOL	;FADE NEXT COLOR
-	DEC	COUNT
-	BPL	FADEALL	;AND DO NEXT LUM
-;
-;WAIT A BIT TO SHOW OFF SCORES
-;
-	LDA	#7
-	STA	HOLDIT
-WAIT0	LDX	#$FF
-WAIT1	LDY	#$FF
-WAIT2	LDA	CONSOL	;END DELAY EARLY
-	CMP	#7	;IF A CONSOL KEY
-	BNE	ENDGOBK	;HAS BEEN PRESSED
-	DEY
-	BNE	WAIT2
-	DEX
-	BNE	WAIT1
-	DEC	HOLDIT
-	BPL	WAIT0
-ENDGOBK	JMP	RESTART	;GOTO TITLES
 ;
 ;MAIN PROGRAM SUBROUTINES
 ;------------------------
@@ -6560,9 +6412,6 @@ EXPLSHP	.BYTE	$00,$9B,$9C,$9C	;R&D0
 	.BYTE	$9B,$00,$9D,$9D	;R&D1
 	.BYTE	$00,$9B,$9C,$9C	;L&U1
 ;
-;TITLE SCREEN
-;------------
-;
 ;DISPLAY LIST
 ;
 ; ANTIC only increments the low 10 bits of the display list counter, so a list
@@ -6584,14 +6433,8 @@ EXPLSHP	.BYTE	$00,$9B,$9C,$9C	;R&D0
 ; drift up behind the code gives it about 7K of headroom and makes the position
 ; a decision rather than an accident. tests/memory_layout_smoke.sh checks both
 ; properties against the built binary.
+CORE_DATA_END
 	ORG	$8000
-TITLDISP	.BYTE	$70,$70,$70,$70,$70,$42
-	.WORD	TITLES
-	.BYTE	2,2,$70,6,$70,$70,5,$70
-	.BYTE	$70,6,$70,4,4,4,$70,6,6
-	.BYTE	$70,2,$41
-	.WORD	TITLDISP
-;
 ;HOST INPUT DISPLAY LIST (40x24 text)
 ;
 HOSTDISP	.BYTE	$70,$70,$70,$42
@@ -6611,66 +6454,12 @@ GAME	.BYTE	$70,$70,$70,$44
 	.BYTE	6,6,6,$41
 	.WORD	GAME
 ;
-;TITLE SCREEN DISPLAY DATA
-;
-TITLES	.BYTE	0,0,0,0,0,0,0,0,96
-	.BYTE	"abcdefg"
-	.BYTE	96
-	.BYTE	"abchi  jklcjmno"
-	.BYTE	"                "
-	.BYTE	"pqrsptuspqr"
-	.BYTE	"spvwxpyzsp"
-	.BYTE	123,124,115,0,0
-	.BYTE	0,0,0,0,0,0
-	.BYTE	"               "
-	.BYTE	"COMPUTING      "
-	.BYTE	"                "
-	.BYTE	$F0,$F2,$E5,$F3,$E5,$EE,$F4,$F3,$80,$80,$80
-	.BYTE	"                "
-	; Six glyphs this row names ($A6 $A8 $AA $B1 $B6 $B8) are the F, H, J, Q,
-	; V and X slots, which now hold real letterforms so that player names
-	; render.  The logo is drawn wrong as a result, which costs nothing: this
-	; display list is never installed -- RESTART goes straight to START -- so
-	; the title screen is unreachable in the net client.  They were briefly
-	; relocated to $08-$0F; those are PL0CHR, the per-player coalesce tiles
-	; SETFUZZ rewrites at runtime, and taking them corrupted the wizard.
-	.BYTE	$9E,$9F,$A6,$A8,$AA,$B1,$B6,$B8,$80,$BB,$BC,$BD,$BE,$BF
-	.BYTE	"                "
-	.BYTE	"BY  MARK PRICE   "
-WLKLINE	.BYTE	"                    "
-	.BYTE	"                    "
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	$80,$80,$80,$80,$80,$F7,$E9,$FA,$E1,$F2,$E4,$F3
-	.BYTE	218,0
-PLAYERS	.BYTE	81
-	.BYTE	"          ZOMBIES: "
-ZOMBIES	.BYTE	80,0,0,0,0,0
-	.BYTE	"            "
-	.BYTE	"ZOMBIE SPEED:  "
-ZOMSPD	.BYTE	"5            "
-;
-;GAME DISPLAY DATA
-;-----------------
-;
-;HOST INPUT DISPLAY LIST (40x24 text)
-;
-;
-;
+; Reclaimed title/menu/result allocation. Nothing is emitted here in 08-01:
+; later phases can claim this contiguous range after they prove lifetime and
+; VBI ownership. Keep MAZEDAT at its established address so this removal cannot
+; change existing maze pointers or display timing.
+UI_DATA_START
+	ORG	$81F0
 ;MAZE DATA
 ;
 MAZEDAT	.BYTE	$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0
@@ -6751,7 +6540,6 @@ MAZEDAT	.BYTE	$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0
 ;
 PLRTXT	.BYTE	87,73,90,65,82,68	;ATASCII "WIZARD" for NAME_SCR
 ZOMTXT	.BYTE	90,79,77,66,73,69	;ATASCII "ZOMBIE" for NAME_SCR
-ENDTXT	.BYTE	"WINS"
 ;
 ;GAME SCREEN SPACE
 ;-----------------
@@ -6943,6 +6731,7 @@ HOSTBUF	.BYTE	0
 	.DS	HOST_MAX
 NAMEBUF	.BYTE	0
 	.DS	NAME_LEN
+NET_STATE_END
 ;
 	ORG	$02E0
 	.WORD	INIT

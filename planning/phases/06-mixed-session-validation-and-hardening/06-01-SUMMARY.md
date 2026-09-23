@@ -1,7 +1,7 @@
 # 06-01 — TCP baseline validation summary
 
-Status: ready for the user’s physical Atari XL/FujiNet checkpoint; not complete
-until that result is accepted.
+Status: complete. The user accepted the real Atari XL/FujiNet and Linux/SDL
+mixed-session test on 2026-09-11.
 
 ## Baseline
 
@@ -53,14 +53,11 @@ currently provide a bootable ATR/container to mount through FujiNet, so this
 attempt is inconclusive for Atari gameplay rather than a baseline regression.
 Both MCP-owned processes were stopped cleanly.
 
-## Required user checkpoint
+## User checkpoint
 
-Please test one real Atari XL/FujiNet client and one SDL/Linux client against
-the same TCP server with two Zombies. Cover join/slot assignment; movement and
-remote observation; move/fire and turn/fire; replacing a Zombie; clean close
-and unexpected loss; brick destruction/repair; death/respawn/score agreement;
-and persistent names/HUD markers. Confirm that the result is at least as good
-as the accepted local-network baseline.
+The user tested one real Atari XL/FujiNet client and one Linux/SDL client with
+two Zombies and reported the mixed session passed. This accepts VALD-01 through
+VALD-03 and freezes the TCP baseline for Phase 8.
 
 After your acceptance, next is **08-01 — `gpt-5.6-terra`, high reasoning** for
 shared-code, fixed-address Atari memory reclamation. Pause for the user’s model

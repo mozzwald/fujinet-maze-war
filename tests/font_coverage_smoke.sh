@@ -8,12 +8,11 @@
 # letters, which is why the name MOZZXL drew three dots for the X on real
 # hardware. That was safe until names became arbitrary user input.
 #
-# The six letters now have letterforms in their own slots. The logo they
-# displaced draws wrong, which costs nothing because TITLDISP is never
-# installed. An attempt to relocate the logo into $08-$0F failed badly: those
-# are PL0CHR, eight per-player coalesce tiles SETFUZZ rewrites at runtime. Five more artwork slots ($1E, $1F and $3B-$3F) are still
-# reachable from HOST_SCR as ">?" and "[\]^_", and have no letter to be, so
-# HOST_SCR folds them to a space.
+# The six missing letters now have letterforms in their own slots. $08-$0F are
+# still PL0CHR, eight per-player coalesce tiles SETFUZZ rewrites at runtime;
+# no name may reach them. Other unsafe embedded-font slots are filtered only
+# by NAME_SCR. HOST_SCR remains permissive because the host prompt uses ROM
+# characters and must accept hostnames such as 127.0.0.1.
 #
 # This test walks every byte a name can carry through a transcription of
 # HOST_SCR and checks where it lands in the font.
@@ -108,40 +107,16 @@ def name_scr(c):
     return c
 
 
-# --- which glyphs does the title screen still treat as artwork? ---------
-m = re.search(r'\.BYTE\s+(\$9E,[^\n;]*)', src)
-if not m:
-    fail("could not find the title-screen artwork row; has it been renamed?")
-art = {int(v.strip()[1:], 16) & 0x7F for v in m.group(1).split(',')
-       if v.strip().startswith('$')}
-art.discard(0x00)
-if not art:
-    fail("title artwork row parsed as empty")
-
 reachable = {name_scr(c) for c in range(256)}
 reachable.discard(0x00)
 
-# 1. The title logo may share slots with letters ONLY because its display list
-#    is never installed. RESTART jumps straight to START, so TITLDISP is dead
-#    code in the net client. If that ever changes, six of the logo's glyphs are
-#    letterforms now and it will draw wrong -- so pin the thing that makes the
-#    sharing safe, rather than the sharing itself.
-src_asm = open(root + "/clients/atari/maze-war.asm").read()
-installs = [l for l in src_asm.split('\n')
-            if 'TITLDISP' in l and not l.startswith('TITLDISP')
-            and '.WORD' not in l and ';' not in l.split('TITLDISP')[0]]
-if installs:
-    fail("TITLDISP looks reachable again (%s). Six of the title logo's glyphs "
-         "are letterforms now, so the title screen would draw wrong; give the "
-         "logo its own slots before showing it." % installs[0].strip())
-
-# 2. every reachable glyph must actually be drawn
+# 1. Every reachable glyph must actually be drawn.
 for c in sorted(reachable):
     if glyph(c) == bytes(8):
         fail("screen code $%02X is reachable from a name but its glyph is "
              "blank; that character would vanish" % c)
 
-# 3. no two reachable glyphs may be identical -- two letters that look the
+# 2. No two reachable glyphs may be identical -- two letters that look the
 #    same is the same defect wearing a different hat
 seen = {}
 for c in sorted(reachable):
@@ -150,7 +125,7 @@ for c in sorted(reachable):
         fail("screen codes $%02X and $%02X render identically" % (seen[g], c))
     seen[g] = c
 
-# 4. the six repaired letters must still be letterforms
+# 3. The six repaired letters must still be letterforms.
 letters = {0x26: 'F', 0x28: 'H', 0x2A: 'J', 0x31: 'Q', 0x36: 'V', 0x38: 'X'}
 for code, name in letters.items():
     if code not in reachable:
@@ -191,9 +166,7 @@ for g in sorted(scratch):
 
 print("  %d screen codes reachable from a name, all distinct letterforms"
       % len(reachable))
-print("  %d title-logo glyphs (unreachable display list), "
-      "%d PL0CHR scratch tiles left to the game"
-      % (len(art), len(scratch)))
+print("  %d PL0CHR scratch tiles left to the game" % len(scratch))
 PYEOF
 
 echo "font coverage smoke passed"
