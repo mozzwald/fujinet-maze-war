@@ -1,11 +1,9 @@
 # 08-05 — Leave, no-human grace, and shared session teardown
 
-Status: implementation complete on 2026-09-12; the first mixed real
-Atari/FujiNet and emulator checkpoint passed leave/rejoin in two simultaneous
-rooms, both with and without Zombies. Two join presentation/placement defects
-were found and fixed afterward, so final acceptance is pending a focused
-retest. GRCE-01, SWCH-01, and plan 08-05 remain open until that checkpoint
-passes.
+Status: complete and hardware-accepted on 2026-09-12. The final focused
+retest confirmed that a rejoined player never respawns on another player and
+appears immediately on remote Atari and emulator screens. GRCE-01, SWCH-01,
+and plan 08-05 are complete.
 
 ## Implemented server behavior
 
@@ -143,7 +141,5 @@ not treated as protection against VBI/NMI use of `$82/$83`.
    never shares a cell with another live actor. Exercise both a vacant seat and
    a configured Zombie takeover if practical.
 
-After acceptance, mark GRCE-01, SWCH-01, and 08-05 complete. The conditional
-next recommendation is **08-06: `gpt-5.6-terra`, medium reasoning** for
-generated build configuration and the title/direct-connect UI. Pause for the
-user's model switch before starting it.
+The accepted next step is **08-06: `gpt-5.6-terra`, medium reasoning** for
+generated build configuration and the title/direct-connect UI.

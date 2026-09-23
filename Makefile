@@ -1,5 +1,6 @@
 MADS ?= mads
 CC ?= gcc
+PYTHON ?= python3
 CFLAGS ?= -O2 -Wall -Wextra
 NCURSES_LIBS ?= -lncurses
 SDL_CONFIG ?= sdl-config
@@ -7,6 +8,8 @@ SDL_CFLAGS ?= $(shell $(SDL_CONFIG) --cflags 2>/dev/null)
 SDL_LIBS ?= $(shell $(SDL_CONFIG) --libs 2>/dev/null || echo -lSDL)
 SRC := clients/atari/maze-war.asm
 OUT := build/maze-war.xex
+ATARI_CONFIG := build/maze-war-config.inc
+ATARI_CONFIG_DATA := build/maze-war-config-data.inc
 HANDLER := NSENGINE.OBX
 NET := build/maze-war-net.xex
 SERVER := build/maze-war-server
@@ -19,7 +22,23 @@ CLIENT_SDL := build/maze-war-client-sdl
 NETSTREAM_DIR ?= ../fujinet-atari-netstream
 NETSTREAM_BUFSIZE ?= 1024
 
-.PHONY: all clean test
+# LAN is the local direct-connect default. QA and PRODUCTION select only a
+# generated identity; network routing remains runtime-controlled until 08-07.
+HOST ?= 127.0.0.1
+ROOM_PORT_BASE ?= 9000
+ROOM_COUNT ?= 1
+DEFAULT_PORT ?= $(ROOM_PORT_BASE)
+LOBBY_BASE ?= https://lobby.fujinet.online
+MAZEWAR_APPKEY ?= 0x0000
+KILL_LIMIT ?= 5
+BUILD_FLAVOR ?= LAN
+
+# Export values through Make's environment rather than interpolating command
+# line input into a shell recipe. The generator validates every value before
+# it emits MADS source; shell expansion never reparses an environment value.
+export HOST ROOM_PORT_BASE ROOM_COUNT DEFAULT_PORT LOBBY_BASE MAZEWAR_APPKEY KILL_LIMIT BUILD_FLAVOR
+
+.PHONY: all clean test FORCE
 
 all: $(NET) $(SERVER) $(CLIENT) $(CLIENT_SDL)
 
@@ -32,7 +51,10 @@ $(HANDLER): $(NETSTREAM_DIR)/handler/mads/netstream.s
 	cp $(NETSTREAM_DIR)/build/mads/NSENGINE.OBX $@
 endif
 
-$(OUT): $(SRC) | build
+$(ATARI_CONFIG) $(ATARI_CONFIG_DATA) &: FORCE scripts/generate_atari_config.py | build
+	$(PYTHON) scripts/generate_atari_config.py --output $(ATARI_CONFIG) --data-output $(ATARI_CONFIG_DATA) --host "$$HOST" --room-port-base "$$ROOM_PORT_BASE" --room-count "$$ROOM_COUNT" --default-port "$$DEFAULT_PORT" --lobby-base "$$LOBBY_BASE" --mazewar-appkey "$$MAZEWAR_APPKEY" --kill-limit "$$KILL_LIMIT" --build-flavor "$$BUILD_FLAVOR"
+
+$(OUT): $(SRC) $(ATARI_CONFIG) $(ATARI_CONFIG_DATA) | build
 	$(MADS) $(SRC) -t:build/maze-war.lab -o:$@
 
 $(NET): $(HANDLER) $(OUT) | build

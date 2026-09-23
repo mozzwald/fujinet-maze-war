@@ -81,13 +81,13 @@
 - [x] **ROND-01**: The server alone selects the first player to reach a validated kill limit and broadcasts one idempotent frozen round result, keeping final occupant roles separate from historical Zombie participation.
 - [x] **ROND-02**: A new round resets scores, bricks, spawns, shots, respawns, input queues, timers, and round-local effects before authoritative play resumes. Versioned round identity and a recoverable authorization/map/snapshot barrier prevent stale events or lost reset frames from reopening old state; intermission preserves both endpoint watchdogs.
 - [x] **ROND-03**: Atari presents loser vaporization, winner animation/vaporization, fade, and frozen results without disabling VBI, stopping network service, enabling DLI, or locally restarting the round.
-- [ ] **GRCE-01**: Voluntary leave releases a seat immediately, while unexpected loss of the final human preserves the room for a bounded grace period independent of round state.
+- [x] **GRCE-01**: Voluntary leave releases a seat immediately, while unexpected loss of the final human preserves the room for a bounded grace period independent of round state.
 - [ ] **CONF-01**: Public host, TCP room range, default port, Lobby base, appkey, and kill limit are validated build inputs that regenerate Atari constants/data.
 - [ ] **APKY-01**: Atari reads the shared Lobby username AppKey with bounded validation and manual fallback.
 - [ ] **APKY-02**: Atari reads/writes only a registered/configured Maze War selected-room AppKey and strictly validates its TCP URL against the build's public host/range.
 - [ ] **LOBY-01**: Lobby publication is opt-in, asynchronous to the 10 Hz simulation, publishes every room separately with human-only occupancy, and has bounded refresh/retry/shutdown behavior.
 - [ ] **LOBY-02**: Atari queries the QA Lobby using the pinned binary schema, parses records within a bounded reusable buffer, and displays only validated Maze War rooms.
-- [ ] **SWCH-01**: Atari voluntarily leaves, explicitly stops NetStream, verifies firmware connection cleanup, clears all connection/round state through one reusable reset path, and repeatedly joins the same or another room without stale state or a reboot.
+- [x] **SWCH-01**: Atari voluntarily leaves, explicitly stops NetStream, verifies firmware connection cleanup, clears all connection/round state through one reusable reset path, and repeatedly joins the same or another room without stale state or a reboot.
 - [ ] **PROD-01**: Production publication occurs only after QA lifecycle, external launch, repeated switching, and physical Atari/FujiNet checkpoints pass against the release candidate.
 
 ## Out of Scope
@@ -131,13 +131,13 @@
 | ROND-01 | Phase 8 | Complete |
 | ROND-02 | Phase 8 | Complete |
 | ROND-03 | Phase 8 | Complete |
-| GRCE-01 | Phase 8 | Pending |
+| GRCE-01 | Phase 8 | Complete |
 | CONF-01 | Phase 8 | Pending |
 | APKY-01 | Phase 8 | Pending |
 | APKY-02 | Phase 8 | Pending |
 | LOBY-01 | Phase 8 | Pending |
 | LOBY-02 | Phase 8 | Pending |
-| SWCH-01 | Phase 8 | Pending |
+| SWCH-01 | Phase 8 | Complete |
 | PROD-01 | Phase 8 | Pending |
 
 **Coverage:**
@@ -147,4 +147,4 @@
 
 ---
 *Requirements defined: 2026-04-07*
-*Last updated: 2026-09-12 for the Phase 08-05 mixed-hardware checkpoint and join safe-spawn/immediate-redraw follow-up*
+*Last updated: 2026-09-12 for accepted Phase 08-05 mixed-hardware leave/rejoin, safe-spawn, and immediate-redraw testing*

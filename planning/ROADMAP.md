@@ -202,7 +202,7 @@ Plans:
 **Depends on**: Phase 6; Phase 7 plans 07-01 through 07-04
 **Reference**: `ref/mazewar_lobby_rounds_implementation_plan.md`
 **Research**: `phases/08-lobby-rounds-polish/08-RESEARCH.md`
-**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-04 is hardware-accepted and 08-05 passed its broad mixed-hardware leave/rejoin checkpoint, with safe-spawn and immediate-sprite follow-ups awaiting focused acceptance.
+**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-05 is hardware-accepted, including safe-spawn and immediate-sprite redraw follow-ups.
 **Round boundary contract**: [08-PROTOCOL.md](phases/08-lobby-rounds-polish/08-PROTOCOL.md)
 **Success Criteria**:
   1. One server process runs isolated four-seat rooms on distinct TCP ports.
@@ -218,7 +218,7 @@ Plans:
 - [x] `08-02` — Encapsulate behavior in one Room, then add isolated multi-room TCP listeners. Accepted with two Ataris in one room and split across separate rooms.
 - [x] `08-03` — Add authoritative MATCH_END/ROUND_START protocol and complete round reset. Accepted in mixed real Atari/FujiNet and emulator testing, including reconnect, redraw, bullet-lifecycle, and idle-sound follow-ups, 2026-09-12.
 - [x] `08-04` — Add the nonblocking Atari/SDL round-end presentation and results. Accepted with human and Zombie wins, five-second dance, and eight-second result display on 2026-09-12.
-- [ ] `08-05` — Add voluntary leave acknowledgement, orthogonal no-human grace, and shared session teardown/reset.
+- [x] `08-05` — Add voluntary leave acknowledgement, orthogonal no-human grace, and shared session teardown/reset. Accepted on real Atari/FujiNet and emulator testing in two rooms.
 - [ ] `08-06` — Generate build configuration and replace the old title with title/direct-connect UI.
 - [ ] `08-07` — Add Lobby AppKeys, strict TCP URL validation, and startup routing.
 - [ ] `08-08` — Publish rooms asynchronously to QA Lobby with opt-in lifecycle management.
@@ -295,4 +295,4 @@ Phase 6 hardening freezes the baseline; Phase 8 makes it Lobby-releasable.
 | 4. Render-State Separation | 5/5 effective; 04-06 retracted | Closed as good enough for now after 2026-09-11 user testing; revisit bounded timed remote-sample playback if a future cloud-hosted server makes WAN latency visible | 2026-09-11 |
 | 6. Mixed-Session Validation and Hardening | 1/1 | Complete; user mixed-session acceptance | 2026-09-11 |
 | 7. Realtime Transport Reliability | 4/4 executable | Complete as scoped and merged; 07-05 remains a deferred, not-recommended design note | 2026-09-10 |
-| 8. Lobby and Round Polish | 4/11 | 08-05 leave/rejoin passed mixed hardware in two rooms; join safe-spawn/immediate-redraw follow-ups await focused acceptance | - |
+| 8. Lobby and Round Polish | 5/11 | 08-05 accepted on mixed real Atari/FujiNet and emulator testing in two rooms | 2026-09-12 |

@@ -85,11 +85,12 @@ NS_AVAIL	=	NS_BASE+18
 NS_STAT	=	NS_BASE+21
 NS_INIT	=	NS_BASE+27
 ;
+	icl	'build/maze-war-config.inc'
 NET_FLAGS	=	$05	;external TX, internal RX clock (TCP)
 NET_BAUD_LO	=	$00	;57600
 NET_BAUD_HI	=	$E1
-NET_PORT_LO	=	$23	;swap16(9000) -> $2823
-NET_PORT_HI	=	$28
+NET_PORT_LO	=	CFG_DEFAULT_PORT_A	;9000 -> $23/$28; generated build default
+NET_PORT_HI	=	CFG_DEFAULT_PORT_X
 NET_FRAME_DIV	=	6	;10 Hz at 60 FPS, matching the server tick.  The
 			;server applies one queued input per tick and sets
 			;neutral when the queue is empty, so slower pacing
@@ -543,6 +544,7 @@ INITPSK	LDA	#$01
 	STA	HOST_MSG	;AND A FULL NS_INIT ATTEMPT BUDGET
 	STA	HOST_MSG+1
 	STA	NET_INIT_TRY
+	JSR	UI_CONFIG_DEFAULTS
 	JSR	HOST_BOOT
 	LDA	#1
 	STA	HOST_DONE
@@ -2701,6 +2703,173 @@ NET_FW_CLOSE
 	STA	DAUX2
 	JSR	SIOV
 	RTS
+
+; ---------------------------------------------------------------------------
+; Reachable title and Direct Connect flow. This lives in the measured high-code
+; reserve because the reclaimed $8042-$81EF allocation is occupied by the
+; persistent round transition decoder. HOSTSCR is the only title/setup surface.
+; ---------------------------------------------------------------------------
+UI_CONFIG_DEFAULTS
+	LDY	#0
+UCD_HOST	LDA	CFG_HOST,Y
+	STA	HOSTBUF,Y
+	BEQ	UCD_PORT
+	INY
+	CPY	#HOST_MAX+1
+	BCC	UCD_HOST
+UCD_PORT	LDY	#0
+UCD_PORTCP	LDA	CFG_PORT_TEXT,Y
+	STA	PORTBUF,Y
+	BEQ	UCD_NAME
+	INY
+	CPY	#PORT_MAX+1
+	BCC	UCD_PORTCP
+UCD_NAME	LDA	#0
+	STA	NAMEBUF
+	LDA	#CFG_DEFAULT_PORT_A
+	STA	NET_PORT_ARG_A
+	LDA	#CFG_DEFAULT_PORT_X
+	STA	NET_PORT_ARG_X
+	RTS
+
+UI_HOST_BOOT
+	LDA	#$40		;menu-safe while HOSTSCR owns the display
+	STA	NMIEN
+	LDA	CHBASE
+	STA	HOST_CHSAV
+	LDA	#$E0		;ROM character set for host, port, and title text
+	STA	CHBASE
+UHB_TITLE
+	LDA	# <HOSTDISP
+	STA	DLIST
+	LDA	# >HOSTDISP
+	STA	DLIST+1
+	JSR	UI_TITLE_DRAW
+UHB_WAIT
+	LDA	CONSOL
+	AND	#$04		;OPTION is active low
+	BNE	UHB_KEY
+UHB_RELEASE
+	LDA	CONSOL
+	AND	#$04
+	BEQ	UHB_RELEASE	;one setup action per press
+	JSR	HOST_SETUP
+	JMP	UHB_TITLE
+UHB_KEY	LDA	KEYIN
+	CMP	#$FF
+	BEQ	UHB_WAIT
+	TAY
+	LDA	#$FF
+	STA	KEYIN
+	LDA	(KEYCODES),Y
+	CMP	#$9B		;RETURN starts Direct Connect using the saved port bytes
+	BNE	UHB_WAIT
+	LDA	HOST_CHSAV
+	STA	CHBASE
+	RTS
+
+UI_TITLE_DRAW
+	JSR	HOST_CLR
+	; Name field doubles as the title's username line and keeps the existing
+	; conversion/bounds behavior used by the editor.
+	JSR	NAME_FIELD
+	JSR	TXT_DRAW
+	LDA	# <TITLE_HEAD
+	STA	HOST_MPTR
+	LDA	# >TITLE_HEAD
+	STA	HOST_MPTR+1
+	LDA	# <HOSTSCR
+	STA	SCRPTR
+	LDA	# >HOSTSCR
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	LDA	# <TITLE_FIRST
+	STA	HOST_MPTR
+	LDA	# >TITLE_FIRST
+	STA	HOST_MPTR+1
+	LDA	# <[HOSTSCR+240]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+240]
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	LDA	CFG_KILL_LIMIT
+	CMP	#10
+	BCC	UTD_ONE
+	LDA	#'1'
+	JSR	HOST_SCR
+	LDY	#0
+	STA	(SCRPTR),Y
+	JSR	UI_PTR_INC
+	LDA	#'0'
+	BNE	UTD_DRAW
+UTD_ONE	CLC
+	ADC	#'0'
+UTD_DRAW	JSR	HOST_SCR
+	LDY	#0
+	STA	(SCRPTR),Y
+	JSR	UI_PTR_INC
+UTD_SUFFIX
+	LDA	# <TITLE_KILLS
+	STA	HOST_MPTR
+	LDA	# >TITLE_KILLS
+	STA	HOST_MPTR+1
+	JSR	UI_PUT
+	LDA	# <TITLE_RETURN
+	STA	HOST_MPTR
+	LDA	# >TITLE_RETURN
+	STA	HOST_MPTR+1
+	LDA	# <[HOSTSCR+320]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+320]
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	LDA	# <TITLE_OPTION
+	STA	HOST_MPTR
+	LDA	# >TITLE_OPTION
+	STA	HOST_MPTR+1
+	LDA	# <[HOSTSCR+400]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+400]
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	JSR	HOST_MSGDRAW	;preserves failed-connect diagnostics on the title
+	RTS
+
+; Copy one $FF-terminated ROM-screen-code string to SCRPTR.
+UI_PUT
+	LDY	#0
+UIP_LOOP
+	LDA	(HOST_MPTR),Y
+	CMP	#$FF
+	BEQ	UIP_DONE
+	STA	(SCRPTR),Y
+	INY
+	BNE	UIP_LOOP
+UIP_DONE	TYA
+	CLC
+	ADC	SCRPTR
+	STA	SCRPTR
+	BCC	UIP_X
+	INC	SCRPTR+1
+UIP_X
+	RTS
+
+UI_PTR_INC
+	INC	SCRPTR
+	BNE	UIP_X
+	INC	SCRPTR+1
+	RTS
+
+TITLE_HEAD	.BYTE	"FUJINET MAZE WAR",$FF
+TITLE_FIRST	.BYTE	"FIRST TO ",$FF
+TITLE_KILLS	.BYTE	" KILLS WINS",$FF
+TITLE_RETURN	.BYTE	"RETURN: PLAY",$FF
+TITLE_OPTION	.BYTE	"OPTION: SERVER SETUP",$FF
+
+; This generated data is intentionally in the high-code segment, whose
+; $8400-$8BFF bound is checked by memory_layout_smoke.sh. It stays immutable;
+; UI_CONFIG_DEFAULTS copies only host/port defaults to the mutable buffers.
+	icl	'build/maze-war-config-data.inc'
 NET_HIGH_CODE_END
 	ORG	CORE_DISPATCH_CONT
 NET_RX_40DONE
@@ -5038,6 +5207,8 @@ HI_LOOP	JSR	TXT_CURSOR
 	LDA	(KEYCODES),Y
 	CMP	#$9B	;RETURN
 	BEQ	HI_DONE
+	CMP	#$1B	;ESC cancels setup without attempting a connection
+	BEQ	HI_CANCEL
 	CMP	#$7E	;BACKSPACE
 	BEQ	HI_BS
 	CMP	#$08
@@ -5093,6 +5264,11 @@ HI_BS	LDY	HOSTLEN
 	JSR	TXT_DRAW
 	JMP	HI_LOOP
 HI_DONE	JSR	TXT_CUROFF	;do not leave a block on the field we are leaving
+	CLC
+	RTS
+HI_CANCEL
+	JSR	TXT_CUROFF
+	SEC
 	RTS
 ;
 ; Blink a block at the insertion point so the player can see where typing goes.
@@ -5315,16 +5491,12 @@ PP_DONE	CPY	#0
 PP_BAD	SEC
 	RTS
 ;
-HOST_BOOT	LDA	#$40	;DISABLE DLI
-	STA	NMIEN
-	LDA	CHBASE
-	STA	HOST_CHSAV
-	LDA	#$E0	;ROM charset
-	STA	CHBASE
-	LDA	# <HOSTDISP	;HOST INPUT SCREEN
-	STA	DLIST
-	LDA	# >HOSTDISP
-	STA	DLIST+1
+HOST_BOOT	JMP	UI_HOST_BOOT
+;
+; The title calls this setup editor after switching to HOSTDISP and the ROM
+; charset. It returns carry set for ESC so the title can be restored without
+; a connection attempt.
+HOST_SETUP
 	JSR	HOST_CLR
 	JSR	HOST_MSGDRAW
 	JSR	NAME_FIELD	;paint the name field so both are visible
@@ -5333,9 +5505,11 @@ HOST_BOOT	LDA	#$40	;DISABLE DLI
 	JSR	TXT_DRAW
 	JSR	HOST_FIELD
 	JSR	TXT_INPUT
+	BCS	HB_CANCEL
 	; Invalid numeric input stays on the port field with a useful status line.
 HB_PORT	JSR	PORT_FIELD
 	JSR	TXT_INPUT
+	BCS	HB_CANCEL
 	JSR	PORT_PARSE
 	BCC	HB_PORT_OK
 	LDA	# <MSG_BADPORT
@@ -5351,8 +5525,11 @@ HB_PORT_OK
 	JSR	HOST_MSGDRAW
 	JSR	NAME_FIELD
 	JSR	TXT_INPUT
-	LDA	HOST_CHSAV
-	STA	CHBASE
+	BCS	HB_CANCEL
+	CLC
+	RTS
+HB_CANCEL
+	SEC
 	RTS
 ;
 HOST_CLR	LDY	#0

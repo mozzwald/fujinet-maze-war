@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: 2026-09-12 - Phase 08-05 leave/rejoin passed mixed Atari/FujiNet and emulator testing in two rooms with and without Zombies. Safe vacant-seat spawn and immediate Atari join-redraw follow-ups await focused hardware acceptance.
+stopped_at: 2026-09-12 - Phase 08-05 leave/rejoin, safe vacant-seat spawn, and immediate Atari join-redraw passed real Atari/FujiNet and emulator testing. Phase 08-06 build configuration and title/direct-connect UI is active.
 last_updated: "2026-09-12T00:00:00.000Z"
 progress:
   total_phases: 9
@@ -19,14 +19,11 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** Phase 08-05 leave/rejoin passed on real Atari/FujiNet and
-emulation across two simultaneous rooms with and without Zombies. Focused
-retest remains for the follow-up join fixes: a vacant seat now gets a
-collision-safe spawn, the server publishes an immediate final `RESPAWN`, and
-Atari forces a PM redraw as soon as the seat fills. GRCE-01, SWCH-01, and 08-05
-remain open until that sprite/overlap retest passes. Bounded timed remote-sample
-playback remains the first revisit if future cloud-hosted WAN testing makes
-remote movement worse.
+**Current focus:** Phase 08-06 build configuration and title/direct-connect UI.
+Phase 08-05 is accepted: the focused real Atari/FujiNet and emulator retest
+confirmed collision-safe vacant-seat respawns and immediate PM redraw when a
+player joins. Bounded timed remote-sample playback remains the first revisit
+if future cloud-hosted WAN testing makes remote movement worse.
 
 ## Current branch: a8-net-fix (2026-09-12)
 
