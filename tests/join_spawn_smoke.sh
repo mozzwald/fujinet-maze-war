@@ -176,6 +176,11 @@ with tempfile.TemporaryDirectory() as tmp:
             spawn = (immediate[-1][1], immediate[-1][2])
             if spawn == observer.players[0]:
                 fail(f"rejoining player spawned on observer at {spawn}")
+            spawn_distance = (abs(spawn[0] - observer.players[0][0]) +
+                              abs(spawn[1] - observer.players[0][1]))
+            if spawn_distance < 8:
+                fail(f"rejoining player spawned only {spawn_distance} cells "
+                     f"from observer at {spawn}")
             if rejoin.players[rejoin.pid] != spawn:
                 fail("rejoin snapshot and immediate RESPAWN disagree")
 

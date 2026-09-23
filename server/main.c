@@ -117,21 +117,64 @@ enum {
   RELIABLE_FAST_MS = 75
 };
 
-#define ZOMBIE_THINK_MS 575
-#define ZOMBIE_MOVE_MS 275
-#define ZOMBIE_FIRE_MS 900
+/* Zombie AI is wholly server-side. Keep all pacing and reaction controls here
+   so tuning changes neither the Atari client nor the wire protocol. */
+#define ZOMBIE_SERVER_TICK_MS 100
+#define ZOMBIE_MOVE_INTERVAL_MS 200
+#define ZOMBIE_DECISION_MIN_MOVES 3
+#define ZOMBIE_DECISION_MAX_MOVES 7
+/* A blocked move already consumes one tick. Delay one further tick before the
+   next attempt, simulating a player correcting the joystick at a wall. */
+#define ZOMBIE_WALL_HESITATE_MS \
+  (ZOMBIE_MOVE_INTERVAL_MS + ZOMBIE_SERVER_TICK_MS)
+#define ZOMBIE_FIRE_WINDUP_MIN_MS 200
+#define ZOMBIE_FIRE_WINDUP_SPREAD_MS 100
+#define ZOMBIE_FIRE_COOLDOWN_MS 900
+#define ZOMBIE_BRICK_FIRE_COOLDOWN_MS 3000
+#define ZOMBIE_BRICK_FIRE_CHANCE_DENOMINATOR 3
+/* A brick shot is deliberately uncommon: it is considered only after a
+   blocked move, then has a one-in-three chance and a long per-zombie
+   cooldown. */
+#define ZOMBIE_BRICK_FIRE_STUCK_MOVES 1
+#define ZOMBIE_INITIAL_PHASE_TICKS 3
+#define SPAWN_MIN_DISTANCE 8
 
 struct player_state {
   uint8_t x;
   uint8_t y;
   uint8_t joy;
   uint8_t score;
-  uint8_t zombie_fire_pending;
   uint64_t respawn_at_ms;
-  uint64_t zombie_think_next_ms;
   uint64_t zombie_move_next_ms;
   uint64_t zombie_fire_next_ms;
+  uint64_t zombie_fire_windup_until_ms;
+  uint64_t zombie_brick_fire_next_ms;
+  uint8_t zombie_dir;
+  uint8_t zombie_last_dir;
+  uint8_t zombie_commit_moves_left;
+  uint8_t zombie_fire_target;
+  uint8_t zombie_brick_fire_pending;
+  uint8_t zombie_brick_fire_dir;
+  uint8_t zombie_stuck_moves;
 };
+
+static void reset_zombie_schedule(struct player_state *player, uint64_t now) {
+  player->zombie_move_next_ms =
+      now + ZOMBIE_SERVER_TICK_MS +
+      (uint64_t)(rand() % ZOMBIE_INITIAL_PHASE_TICKS) * ZOMBIE_SERVER_TICK_MS;
+  /* The first aligned lane gets the short windup below; cooldown begins only
+     after a real shot is released. */
+  player->zombie_fire_next_ms = now;
+  player->zombie_fire_windup_until_ms = 0;
+  player->zombie_brick_fire_next_ms = now;
+  player->zombie_dir = 0xFF;
+  player->zombie_last_dir = 0xFF;
+  player->zombie_commit_moves_left = 0;
+  player->zombie_fire_target = 0xFF;
+  player->zombie_brick_fire_pending = 0;
+  player->zombie_brick_fire_dir = 0xFF;
+  player->zombie_stuck_moves = 0;
+}
 
 struct shot_state {
   int active;
@@ -907,29 +950,63 @@ static int is_player_at(const struct room *room, int x, int y, int ignore_idx) {
   return 0;
 }
 
+static int spawn_nearest_actor_distance(const struct room *room, int x,
+                                        int y) {
+  int nearest = INT_MAX;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (!slot_on_board(room, i)) {
+      continue;
+    }
+    int distance = abs(x - (int)room->players[i].x) +
+                   abs(y - (int)room->players[i].y);
+    if (distance < nearest) {
+      nearest = distance;
+    }
+  }
+  return nearest;
+}
+
+static int spawn_cell_is_free(const struct room *room, int x, int y) {
+  return !is_brick(room->brick_bits, x, y) &&
+         !is_player_at(room, x, y, -1);
+}
+
 static void pick_spawn(const struct room *room, uint8_t *out_x,
                        uint8_t *out_y) {
-  const uint8_t *bricks = room->brick_bits;
+  /* Prefer a random legal cell at least eight Manhattan cells from every
+     active player or zombie. Respawns, new joins, and round starts all use
+     this same chooser, so a player never begins a round beside a live bot. */
   for (int tries = 0; tries < 200; tries++) {
     int x = rand() % 20;
     int y = rand() % 19;
-    if (!is_brick(bricks, x, y) && !is_player_at(room, x, y, -1)) {
+    if (spawn_cell_is_free(room, x, y) &&
+        spawn_nearest_actor_distance(room, x, y) >= SPAWN_MIN_DISTANCE) {
       *out_x = (uint8_t)x;
       *out_y = (uint8_t)y;
       return;
     }
   }
+
+  /* Small or crowded maps cannot always honor eight cells. Choose the legal
+     cell farthest from its nearest on-board actor, preserving no-overlap even
+     when the preferred distance is impossible. */
+  int best_distance = -1;
+  int best_x = 0, best_y = 0;
   for (int y = 0; y < 19; y++) {
     for (int x = 0; x < 20; x++) {
-      if (!is_brick(bricks, x, y) && !is_player_at(room, x, y, -1)) {
-        *out_x = (uint8_t)x;
-        *out_y = (uint8_t)y;
-        return;
+      if (!spawn_cell_is_free(room, x, y)) {
+        continue;
+      }
+      int distance = spawn_nearest_actor_distance(room, x, y);
+      if (distance > best_distance) {
+        best_distance = distance;
+        best_x = x;
+        best_y = y;
       }
     }
   }
-  *out_x = 0;
-  *out_y = 0;
+  *out_x = (uint8_t)best_x;
+  *out_y = (uint8_t)best_y;
 }
 
 /* Give a slot a clean actor when it changes hands in either direction: human
@@ -958,13 +1035,10 @@ static void reset_slot_gameplay(struct room *room, int slot, uint64_t now) {
   }
   players[slot].joy = 0x0F; /* neutral: no inherited facing or movement */
   players[slot].score = 0;
-  players[slot].zombie_fire_pending = 0;
   /* Zombie schedules are absolute timestamps. A stale one is already in the
      past, which would make the backfilled zombie think, move and fire on its
      very first tick instead of settling into its normal cadence. */
-  players[slot].zombie_think_next_ms = now;
-  players[slot].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
-  players[slot].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
+  reset_zombie_schedule(&players[slot], now);
   room->last_input_ms[slot] = 0;
 }
 
@@ -1564,6 +1638,30 @@ static int dir_free(uint8_t dir, const struct room *room, int idx) {
   return 1;
 }
 
+/* A player collision is a live obstacle that may clear on the next tick. A
+   brick or outer-wall attempt is different: the zombie chose a bad joystick
+   direction, so let that mistake cost one additional movement interval. */
+static int zombie_attempts_brick(const struct room *room, int idx,
+                                 uint8_t joy) {
+  int dx = 0, dy = 0;
+  if (!stick_to_cardinal_delta((uint8_t)(joy & 0x0F), &dx, &dy)) {
+    return 0;
+  }
+  return is_brick(room->brick_bits, (int)room->players[idx].x + dx,
+                  (int)room->players[idx].y + dy);
+}
+
+static int zombie_attempts_breakable_brick(const struct room *room, int idx,
+                                           uint8_t joy) {
+  int dx = 0, dy = 0;
+  if (!stick_to_cardinal_delta((uint8_t)(joy & 0x0F), &dx, &dy)) {
+    return 0;
+  }
+  int x = (int)room->players[idx].x + dx;
+  int y = (int)room->players[idx].y + dy;
+  return !is_outer_wall_cell(x, y) && is_brick(room->brick_bits, x, y);
+}
+
 static int clear_row_shot(const uint8_t *bricks, int y, int x0, int x1) {
   if (x0 == x1) {
     return 1;
@@ -1590,15 +1688,19 @@ static int clear_col_shot(const uint8_t *bricks, int x, int y0, int y1) {
   return 1;
 }
 
-static void zombie_ai(struct room *room, int idx,
-                      const uint8_t *human_mask) {
-  struct player_state *players = room->players;
+/* Return the closest living human that can currently be shot in a straight,
+   unbroken row or column. The target identity is retained through windup and
+   rechecked before the shot is released. */
+static int zombie_find_shot_target(const struct room *room, int idx,
+                                   const uint8_t *human_mask,
+                                   int *out_target, uint8_t *out_dir) {
+  const struct player_state *players = room->players;
   const uint8_t *bricks = room->brick_bits;
   uint8_t zx = players[idx].x;
   uint8_t zy = players[idx].y;
-  players[idx].zombie_fire_pending = 0;
-
-  // Shoot if any player is in same row
+  int best = -1;
+  int best_distance = INT_MAX;
+  uint8_t best_dir = 0xFF;
   for (int p = 0; p < MAX_PLAYERS; p++) {
     if (!human_mask[p] || p == idx || players[p].respawn_at_ms != 0) {
       continue;
@@ -1606,26 +1708,61 @@ static void zombie_ai(struct room *room, int idx,
     if (players[p].y == zy &&
         clear_row_shot(bricks, (int)zy, (int)zx, (int)players[p].x)) {
       uint8_t dir = (players[p].x > zx) ? 0 : 2;
-      players[idx].joy = stick_from_dir(dir);
-      players[idx].zombie_fire_pending = 1;
-      return;
-    }
-  }
-  // Shoot if any player is in same column
-  for (int p = 0; p < MAX_PLAYERS; p++) {
-    if (!human_mask[p] || p == idx || players[p].respawn_at_ms != 0) {
-      continue;
+      int distance = abs((int)players[p].x - (int)zx);
+      if (distance < best_distance) {
+        best = p;
+        best_distance = distance;
+        best_dir = dir;
+      }
     }
     if (players[p].x == zx &&
         clear_col_shot(bricks, (int)zx, (int)zy, (int)players[p].y)) {
       uint8_t dir = (players[p].y > zy) ? 1 : 3;
-      players[idx].joy = stick_from_dir(dir);
-      players[idx].zombie_fire_pending = 1;
-      return;
+      int distance = abs((int)players[p].y - (int)zy);
+      if (distance < best_distance) {
+        best = p;
+        best_distance = distance;
+        best_dir = dir;
+      }
     }
   }
+  if (best < 0) return 0;
+  *out_target = best;
+  *out_dir = best_dir;
+  return 1;
+}
 
-  // Find nearest player (Manhattan)
+static int zombie_shot_target_valid(const struct room *room, int idx,
+                                    const uint8_t *human_mask, int target,
+                                    uint8_t *out_dir) {
+  const struct player_state *players = room->players;
+  if (target < 0 || target >= MAX_PLAYERS || !human_mask[target] ||
+      players[target].respawn_at_ms != 0) {
+    return 0;
+  }
+  if (players[target].y == players[idx].y &&
+      clear_row_shot(room->brick_bits, players[idx].y, players[idx].x,
+                     players[target].x)) {
+    *out_dir = players[target].x > players[idx].x ? 0 : 2;
+    return 1;
+  }
+  if (players[target].x == players[idx].x &&
+      clear_col_shot(room->brick_bits, players[idx].x, players[idx].y,
+                     players[target].y)) {
+    *out_dir = players[target].y > players[idx].y ? 1 : 3;
+    return 1;
+  }
+  return 0;
+}
+
+/* Select one sensible pursuit direction and commit to it for several move
+   opportunities. We only avoid a direct reversal when another toward-target
+   direction is open; a boxed-in zombie may still reverse to escape. */
+static uint8_t zombie_choose_pursuit_dir(const struct room *room, int idx,
+                                         const uint8_t *human_mask) {
+  const struct player_state *players = room->players;
+  uint8_t zx = players[idx].x;
+  uint8_t zy = players[idx].y;
   int best = -1;
   int best_dist = 0x7FFF;
   int best_dx = 0;
@@ -1646,38 +1783,45 @@ static void zombie_ai(struct room *room, int idx,
       best_dy = dy;
     }
   }
-  if (best < 0) {
-    players[idx].joy = 0x0F;
-    return;
-  }
+  if (best < 0) return 0xFF;
 
   uint8_t dir_x = (best_dx > 0) ? 2 : 0;
   uint8_t dir_y = (best_dy > 0) ? 3 : 1;
-
-  // Choose longer axis first, then try short; else shoot out wall
+  uint8_t choices[2];
+  int count = 0;
   if (abs(best_dy) >= abs(best_dx)) {
-    if (dir_free(dir_y, room, idx)) {
-      players[idx].joy = stick_from_dir(dir_y);
-      return;
+    if (best_dy != 0) choices[count++] = dir_y;
+    if (best_dx != 0) choices[count++] = dir_x;
+  } else {
+    if (best_dx != 0) choices[count++] = dir_x;
+    if (best_dy != 0) choices[count++] = dir_y;
+  }
+  if (count == 0) return 0xFF;
+  uint8_t reverse = players[idx].zombie_last_dir ^ 0x02;
+  for (int pass = 0; pass < 2; pass++) {
+    for (int c = 0; c < count; c++) {
+      uint8_t dir = choices[c];
+      if (pass == 0 && players[idx].zombie_last_dir != 0xFF &&
+          dir == reverse) {
+        continue;
+      }
+      if (dir_free(dir, room, idx)) return dir;
     }
-    if (dir_free(dir_x, room, idx)) {
-      players[idx].joy = stick_from_dir(dir_x);
-      return;
+  }
+  /* The direct lane is blocked. Take a legal side route before repeatedly
+     pushing into that brick; the next commitment will reacquire from there. */
+  for (int pass = 0; pass < 2; pass++) {
+    for (uint8_t dir = 0; dir < 4; dir++) {
+      if (pass == 0 && players[idx].zombie_last_dir != 0xFF &&
+          dir == reverse) {
+        continue;
+      }
+      if (dir_free(dir, room, idx)) return dir;
     }
-    players[idx].joy = stick_from_dir(dir_y);
-    players[idx].zombie_fire_pending = 1;
-    return;
   }
-  if (dir_free(dir_x, room, idx)) {
-    players[idx].joy = stick_from_dir(dir_x);
-    return;
-  }
-  if (dir_free(dir_y, room, idx)) {
-    players[idx].joy = stick_from_dir(dir_y);
-    return;
-  }
-  players[idx].joy = stick_from_dir(dir_x);
-  players[idx].zombie_fire_pending = 1;
+  /* Keep the primary desired direction for one real blocked attempt. The
+     wall-hesitation path then expires this commitment and reacquires. */
+  return choices[0];
 }
 
 static void apply_move_if_free(struct room *room, int idx) {
@@ -2035,10 +2179,7 @@ static void step_players(struct room *room, int debug) {
       players[i].y = sy;
       players[i].respawn_at_ms = 0;
       players[i].joy = 0x0F;
-      players[i].zombie_fire_pending = 0;
-      players[i].zombie_think_next_ms = now;
-      players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
-      players[i].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
+      reset_zombie_schedule(&players[i], now);
       uint8_t pkt[RESPAWN_LEN];
       build_respawn((*seq)++, (uint8_t)i, sx, sy, 0x03, room->round_id, pkt,
                     sizeof(pkt));
@@ -2086,19 +2227,87 @@ static void step_players(struct room *room, int debug) {
     uint8_t action_joy = players[i].joy;
     int can_move = can_act;
     if (zombie_mask[i] && can_act) {
-      if (now >= players[i].zombie_think_next_ms) {
-        zombie_ai(room, i, human_mask);
-        players[i].zombie_think_next_ms = now + ZOMBIE_THINK_MS;
-      }
-      action_joy = players[i].joy;
-      if (players[i].zombie_fire_pending &&
-          now >= players[i].zombie_fire_next_ms) {
-        action_joy |= 0x10;
-        players[i].zombie_fire_pending = 0;
-        players[i].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
-      }
-      if (now < players[i].zombie_move_next_ms) {
-        can_move = 0;
+      struct player_state *zombie = &players[i];
+      action_joy = 0x0F;
+      can_move = 0;
+
+      if (zombie->zombie_fire_windup_until_ms != 0) {
+        uint8_t fire_dir = 0xFF;
+        if (!zombie_shot_target_valid(room, i, human_mask,
+                                      zombie->zombie_fire_target, &fire_dir)) {
+          if (debug) {
+            printf("zombie fire cancel slot=%d target=%u\n", i,
+                   (unsigned)zombie->zombie_fire_target);
+          }
+          zombie->zombie_fire_windup_until_ms = 0;
+          zombie->zombie_fire_target = 0xFF;
+          zombie->zombie_commit_moves_left = 0;
+        } else if (now >= zombie->zombie_fire_windup_until_ms) {
+          action_joy = (uint8_t)(stick_from_dir(fire_dir) | 0x10);
+          zombie->zombie_fire_windup_until_ms = 0;
+          zombie->zombie_fire_target = 0xFF;
+          zombie->zombie_fire_next_ms = now + ZOMBIE_FIRE_COOLDOWN_MS;
+          zombie->zombie_last_dir = fire_dir;
+          if (debug) {
+            printf("zombie fire release slot=%d dir=%u\n", i,
+                   (unsigned)fire_dir);
+          }
+        }
+      } else {
+        int shot_target = -1;
+        uint8_t shot_dir = 0xFF;
+        if (!room->shots[i].active && now >= zombie->zombie_fire_next_ms &&
+            zombie_find_shot_target(room, i, human_mask, &shot_target,
+                                    &shot_dir)) {
+          zombie->zombie_fire_target = (uint8_t)shot_target;
+          zombie->zombie_fire_windup_until_ms =
+              now + ZOMBIE_FIRE_WINDUP_MIN_MS +
+              (uint64_t)(rand() % (ZOMBIE_FIRE_WINDUP_SPREAD_MS + 1));
+          zombie->joy = stick_from_dir(shot_dir);
+          if (debug) {
+            printf("zombie fire windup slot=%d target=%d ms=%llu\n", i,
+                   shot_target,
+                   (unsigned long long)(zombie->zombie_fire_windup_until_ms - now));
+          }
+        } else if (zombie->zombie_brick_fire_pending) {
+          uint8_t brick_dir = zombie->zombie_brick_fire_dir;
+          uint8_t brick_joy = stick_from_dir(brick_dir);
+          /* Recheck at release time. Another shot may have cleared the brick,
+             or this zombie may still have its earlier projectile in flight. */
+          zombie->zombie_brick_fire_pending = 0;
+          if (!room->shots[i].active &&
+              zombie_attempts_breakable_brick(room, i, brick_joy)) {
+            action_joy = (uint8_t)(brick_joy | 0x10);
+            zombie->joy = brick_joy;
+            zombie->zombie_brick_fire_next_ms =
+                now + ZOMBIE_BRICK_FIRE_COOLDOWN_MS;
+            if (debug) {
+              printf("zombie brick fire slot=%d dir=%u\n", i,
+                     (unsigned)brick_dir);
+            }
+          }
+        } else if (now >= zombie->zombie_move_next_ms) {
+          if (zombie->zombie_commit_moves_left == 0 ||
+              zombie->zombie_dir == 0xFF) {
+            zombie->zombie_dir = zombie_choose_pursuit_dir(room, i, human_mask);
+            zombie->zombie_commit_moves_left =
+                zombie->zombie_dir == 0xFF
+                    ? 0
+                    : (uint8_t)(ZOMBIE_DECISION_MIN_MOVES +
+                                rand() % (ZOMBIE_DECISION_MAX_MOVES -
+                                          ZOMBIE_DECISION_MIN_MOVES + 1));
+            if (debug && zombie->zombie_dir != 0xFF) {
+              printf("zombie pursue slot=%d dir=%u moves=%u\n", i,
+                     (unsigned)zombie->zombie_dir,
+                     (unsigned)zombie->zombie_commit_moves_left);
+            }
+          }
+          if (zombie->zombie_dir != 0xFF) {
+            action_joy = stick_from_dir(zombie->zombie_dir);
+            zombie->joy = action_joy;
+            can_move = 1;
+          }
+        }
       }
     }
     uint8_t stick = (uint8_t)(action_joy & 0x0F);
@@ -2129,7 +2338,40 @@ static void step_players(struct room *room, int debug) {
           }
         }
         if (zombie_mask[i]) {
-          players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
+          players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_INTERVAL_MS;
+          if (players[i].x == before_x && players[i].y == before_y &&
+              zombie_attempts_brick(room, i, action_joy)) {
+            players[i].zombie_move_next_ms = now + ZOMBIE_WALL_HESITATE_MS;
+            players[i].zombie_commit_moves_left = 0;
+            if (zombie_attempts_breakable_brick(room, i, action_joy)) {
+              if (players[i].zombie_stuck_moves < 0xFF) {
+                players[i].zombie_stuck_moves++;
+              }
+              if (!players[i].zombie_brick_fire_pending &&
+                  !room->shots[i].active &&
+                  players[i].zombie_stuck_moves >=
+                      ZOMBIE_BRICK_FIRE_STUCK_MOVES &&
+                  now >= players[i].zombie_brick_fire_next_ms &&
+                  rand() % ZOMBIE_BRICK_FIRE_CHANCE_DENOMINATOR == 0) {
+                players[i].zombie_brick_fire_pending = 1;
+                players[i].zombie_brick_fire_dir = players[i].zombie_dir;
+                if (debug) {
+                  printf("zombie brick fire pending slot=%d dir=%u\n", i,
+                         (unsigned)players[i].zombie_brick_fire_dir);
+                }
+              }
+            }
+          } else if (players[i].x != before_x || players[i].y != before_y) {
+            players[i].zombie_last_dir = players[i].zombie_dir;
+            players[i].zombie_stuck_moves = 0;
+            if (players[i].zombie_commit_moves_left > 0) {
+              players[i].zombie_commit_moves_left--;
+            }
+          } else {
+            /* A live actor may have stepped into the committed route. Do not
+               keep walking into it for the remainder of this decision. */
+            players[i].zombie_commit_moves_left = 0;
+          }
         }
       } else if (debug && can_move && trig && stick != 0x0F) {
         char detail[96];
@@ -2260,10 +2502,7 @@ static void reset_round(struct room *room, uint64_t now, int debug) {
     player->joy = 0x0F;
     player->score = 0;
     player->respawn_at_ms = 0;
-    player->zombie_fire_pending = 0;
-    player->zombie_think_next_ms = now;
-    player->zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
-    player->zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
+    reset_zombie_schedule(player, now);
     room->last_input_ms[i] = 0;
     room->clients[i].have_delta_seq = 0;
     room->clients[i].have_applied_input_seq = 0;
@@ -2541,9 +2780,7 @@ static int init_room(struct room *room, const struct room_config *config,
     room->players[i].x = sx;
     room->players[i].y = sy;
     room->players[i].joy = 0x0F;
-    room->players[i].zombie_think_next_ms = now;
-    room->players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
-    room->players[i].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
+    reset_zombie_schedule(&room->players[i], now);
   }
   room->tick_ms = 1000ULL / (uint64_t)config->tick_hz;
   if (room->tick_ms == 0) {

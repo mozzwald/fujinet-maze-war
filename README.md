@@ -203,7 +203,14 @@ During mixed-session debugging, start the server with `--debug` and capture both
   vacant seat receives a fresh collision-safe position; a live Zombie handoff
   keeps its existing position.
 - AI zombies are simulated on the server in unused slots (globally configurable
-  with `--zombies`, or per room with `--room-zombies`).
+  with `--zombies`, or per room with `--room-zombies`). Each zombie commits to
+  a pursuit direction for several moves, travels at roughly 4–5 cells per
+  second, and takes a legal side route when its direct pursuit lane is blocked.
+  A trapped zombie retains the wall hesitation and may occasionally shoot an
+  adjacent non-outer brick, under a per-zombie cooldown. Aligned player shots
+  use a server-side windup that is cancelled when the target leaves the firing
+  lane. Spawns prefer a Manhattan distance of at least eight cells from every
+  active player or zombie.
 - A server process may host isolated rooms on consecutive TCP ports; the
   listener port selects the room and the gameplay packet format stays the same.
 - The Atari and Linux clients speak the same protocol, so both can connect to

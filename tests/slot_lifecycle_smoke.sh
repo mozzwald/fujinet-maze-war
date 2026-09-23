@@ -229,13 +229,33 @@ for needle in \
     'shots[slot].clear_burst = 3' \
     'players[slot].joy = 0x0F' \
     'players[slot].score = 0' \
-    'players[slot].zombie_fire_pending = 0' \
-    'zombie_think_next_ms = now' \
+    'reset_zombie_schedule(&players[slot], now)' \
     'last_input_ms[slot] = 0'
 do
     case "$reset_body" in
         *"$needle"*) ;;
         *) echo "FAIL: reset_slot_gameplay no longer does: $needle" >&2; exit 1 ;;
+    esac
+done
+
+# A handoff must re-base every AI decision, movement, and firing latch so the
+# new owner cannot inherit a route commitment or an overdue windup.
+sched_body=$(sed -n '/^static void reset_zombie_schedule/,/^}/p' "$SERVER_SRC")
+for needle in \
+    'zombie_move_next_ms =' \
+    'zombie_fire_next_ms = now' \
+    'zombie_fire_windup_until_ms = 0' \
+    'zombie_brick_fire_next_ms = now' \
+    'zombie_dir = 0xFF' \
+    'zombie_commit_moves_left = 0' \
+    'zombie_fire_target = 0xFF' \
+    'zombie_brick_fire_pending = 0' \
+    'zombie_brick_fire_dir = 0xFF' \
+    'zombie_stuck_moves = 0'
+do
+    case "$sched_body" in
+        *"$needle"*) ;;
+        *) echo "FAIL: reset_zombie_schedule no longer does: $needle" >&2; exit 1 ;;
     esac
 done
 
