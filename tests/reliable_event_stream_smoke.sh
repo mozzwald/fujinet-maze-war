@@ -69,17 +69,31 @@ with socket.create_connection(("127.0.0.1", port), timeout=1.0) as sock:
     set_auto_ack(sock, False)
     send_frame(sock, bytes([PKT_NAME, 1, 0]) + b"RELIABLE")
 
+    # ROUND_START and BRICK_FULL are control events and the helper ACKs them.
+    # A completed gameplay join now follows them with an authoritative final
+    # RESPAWN so existing clients draw the actor before it moves. Consume that
+    # session baseline before testing the application NAME event.
+    joined = wait_reliable(sock)
+    if joined[4] != 0x52 or joined[6] != 0 or joined[9] != 0x03:
+        fail(f"unexpected join baseline: {joined.hex()}")
+    join_rev = joined[2] | (joined[3] << 8)
+    if join_rev != 3:
+        fail(f"join reliable revision was {join_rev}, expected 3")
+    send_frame(sock, bytes([PKT_RELIABLE_ACK, 1,
+                            join_rev & 0xff, join_rev >> 8]))
+
     first = wait_reliable(sock)
     if first[4] != PKT_NAME or first[7:7 + NAME_LEN] != b"RELIABLE":
         fail(f"unexpected reliable payload: {first.hex()}")
     rev = first[2] | (first[3] << 8)
-    if rev != 3:
-        fail(f"first application reliable revision was {rev}, expected 3")
+    if rev != 4:
+        fail(f"first application reliable revision was {rev}, expected 4")
 
     # Duplicate ACK of the previous cumulative revision asks for the missing
     # follower before the normal retransmit timer has to fire.
     start = time.monotonic()
-    send_frame(sock, bytes([PKT_RELIABLE_ACK, 2, 2, 0]))
+    send_frame(sock, bytes([PKT_RELIABLE_ACK, 2,
+                            join_rev & 0xff, join_rev >> 8]))
     repeat = wait_reliable(sock, timeout=0.25)
     elapsed = time.monotonic() - start
     if repeat != first:
@@ -87,14 +101,14 @@ with socket.create_connection(("127.0.0.1", port), timeout=1.0) as sock:
     if elapsed >= 0.25:
         fail(f"fast retransmit took {elapsed:.3f}s")
 
-    # ACKing revision 3 should advance to revision 4. The server may have
+    # ACKing revision 4 should advance to revision 5. The server may have
     # queued later name-rotation events by now, but stop-and-wait must send only
     # the next oldest reliable event, not a whole pending window.
     send_frame(sock, bytes([PKT_RELIABLE_ACK, 3, rev & 0xff, rev >> 8]))
     second = wait_reliable(sock)
     rev2 = second[2] | (second[3] << 8)
-    if rev2 != 4:
-        fail(f"reliable stream did not advance to revision 4, got {rev2}")
+    if rev2 != 5:
+        fail(f"reliable stream did not advance to revision 5, got {rev2}")
     time.sleep(0.7)
     sock.settimeout(0.01)
     extras = []
@@ -106,13 +120,13 @@ with socket.create_connection(("127.0.0.1", port), timeout=1.0) as sock:
             continue
         if pkt and pkt[0] == PKT_RELIABLE_EVENT:
             extras.append(pkt[2] | (pkt[3] << 8))
-    if extras and any(extra != 4 for extra in extras):
+    if extras and any(extra != 5 for extra in extras):
         fail(f"stop-and-wait retransmitted beyond oldest unacked rev: {extras}")
 
 print("reliable event stream fast retransmit and stop-and-wait passed")
 PYEOF
 
-grep -F "TX reliable fast slot=0 rev=3" "$LOG_FILE" >/dev/null
-grep -F "ACK reliable slot=0 rev=3" "$LOG_FILE" >/dev/null
+grep -F "TX reliable fast slot=0 rev=4" "$LOG_FILE" >/dev/null
+grep -F "ACK reliable slot=0 rev=4" "$LOG_FILE" >/dev/null
 
 echo "reliable event stream smoke passed"

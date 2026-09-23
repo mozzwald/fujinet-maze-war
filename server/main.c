@@ -37,12 +37,14 @@ enum {
   PKT_LEAVE_ACK = 0x57
 };
 
-enum { MAX_PLAYERS = 4, MAX_ROOMS = 64 };
+enum { MAX_PLAYERS = 4, MAX_ROOMS = 64, MAX_DEPARTING = MAX_PLAYERS };
 /* Keep a silence timeout for a vanished SIO peer even when TCP stays open. */
 enum {
   CLIENT_TIMEOUT_MS = 15000,
   CLIENT_HANDSHAKE_MS = 3000,
-  DEFAULT_INTERMISSION_MS = 15000
+  DEFAULT_INTERMISSION_MS = 15000,
+  DEFAULT_NO_HUMAN_GRACE_MS = 60000,
+  LEAVE_DRAIN_MS = 1000
 };
 enum { INPUT_STALE_MS = 500 };
 /* Client inputs are queued and applied one per tick, in order, instead of the
@@ -183,6 +185,21 @@ struct client_slot {
   } reliable_q[RELIABLE_QUEUE_MAX];
   uint8_t reliable_head;
   uint8_t reliable_count;
+  uint8_t leave_requested;
+  uint8_t leave_seq;
+};
+
+/* A voluntary leave releases its gameplay seat before the TCP acknowledgement
+   necessarily reaches the kernel. Keep only the transport pieces required to
+   drain that ACK. This object has no seat number and can never mutate a room,
+   so a retry from an old socket cannot be attributed to a new occupant. */
+struct departing_connection {
+  int in_use;
+  int fd;
+  struct tcp_tx tx;
+  struct tcp_frame_rx frame_rx;
+  uint8_t leave_seq;
+  uint64_t deadline_ms;
 };
 
 struct room_config {
@@ -192,6 +209,7 @@ struct room_config {
   int lag_ms;
   int kill_limit;
   int intermission_ms;
+  int no_human_grace_ms;
   const char *brick_path;
 };
 
@@ -213,6 +231,7 @@ struct room {
   struct room_config config;
   int listener_fd;
   struct client_slot clients[MAX_PLAYERS];
+  struct departing_connection departing[MAX_DEPARTING];
   struct player_state players[MAX_PLAYERS];
   struct shot_state shots[MAX_PLAYERS];
   uint8_t brick_bits[48];
@@ -244,7 +263,7 @@ struct room {
   uint64_t no_human_deadline_ms;
 };
 
-enum { ROUND_PLAYING = 0, ROUND_OVER = 1 };
+enum { ROUND_PLAYING = 0, ROUND_OVER = 1, ROUND_DORMANT = 2 };
 
 static volatile sig_atomic_t g_running = 1;
 
@@ -265,6 +284,9 @@ static void send_round_state(struct room *room, int slot, uint64_t now,
 static void enter_round_over(struct room *room, int winner, uint64_t now,
                              int debug);
 static void reset_round(struct room *room, uint64_t now, int debug);
+static void enter_dormant(struct room *room, uint64_t now, int debug,
+                          const char *reason);
+static void wake_dormant_room(struct room *room, uint64_t now);
 
 static void on_sigint(int sig) {
   (void)sig;
@@ -356,18 +378,93 @@ static void reset_client_slot(struct client_slot *client) {
   client->fd = -1;
 }
 
-/* The one place a client leaves a slot, whatever the reason: timeout, a
-   clean TCP close (recv() == 0), or a socket error. Logs, closes the fd
-   (via reset_client_slot()), and hands the slot a clean actor so it falls
-   back to AI control without any of the departed human's leftover state. */
+static int room_human_count(const struct room *room) {
+  int count = 0;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (room->clients[i].in_use && room->clients[i].handshake_ok) count++;
+  }
+  return count;
+}
+
+static void begin_no_human_grace(struct room *room, uint64_t now, int debug) {
+  if (room->no_human_deadline_ms != 0 || room->round_state == ROUND_DORMANT) {
+    return;
+  }
+  room->no_human_deadline_ms =
+      now + (uint64_t)room->config.no_human_grace_ms;
+  /* No human remains to own or be hit by an in-flight projectile. Clearing
+     shots prevents a backfilled Zombie from inheriting pending human combat
+     and prevents Zombie-versus-Zombie scoring during the grace window. */
+  memset(room->shots, 0, sizeof(room->shots));
+  if (room->round_state == ROUND_OVER) {
+    /* Nobody can observe an intermission. Start the next canonical round now,
+       while preserving the independently measured grace deadline. */
+    reset_round(room, now, debug);
+  }
+  printf("room=%d no-human grace started grace_ms=%d\n", room->config.port,
+         room->config.no_human_grace_ms);
+}
+
+/* Unexpected EOF, error, and silence timeout all use this path. A connection
+   which never completed HELLO owned no human seat and cannot start grace. */
 static void drop_client(struct room *room, int i, int debug, uint64_t now) {
   struct client_slot *clients = room->clients;
+  int was_human = clients[i].handshake_ok;
   log_client_event("disconnected", i, &clients[i].addr);
   if (debug) {
     log_transport_summary_if_nonzero(i, &clients[i].transport);
   }
   reset_client_slot(&clients[i]);
   reset_slot_gameplay(room, i, now);
+  if (was_human && room_human_count(room) == 0) {
+    begin_no_human_grace(room, now, debug);
+  }
+}
+
+static void reset_departing(struct departing_connection *departing) {
+  if (departing->fd >= 0) close(departing->fd);
+  memset(departing, 0, sizeof(*departing));
+  departing->fd = -1;
+}
+
+/* Move a cleanly leaving connection out of its reusable game seat. The ACK is
+   already queued on client->tx. No gameplay state survives this handoff. */
+static void detach_voluntary_client(struct room *room, int slot, int debug,
+                                    uint64_t now) {
+  struct client_slot *client = &room->clients[slot];
+  int fd = client->fd;
+  struct tcp_tx tx = client->tx;
+  struct tcp_frame_rx frame_rx = client->frame_rx;
+  uint8_t leave_seq = client->leave_seq;
+  log_client_event("left", slot, &client->addr);
+  if (debug) log_transport_summary_if_nonzero(slot, &client->transport);
+
+  memset(client, 0, sizeof(*client));
+  client->fd = -1;
+  reset_slot_gameplay(room, slot, now);
+
+  int departing_slot = -1;
+  for (int i = 0; i < MAX_DEPARTING; i++) {
+    if (!room->departing[i].in_use) {
+      departing_slot = i;
+      break;
+    }
+  }
+  if (departing_slot >= 0) {
+    struct departing_connection *departing = &room->departing[departing_slot];
+    departing->in_use = 1;
+    departing->fd = fd;
+    departing->tx = tx;
+    departing->frame_rx = frame_rx;
+    departing->leave_seq = leave_seq;
+    departing->deadline_ms = now + LEAVE_DRAIN_MS;
+  } else {
+    close(fd); /* bounded fd ownership even under a leave flood */
+  }
+
+  if (room_human_count(room) == 0) {
+    enter_dormant(room, now, debug, "voluntary-final-leave");
+  }
 }
 
 static void reap_timed_out_clients(struct room *room, uint64_t now, int debug) {
@@ -938,8 +1035,8 @@ static size_t cobs_encode(const uint8_t *in, size_t n, uint8_t *out) {
   return wr;
 }
 
-static ssize_t send_checked(struct client_slot *client,
-                            const uint8_t *pkt, size_t len) {
+static ssize_t send_frame(int fd, struct tcp_tx *tx,
+                          const uint8_t *pkt, size_t len) {
   uint8_t raw[PKT_CKSUM_MAX];
   uint8_t buf[PKT_CKSUM_MAX + PKT_CKSUM_MAX / 254 + 2];
   size_t payload_len = len;
@@ -952,11 +1049,16 @@ static ssize_t send_checked(struct client_slot *client,
   raw[len++] = (uint8_t)(crc >> 8);
   size_t enc = cobs_encode(raw, len, buf);
   buf[enc++] = 0x00; /* frame delimiter */
-  int result = tcp_tx_queue(client->fd, &client->tx, buf, enc);
+  int result = tcp_tx_queue(fd, tx, buf, enc);
   /* Report the payload length callers passed in, not the wire length: framing
      is transport, and every call site checks the result against the size of the
      packet it built. */
   return result == 0 ? (ssize_t)payload_len : -1;
+}
+
+static ssize_t send_checked(struct client_slot *client,
+                            const uint8_t *pkt, size_t len) {
+  return send_frame(client->fd, &client->tx, pkt, len);
 }
 
 static void broadcast_packet(int sock, struct client_slot *clients,
@@ -1084,6 +1186,48 @@ static void broadcast_reliable_event(struct client_slot *clients,
   }
 }
 
+/* Complete the actor side of a successful gameplay join.
+
+   A live Zombie is a real occupant, so taking over that seat keeps its current
+   cell. A vacant seat is different: its stored coordinates are only history,
+   and another actor may have walked there since the seat was released. Give
+   that client a new collision-safe spawn before making the slot occupied.
+
+   Every gameplay join publishes a final RESPAWN even for an in-place Zombie
+   handoff. Besides making the discontinuity explicit on the wire, this makes
+   clients redraw an actor that they had erased while the seat was vacant. */
+static void activate_joining_client(struct room *room, int slot,
+                                    int keep_position, uint64_t now,
+                                    int debug) {
+  if (slot < 0 || slot >= MAX_PLAYERS ||
+      room->round_state != ROUND_PLAYING) {
+    return;
+  }
+
+  struct player_state *player = &room->players[slot];
+  if (!keep_position) {
+    uint8_t sx = 0, sy = 0;
+    pick_spawn(room, &sx, &sy);
+    player->x = sx;
+    player->y = sy;
+  }
+  player->respawn_at_ms = 0;
+  room->occupied_mask |= (uint8_t)(1u << slot);
+
+  uint8_t respawn[RESPAWN_LEN];
+  build_respawn(room->seq++, (uint8_t)slot, player->x, player->y, 0x03,
+                room->round_id, respawn, sizeof(respawn));
+  broadcast_packet(room->listener_fd, room->clients, respawn, sizeof(respawn));
+  broadcast_reliable_event(room->clients, respawn, sizeof(respawn), &room->seq,
+                           now, debug);
+  queue_respawn_echo(room, respawn);
+  if (debug) {
+    printf("room=%d TX join respawn pid=%d x=%u y=%u kept_position=%d\n",
+           room->config.port, slot, (unsigned)player->x,
+           (unsigned)player->y, keep_position);
+  }
+}
+
 static void handle_client_packet(struct room *room, int slot,
                                  const uint8_t *pkt, size_t len, int debug,
                                  uint64_t now) {
@@ -1096,13 +1240,30 @@ static void handle_client_packet(struct room *room, int slot,
 
   if (!client->handshake_ok) {
     if (len == 2 && pkt[0] == PKT_HELLO && pkt[1] == PROTOCOL_VERSION) {
+      uint8_t zombie_mask[MAX_PLAYERS];
+      compute_zombie_mask(clients, room->config.zombies, zombie_mask);
+      /* Capture the pre-HELLO role. Once handshake_ok is set this slot stops
+         being a Zombie, so the information would otherwise be lost. A Zombie
+         awaiting respawn is off-board and needs a fresh visible spawn. */
+      int keep_join_position = room->round_state == ROUND_DORMANT ||
+                               (zombie_mask[slot] &&
+                                slot_on_board(room, slot));
+      client->handshake_ok = 1;
+      client->received_packet = 1;
+      if (room->round_state == ROUND_DORMANT) {
+        wake_dormant_room(room, now);
+      }
+      if (room->no_human_deadline_ms != 0) {
+        room->no_human_deadline_ms = 0;
+        printf("room=%d no-human grace canceled by slot=%d\n",
+               room->config.port, slot);
+      }
       uint8_t welcome[5] = {PKT_WELCOME, PROTOCOL_VERSION, room->round_id,
                             room->round_state,
                             (uint8_t)room->config.kill_limit};
-      client->handshake_ok = 1;
-      client->received_packet = 1;
       send_checked(client, welcome, sizeof(welcome));
       send_round_state(room, slot, now, debug);
+      activate_joining_client(room, slot, keep_join_position, now, debug);
       if (debug) {
         printf("room=%d HELLO accepted slot=%d version=%u round=%u phase=%u\n",
                room->config.port, slot, (unsigned)PROTOCOL_VERSION,
@@ -1126,6 +1287,23 @@ static void handle_client_packet(struct room *room, int slot,
     }
     return;
   }
+
+  if (len == 2 && pkt[0] == PKT_LEAVE_ROOM) {
+    uint8_t ack[2] = {PKT_LEAVE_ACK, pkt[1]};
+    (void)send_checked(client, ack, sizeof(ack));
+    if (!client->leave_requested) {
+      client->leave_requested = 1;
+      client->leave_seq = pkt[1];
+      if (debug) {
+        printf("room=%d LEAVE_ROOM slot=%d seq=%u\n", room->config.port,
+               slot, (unsigned)pkt[1]);
+      }
+    }
+    return;
+  }
+  /* Once leave begins, later frames on the same socket cannot mutate this
+     seat. Duplicate LEAVE_ROOM was handled above and merely repeats the ACK. */
+  if (client->leave_requested) return;
 
   if (len == 4 && pkt[0] == PKT_RELIABLE_ACK) {
     uint16_t ack = (uint16_t)pkt[2] | ((uint16_t)pkt[3] << 8);
@@ -1310,6 +1488,30 @@ static void process_client_bytes(struct room *room, int slot,
        DELTA layouts only as payload compatibility, not as a raw stream scan. */
     c->received_packet = 1;
     handle_client_packet(room, slot, pkt, (size_t)pkt_len, debug, now);
+  }
+}
+
+static void process_departing_bytes(struct departing_connection *departing,
+                                    const uint8_t *buf, size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    uint8_t pkt[16];
+    int pkt_len = tcp_frame_push_byte(&departing->frame_rx, buf[i], pkt,
+                                      sizeof(pkt));
+    if (pkt_len == 2 && pkt[0] == PKT_LEAVE_ROOM) {
+      uint8_t ack[2] = {PKT_LEAVE_ACK, pkt[1]};
+      (void)send_frame(departing->fd, &departing->tx, ack, sizeof(ack));
+    }
+  }
+}
+
+static void reap_departing_connections(struct room *room, uint64_t now) {
+  for (int i = 0; i < MAX_DEPARTING; i++) {
+    struct departing_connection *departing = &room->departing[i];
+    if (!departing->in_use) continue;
+    if (departing->tx.failed || departing->tx.len == 0 ||
+        now >= departing->deadline_ms) {
+      reset_departing(departing);
+    }
   }
 }
 
@@ -2083,6 +2285,57 @@ static void reset_round(struct room *room, uint64_t now, int debug) {
          (unsigned)room->round_id, room->config.kill_limit);
 }
 
+static void enter_dormant(struct room *room, uint64_t now, int debug,
+                          const char *reason) {
+  /* Build a complete clean next-round baseline while no client can observe the
+     transition, then park simulation until another HELLO authenticates. */
+  reset_round(room, now, debug);
+  room->round_state = ROUND_DORMANT;
+  room->occupied_mask = 0;
+  room->intermission_deadline_ms = 0;
+  room->no_human_deadline_ms = 0;
+  printf("room=%d dormant reason=%s round=%u\n", room->config.port, reason,
+         (unsigned)room->round_id);
+}
+
+static void wake_dormant_room(struct room *room, uint64_t now) {
+  uint8_t zombie_mask[MAX_PLAYERS];
+  room->round_state = ROUND_PLAYING;
+  room->occupied_mask = 0;
+  room->historical_zombie_mask = 0;
+  compute_zombie_mask(room->clients, room->config.zombies, zombie_mask);
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (!(room->clients[i].in_use && room->clients[i].handshake_ok) &&
+        !zombie_mask[i]) {
+      continue;
+    }
+    uint8_t sx = 0, sy = 0;
+    pick_spawn(room, &sx, &sy);
+    room->players[i].x = sx;
+    room->players[i].y = sy;
+    reset_slot_gameplay(room, i, now);
+    room->players[i].respawn_at_ms = 0;
+    room->occupied_mask |= (uint8_t)(1u << i);
+    if (zombie_mask[i]) {
+      room->historical_zombie_mask |= (uint8_t)(1u << i);
+    }
+  }
+  /* Give the newly welcomed client one full server interval to deliver its
+     first input before the first snapshot, matching established join timing.
+     Rebase dormant maintenance timers so wake-up does not inject an immediate
+     stale NAME rotation ahead of the client's own name. */
+  room->next_tick = now + room->tick_ms;
+  /* Avoid a blank-name safety rotation in the HELLO service pass, but keep the
+     first repair comfortably inside one second for clients waiting on the
+     next reliable revision. */
+  room->last_name_rotate_ms = now - NAME_ROTATE_MS / 2;
+  room->last_brick_resync_ms = now;
+  room->last_seat_ms = now;
+  room->last_seat_mask = 0xFF;
+  printf("room=%d activated round=%u\n", room->config.port,
+         (unsigned)room->round_id);
+}
+
 static int load_brick_layout(const char *path, uint8_t *bits, size_t bits_len) {
   if (bits_len < 48) {
     return -1;
@@ -2125,7 +2378,8 @@ static void usage(const char *argv0) {
           "Usage: %s [--port PORT | --port-base PORT] [--room-count N]\n"
           "          [--zombies N | --room-zombies LIST] [--bind ADDR]\n"
           "          [--tick-hz N] [--brick PATH] [--lag-ms N]\n"
-          "          [--kill-limit N] [--intermission-ms N] [--debug]\n"
+          "          [--kill-limit N] [--intermission-ms N]\n"
+          "          [--no-human-grace-ms N] [--debug]\n"
           "  --port PORT       one-room compatibility form (default 9000).\n"
           "  --port-base PORT  first listener; later rooms use consecutive ports.\n"
           "  --room-count N    number of isolated rooms (1-%d, default 1).\n"
@@ -2133,6 +2387,7 @@ static void usage(const char *argv0) {
           "  --room-zombies L  comma-separated zombie count for each room.\n"
           "  --kill-limit N    kills needed to win a round (1-10, default 5).\n"
           "  --intermission-ms round-end sequence duration (default 15000).\n"
+          "  --no-human-grace-ms unexpected final-player grace (default 60000).\n"
           "  --bind ADDR       bind a specific IPv4 address.\n",
           argv0, MAX_ROOMS);
 }
@@ -2201,6 +2456,7 @@ static int init_room(struct room *room, const struct room_config *config,
   room->listener_fd = -1;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     room->clients[i].fd = -1;
+    room->departing[i].fd = -1;
   }
   if (load_brick_layout(config->brick_path, room->brick_reset_bits,
                         sizeof(room->brick_reset_bits)) != 0) {
@@ -2209,7 +2465,7 @@ static int init_room(struct room *room, const struct room_config *config,
             config->brick_path);
   }
   memcpy(room->brick_bits, room->brick_reset_bits, sizeof(room->brick_bits));
-  room->occupied_mask = 0x0F;
+  room->occupied_mask = 0;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     uint8_t sx = 0, sy = 0;
     pick_spawn(room, &sx, &sy);
@@ -2230,7 +2486,7 @@ static int init_room(struct room *room, const struct room_config *config,
   room->last_name_rotate_ms = now;
   room->last_seat_mask = 0xFF;
   room->round_id = 1;
-  room->round_state = ROUND_PLAYING;
+  room->round_state = ROUND_DORMANT;
   {
     uint8_t zombie_mask[MAX_PLAYERS];
     compute_zombie_mask(room->clients, room->config.zombies, zombie_mask);
@@ -2248,6 +2504,7 @@ static void destroy_room(struct room *room, int debug) {
   }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     reset_client_slot(&room->clients[i]);
+    reset_departing(&room->departing[i]);
   }
   if (room->listener_fd >= 0) {
     close(room->listener_fd);
@@ -2281,10 +2538,16 @@ static void accept_room_client(struct room *room, int debug, uint64_t now) {
 
 static void service_room_timers(struct room *room, int debug, uint64_t now) {
   reap_timed_out_clients(room, now, debug);
+  reap_departing_connections(room, now);
+  if (room->no_human_deadline_ms != 0 &&
+      now >= room->no_human_deadline_ms) {
+    enter_dormant(room, now, debug, "no-human-grace-expired");
+  }
   if (room->round_state == ROUND_OVER &&
       now >= room->intermission_deadline_ms) {
     reset_round(room, now, debug);
   }
+  if (room->round_state == ROUND_DORMANT) return;
   if (now - room->last_name_rotate_ms >= NAME_ROTATE_MS) {
     room->last_name_rotate_ms = now;
     broadcast_next_name(room, debug);
@@ -2377,9 +2640,12 @@ static void tick_room(struct room *room, int debug, uint64_t now) {
 
 struct poll_ref {
   int room_index;
-  int slot; /* -1 is the room listener */
+  int kind;
+  int index;
   int fd;
 };
+
+enum { POLL_LISTENER = 0, POLL_CLIENT = 1, POLL_DEPARTING = 2 };
 
 int main(int argc, char **argv) {
   int port_base = 9000;
@@ -2390,6 +2656,7 @@ int main(int argc, char **argv) {
   int lag_ms = 0;
   int kill_limit = 5;
   int intermission_ms = DEFAULT_INTERMISSION_MS;
+  int no_human_grace_ms = DEFAULT_NO_HUMAN_GRACE_MS;
   const char *brick_path = "server/brick_layout.txt";
   const char *bind_addr = NULL;
   const char *room_zombies_arg = NULL;
@@ -2427,6 +2694,9 @@ int main(int argc, char **argv) {
       if (parse_int_arg(argv[++i], &kill_limit) != 0) goto bad_args;
     } else if (strcmp(argv[i], "--intermission-ms") == 0 && i + 1 < argc) {
       if (parse_int_arg(argv[++i], &intermission_ms) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--no-human-grace-ms") == 0 &&
+               i + 1 < argc) {
+      if (parse_int_arg(argv[++i], &no_human_grace_ms) != 0) goto bad_args;
     } else if (strcmp(argv[i], "--debug") == 0) {
       debug = 1;
     } else if (strcmp(argv[i], "--help") == 0) {
@@ -2442,6 +2712,7 @@ int main(int argc, char **argv) {
       tick_hz < 1 || tick_hz > 1000 || zombies < 0 ||
       zombies >= MAX_PLAYERS || kill_limit < 1 || kill_limit > 10 ||
       intermission_ms < 100 || intermission_ms > 600000 ||
+      no_human_grace_ms < 100 || no_human_grace_ms > 600000 ||
       (saw_port && (saw_port_base || room_count != 1)) ||
       (saw_zombies && room_zombies_arg != NULL)) {
     goto bad_args;
@@ -2449,7 +2720,8 @@ int main(int argc, char **argv) {
 
   int *room_zombies = calloc((size_t)room_count, sizeof(*room_zombies));
   struct room *rooms = calloc((size_t)room_count, sizeof(*rooms));
-  size_t poll_count = (size_t)room_count * (MAX_PLAYERS + 1u);
+  size_t poll_count =
+      (size_t)room_count * (MAX_PLAYERS + MAX_DEPARTING + 1u);
   struct pollfd *pfds = calloc(poll_count, sizeof(*pfds));
   struct poll_ref *refs = calloc(poll_count, sizeof(*refs));
   if (!room_zombies || !rooms || !pfds || !refs) {
@@ -2496,6 +2768,7 @@ int main(int argc, char **argv) {
         .lag_ms = lag_ms,
         .kill_limit = kill_limit,
         .intermission_ms = intermission_ms,
+        .no_human_grace_ms = no_human_grace_ms,
         .brick_path = brick_path,
     };
     if (init_room(&rooms[i], &config, &bind_ip, init_now) != 0) {
@@ -2522,13 +2795,22 @@ int main(int argc, char **argv) {
       if (rooms[r].next_tick < earliest_tick) earliest_tick = rooms[r].next_tick;
       pfds[poll_index] = (struct pollfd){.fd = rooms[r].listener_fd,
                                         .events = POLLIN};
-      refs[poll_index++] = (struct poll_ref){r, -1, rooms[r].listener_fd};
+      refs[poll_index++] = (struct poll_ref){r, POLL_LISTENER, -1,
+                                             rooms[r].listener_fd};
       for (int i = 0; i < MAX_PLAYERS; i++) {
         int fd = rooms[r].clients[i].in_use ? rooms[r].clients[i].fd : -1;
         pfds[poll_index] = (struct pollfd){
             .fd = fd,
             .events = POLLIN | (rooms[r].clients[i].tx.len ? POLLOUT : 0)};
-        refs[poll_index++] = (struct poll_ref){r, i, fd};
+        refs[poll_index++] = (struct poll_ref){r, POLL_CLIENT, i, fd};
+      }
+      for (int i = 0; i < MAX_DEPARTING; i++) {
+        struct departing_connection *departing = &rooms[r].departing[i];
+        int fd = departing->in_use ? departing->fd : -1;
+        pfds[poll_index] = (struct pollfd){
+            .fd = fd,
+            .events = POLLIN | (departing->tx.len ? POLLOUT : 0)};
+        refs[poll_index++] = (struct poll_ref){r, POLL_DEPARTING, i, fd};
       }
     }
     uint64_t wait_ms = earliest_tick > now ? earliest_tick - now : 0;
@@ -2542,9 +2824,9 @@ int main(int argc, char **argv) {
     /* Existing peers go first. The recorded fd check prevents an event for a
        closed descriptor from being applied to a new occupant after fd reuse. */
     for (size_t p = 0; pr > 0 && p < poll_count; p++) {
-      if (refs[p].slot < 0 || pfds[p].revents == 0) continue;
+      if (refs[p].kind != POLL_CLIENT || pfds[p].revents == 0) continue;
       struct room *room = &rooms[refs[p].room_index];
-      int i = refs[p].slot;
+      int i = refs[p].index;
       struct client_slot *client = &room->clients[i];
       if (!client->in_use || client->fd != refs[p].fd) continue;
       short events = pfds[p].revents;
@@ -2564,6 +2846,10 @@ int main(int argc, char **argv) {
           failed = 1;
         }
       }
+      if (client->leave_requested) {
+        detach_voluntary_client(room, i, debug, now);
+        continue;
+      }
       if (!failed && (events & POLLOUT)) {
         failed = tcp_tx_flush(client->fd, &client->tx) < 0;
       }
@@ -2571,9 +2857,36 @@ int main(int argc, char **argv) {
         drop_client(room, i, debug, now);
       }
     }
+    /* Departing sockets have no gameplay identity. They can only drain the
+       queued ACK, accept an idempotent retry, close, or hit their deadline. */
+    for (size_t p = 0; pr > 0 && p < poll_count; p++) {
+      if (refs[p].kind != POLL_DEPARTING || pfds[p].revents == 0) continue;
+      struct room *room = &rooms[refs[p].room_index];
+      int i = refs[p].index;
+      struct departing_connection *departing = &room->departing[i];
+      if (!departing->in_use || departing->fd != refs[p].fd) continue;
+      short events = pfds[p].revents;
+      int failed = (events & (POLLERR | POLLNVAL)) != 0;
+      if (!failed && (events & (POLLIN | POLLHUP))) {
+        uint8_t buf[64];
+        ssize_t n = recv(departing->fd, buf, sizeof(buf), 0);
+        if (n > 0) {
+          process_departing_bytes(departing, buf, (size_t)n);
+        } else if (n == 0 || (errno != EINTR && errno != EAGAIN &&
+                              errno != EWOULDBLOCK)) {
+          failed = 1;
+        }
+      }
+      if (!failed && (events & POLLOUT)) {
+        failed = tcp_tx_flush(departing->fd, &departing->tx) < 0;
+      }
+      if (failed || departing->tx.failed || departing->tx.len == 0) {
+        reset_departing(departing);
+      }
+    }
     /* Accept at most one peer per room per pass, keeping accept floods bounded. */
     for (size_t p = 0; pr > 0 && p < poll_count; p++) {
-      if (refs[p].slot == -1 && (pfds[p].revents & POLLIN)) {
+      if (refs[p].kind == POLL_LISTENER && (pfds[p].revents & POLLIN)) {
         accept_room_client(&rooms[refs[p].room_index], debug, now);
       }
     }

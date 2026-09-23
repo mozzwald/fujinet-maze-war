@@ -1,8 +1,6 @@
 # 08-04 — Nonblocking Atari round-end presentation
 
-Status: implementation complete on 2026-09-12; mixed real Atari/FujiNet and
-emulator acceptance is pending. ROND-03 and plan 08-04 remain open until that
-checkpoint passes.
+Status: complete and hardware-accepted on 2026-09-12.
 
 ## Implemented behavior
 
@@ -94,10 +92,9 @@ handler, PM graphics, display buffers, display lists, maze, or charset.
   as a normal connected game, so effect timing and authoritative restart still
   require the physical checkpoint below.
 
-## Required hardware checkpoint
+## Hardware acceptance
 
-Test at least one real Atari XL/FujiNet against an emulator on the same room,
-preferably with a low kill limit so several rounds can be observed. Confirm:
+The user tested the final timing and round outcomes and confirmed:
 
 1. all active losers vaporize, the winner turns/dances for about five seconds,
    then the winner vaporizes and the maze fades;
@@ -108,10 +105,7 @@ preferably with a low kill limit so several rounds can be observed. Confirm:
    restored;
 4. repeated rounds have no flicker, black screen, stale sprites/bullets,
    reconnect, movement, or network regression;
-5. if practical, cover a human-only win, a human win with a Zombie present,
-   and a Zombie win.
+5. both humans and Zombies can win correctly.
 
-After acceptance, mark ROND-03 and 08-04 complete. The conditional next model
-recommendation is **08-05: `gpt-5.6-sol`, high reasoning** for explicit leave,
-no-human grace, and shared session teardown. Pause for the user's model switch
-before starting it.
+ROND-03 and 08-04 are complete. The user switched to the recommended
+**08-05: `gpt-5.6-sol`, high reasoning** configuration before continuing.

@@ -412,6 +412,9 @@ for expected_pid, client in enumerate(clients):
 bricks = clients[0].bricks
 slot0_pid = clients[0].pid
 slot1_pid = clients[1].pid
+join_pos = (clients[1].players[slot1_pid]["x"],
+            clients[1].players[slot1_pid]["y"])
+clients[0].wait_snapshot_pos(slot1_pid, join_pos)
 slot0_pos = (clients[0].players[slot0_pid]["x"], clients[0].players[slot0_pid]["y"])
 slot1_pos = (clients[0].players[slot1_pid]["x"], clients[0].players[slot1_pid]["y"])
 other_slots = {
@@ -419,6 +422,13 @@ other_slots = {
     for idx in range(4)
     if idx not in (slot0_pid, slot1_pid)
 }
+# Drain the bounded direct/reliable/echo join publications first. Join-time
+# final RESPAWN is session baseline, not the post-death final spawn this combat
+# scenario waits for below.
+for client in clients:
+    client.pump(1.0)
+for client in clients:
+    client.respawns = []
 
 # Immediate adjacent hit -> score + pending + final respawn
 target, fire_joy, path = choose_adjacent_target(

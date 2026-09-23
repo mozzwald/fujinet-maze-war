@@ -32,7 +32,9 @@ enum {
   PKT_RESPAWN = 0x52,
   PKT_RELIABLE_EVENT = 0x53,
   PKT_MATCH_END = 0x54,
-  PKT_ROUND_START = 0x55
+  PKT_ROUND_START = 0x55,
+  PKT_LEAVE_ROOM = 0x56,
+  PKT_LEAVE_ACK = 0x57
 };
 
 enum { MAX_PLAYERS = 4 };
@@ -64,6 +66,31 @@ static uint64_t now_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+/* Give the server a deterministic seat release while keeping quit bounded if
+   the peer has vanished. Other frames are drained until our echoed sequence
+   arrives; the socket is closed regardless after 750 ms. */
+static void clean_leave(int sock, struct tcp_tx *tx, struct tcp_rx *rx,
+                        uint8_t *seq) {
+  uint8_t leave_seq = (*seq)++;
+  uint8_t pkt[2] = {PKT_LEAVE_ROOM, leave_seq};
+  if (tcp_tx_queue_frame(sock, tx, pkt, sizeof(pkt)) < 0) return;
+  uint64_t deadline = now_ms() + 750;
+  while (now_ms() < deadline) {
+    if (tcp_tx_flush(sock, tx) < 0) return;
+    for (int frames = 0; frames < 64; frames++) {
+      uint8_t reply[64];
+      int n = tcp_recv_frame(sock, rx, reply, sizeof(reply));
+      if (n < 0) return;
+      if (n == 0) break;
+      if (n == 2 && reply[0] == PKT_LEAVE_ACK && reply[1] == leave_seq) {
+        return;
+      }
+    }
+    struct pollfd pfd = {.fd = sock, .events = POLLIN | POLLOUT};
+    (void)poll(&pfd, 1, 20);
+  }
 }
 
 static int round_is_newer(uint8_t candidate, uint8_t current) {
@@ -688,6 +715,7 @@ int main(int argc, char **argv) {
   if (evfd >= 0) {
     close(evfd);
   }
+  if (have_welcome) clean_leave(sock, &tx, &rx, &seq);
   close(sock);
   return 0;
 }

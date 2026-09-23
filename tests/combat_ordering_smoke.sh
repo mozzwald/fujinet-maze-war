@@ -269,7 +269,7 @@ class Client:
         while time.time() < deadline:
             self.pump(0.02)
             for packet in self.respawns:
-                if packet[2] == pid and (packet[5] & 0x01):
+                if packet[2] == pid and (packet[5] & 0x03) == 0x01:
                     return packet
         raise SystemExit(f"timed out waiting for respawn pending pid={pid}")
 
@@ -473,6 +473,12 @@ for expected_pid, client in enumerate(clients):
 bricks = clients[0].bricks
 slot0_pid = clients[0].pid
 slot1_pid = clients[1].pid
+# The second HELLO gives its formerly vacant seat a fresh spawn. Synchronize
+# the observer to that authoritative join position before planning paths; its
+# prior snapshot legitimately contains the seat's historical coordinates.
+slot1_truth = (clients[1].players[slot1_pid]["x"],
+               clients[1].players[slot1_pid]["y"])
+clients[0].wait_snapshot_pos(slot1_pid, slot1_truth)
 slot0_pos = (clients[0].players[slot0_pid]["x"], clients[0].players[slot0_pid]["y"])
 slot1_pos = (clients[0].players[slot1_pid]["x"], clients[0].players[slot1_pid]["y"])
 other_slots = {

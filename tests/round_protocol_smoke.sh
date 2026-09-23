@@ -210,6 +210,11 @@ def path(start, goal, blocked):
 
 def make_adjacent(shooter, observer):
     shooter.wait(lambda: shooter.players is not None)
+    observer.wait(lambda: observer.players is not None)
+    # A gameplay join receives a fresh authoritative spawn. The shooter may
+    # still hold the pre-join vacant-slot coordinates until it pumps the next
+    # snapshot, so do not plan a firing route against that historical cell.
+    shooter.wait(lambda: shooter.players[1][:2] == observer.players[1][:2])
     victim = shooter.players[1][:2]
     start = shooter.players[0][:2]
     choices = [((victim[0] - 1, victim[1]), 0x17),

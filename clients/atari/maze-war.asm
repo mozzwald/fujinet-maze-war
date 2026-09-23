@@ -55,14 +55,26 @@ CDTMF5	=	$022E
 SETVBV	=	$E45C
 XITVBV	=	$E462
 C_SP	=	$0082
+SIOV	=	$E459
+DDEVIC	=	$0300
+DUNIT	=	$0301
+DCOMND	=	$0302
+DSTATS	=	$0303
+DBUFLO	=	$0304
+DBUFHI	=	$0305
+DTIMLO	=	$0306
+DBYTLO	=	$0308
+DBYTHI	=	$0309
+DAUX1	=	$030A
+DAUX2	=	$030B
 ;
 ;NETSTREAM HANDLER
 ;
 ; Packet ids used on the wire:
 ;   $40 SNAPSHOT (21 bytes), $42 SHOT (7), $50 BRICK_FULL (52),
 ;   $51 BRICK_DELTA (5), $52 RESPAWN (7), $53 RELIABLE_EVENT,
-;   $54 MATCH_END, $55 ROUND_START; client TX $41 DELTA (5),
-;   $45 RELIABLE_ACK (4), and versioned $46 HELLO (2).
+;   $54 MATCH_END, $55 ROUND_START, $57 LEAVE_ACK; client TX $41 DELTA (5),
+;   $45 RELIABLE_ACK (4), $46 HELLO (2), and $56 LEAVE_ROOM (2).
 ; Client simulation is presentation-oriented: server state remains authoritative.
 NS_BASE	=	$2800
 NS_BEGN	=	NS_BASE+0
@@ -102,6 +114,8 @@ NET_TX_BUF_MAX	=	NET_TX_RAW_MAX+2	;COBS code byte and delimiter worst case
 NET_WAIT_MAX	=	3	;~13s (3*256 frames) with no server data before giving up
 NET_INIT_TRIES	=	3	;NS_INIT attempts before falling back to the host prompt
 NET_SHOT_TTL_MAX	=	60	;~1s without an active refresh before a drawn shot expires
+NET_LEAVE_NTSC	=	60	;bounded clean leave: about one second
+NET_LEAVE_PAL	=	50
 HUD_MISSILE_X	=	58	;small shirt-colour swatches beside the HUD names
 HUD_MISSILE_Y0	=	192	;PM Y for the first 20-column HUD row
 RP_BEGIN	=	1
@@ -539,6 +553,7 @@ INITPSK	LDA	#$01
 ;
 RESTART	LDA	#$40	;DISABLE DLI
 	STA	NMIEN
+	JSR	VBIOFF	;ordinary SIO close below needs a menu-safe VBI
 	JSR	NET_ENDC	;STOP NETSTREAM IF ACTIVE
 	LDA	#$FF
 	STA	KEYIN
@@ -559,7 +574,7 @@ STIMER	LDA	#5	;SET TIMER 5
 ;GAME START SETUP
 ;----------------
 ;
-START	JSR	NET_STATE_CLEAR
+START	JSR	NET_SESSION_RESET
 	LDA	#0	;POKEY CH1/2 MAY STILL HOLD POWER-UP OR A PRIOR GAME TONE
 	STA	AUDC1	;NETSTREAM OWNS CH3/4, SO SILENCE ONLY THE GAME CHANNELS
 	STA	AUDC2
@@ -697,9 +712,11 @@ GMCOLR	LDA	COLTBL,Y
 ;MAIN PROGRAM LOOP
 ;-----------------
 ;
-STRTCN	;net-only: ignore START/SELECT/OPTION local restart path
+STRTCN	;OPTION performs bounded clean leave back to direct-connect setup
 CHKSCRS
+	JSR	NET_LEAVE_INPUT
 	JSR	NET_POLL	;NETSTREAM TX/RX
+	JSR	NET_LEAVE_TICK
 	JMP	STRTCN	;net-only main loop
 ;
 ;MAIN PROGRAM SUBROUTINES
@@ -890,6 +907,8 @@ NET_CLRMAP1
 	STA	POINTER+1
 	LDA	NET_INITST
 	BNE	NET_INITF
+	LDA	#1	;the firmware stream now owns a TCP socket even before
+	STA	NET_FW_OPEN	;the Atari concurrent handler installs its IRQs
 	JSR	NS_BEGN
 	LDA	#0	;HANDLER IS UP: RESET THE ATTEMPT BUDGET
 	STA	NET_INIT_TRY
@@ -927,13 +946,6 @@ NET_INITF	LDA	#$34
 	STA	HOST_MSG+1
 	JMP	NET_HOSTRET
 NET_INITFX	RTS
-;
-NET_ENDC	LDA	NET_ACTIVE
-	BEQ	NET_ENDX
-	JSR	NS_END
-	LDA	#0
-	STA	NET_ACTIVE
-NET_ENDX	RTS
 ;
 ;RETURN TO THE HOST PROMPT (NET FAILURE RECOVERY)
 ;-----------------------------------------------
@@ -1163,6 +1175,17 @@ NP_TXI_OK
 	BNE	NP_RELOK
 	JSR	NET_TX_BUILD_REL_ACK
 NP_RELOK
+	LDA	NET_LEAVING	;during clean leave, only reliable ACKs and the
+	BEQ	NP_GAME_TX	;$56 request may enter the outbound stream
+	LDA	NET_TX_STATE
+	BNE	NET_PLSND
+	LDA	NET_LEAVE_SENT
+	BNE	NET_PLSND
+	JSR	NET_TX_BUILD_LEAVE
+	LDA	#1
+	STA	NET_LEAVE_SENT
+	JMP	NET_PLSND
+NP_GAME_TX
 	LDA	NET_NAME_PEND	;announce our name whenever the line is idle
 	BEQ	NP_NAMEOK
 	LDA	NET_WELCOME	;HELLO is the only legal pre-WELCOME client frame
@@ -1299,14 +1322,9 @@ NJD_OK
 ; HELLO is the only packet sent before WELCOME. Rebuilding it on the normal
 ; cadence makes a FujiNet-PC host-socket replacement recover without restarting
 ; either the Atari program or the server.
-NET_TX_BUILD_HELLO
-	LDA	#$46
-	STA	NET_TX_RAW
-	LDA	#1
-	STA	NET_TX_RAW+1
-	LDA	#2
-	JMP	NET_TX_FRAME
-;
+; LEAVE_ROOM is deliberately separate from the reliable-event stream. TCP and
+; the echoed sequence make retry/duplicate handling idempotent without changing
+; the session's server-to-client reliable revision.
 ; build DELTA packet from sampled input and arm TX state machine.
 NET_TX_BUILD_DELTA
 	LDA	NET_ROUND_READY
@@ -1387,22 +1405,6 @@ NTBN_ST
 	RTS
 ;
 ; queue $45 seq + highest applied reliable revision.
-NET_TX_BUILD_REL_ACK
-	LDA	#$45
-	STA	NET_TX_RAW
-	LDA	NET_SEQ
-	STA	NET_TX_RAW+1
-	INC	NET_SEQ
-	LDA	NET_REL_REV_LO
-	STA	NET_TX_RAW+2
-	LDA	NET_REL_REV_HI
-	STA	NET_TX_RAW+3
-	LDA	#4
-	JSR	NET_TX_FRAME
-	LDA	#0
-	STA	NET_REL_ACK_PEND
-	RTS
-;
 ; A = payload length in NET_TX_RAW. Append CRC-16/CCITT-FALSE, COBS encode it
 ; into NET_TX_BUF, append the delimiter, and arm the byte-at-a-time handler TX.
 NET_TX_FRAME
@@ -1837,11 +1839,17 @@ CORE_DISPATCH_CONT
 NET_FRAME_DISPATCH
 	LDA	NET_FRAME_BUF
 	CMP	#$40
-	BEQ	NFD_SNAP
+	BNE	NFD_C42
+	JMP	NFD_SNAP
+NFD_C42
 	CMP	#$42
-	BEQ	NFD_SHOT
+	BNE	NFD_C43
+	JMP	NFD_SHOT
+NFD_C43
 	CMP	#$43
-	BEQ	NFD_NAME
+	BNE	NFD_C44
+	JMP	NFD_NAME
+NFD_C44
 	CMP	#$44
 	BNE	NFD_C47
 	JMP	NFD_SEAT
@@ -1863,9 +1871,25 @@ NFD_C52
 	JMP	NFD_RESP
 NFD_C53
 	CMP	#$53
-	BNE	NFD_X
+	BNE	NFD_C57
 	JMP	NFD_REL
+NFD_C57
+	CMP	#$57
+	BNE	NFD_X
+	JMP	NFD_LEAVE_ACK
 NFD_X	RTS			;unknown type: ignore, the stream stays aligned
+NFD_LEAVE_ACK
+	LDA	#4		;two-byte payload plus CRC trailer
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	NET_LEAVING
+	BEQ	NFD_X
+	LDA	NET_FRAME_BUF+1
+	CMP	NET_LEAVE_SEQ
+	BNE	NFD_X
+	LDA	#1
+	STA	NET_LEAVE_ACKED
+	RTS
 NFD_SNAP
 	LDA	#23
 	JSR	NET_FRAME_LENCK
@@ -2530,6 +2554,153 @@ RPR_SLOT
 RP_WINS	.BYTE	" WINS",$FF
 RP_ROW_LO	.BYTE	<[HOSTSCR+324],<[HOSTSCR+404],<[HOSTSCR+484],<[HOSTSCR+564]
 RP_ROW_HI	.BYTE	>[HOSTSCR+324],>[HOSTSCR+404],>[HOSTSCR+484],>[HOSTSCR+564]
+
+; Every path which abandons a connection returns through START and this shared
+; reset. Preserve typed host/port/name and mutable validated port bytes, while
+; clearing the contiguous NetStream runtime plus older actor/render transients.
+NET_SESSION_RESET
+	JSR	NET_STATE_CLEAR
+	LDA	#0
+	LDX	#3
+NSR_SLOT
+	STA	ACTFLAG,X
+	STA	MOVEST,X
+	STA	SOUND,X
+	STA	SHOTDIR,X
+	STA	SHOTMST,X
+	STA	SCRPND,X
+	STA	DIR,X
+	DEX
+	BPL	NSR_SLOT
+	LDA	#$FF
+	STA	SND_CH2_PID
+	RTS
+
+; Session-control builders live in the guarded high-code segment to preserve
+; the fixed $100 margin between the base core and display RAM.
+NET_TX_BUILD_HELLO
+	LDA	#$46
+	STA	NET_TX_RAW
+	LDA	#1
+	STA	NET_TX_RAW+1
+	LDA	#2
+	JMP	NET_TX_FRAME
+
+NET_TX_BUILD_LEAVE
+	LDA	#$56
+	STA	NET_TX_RAW
+	LDA	NET_SEQ
+	STA	NET_TX_RAW+1
+	STA	NET_LEAVE_SEQ
+	INC	NET_SEQ
+	LDA	#2
+	JMP	NET_TX_FRAME
+
+NET_TX_BUILD_REL_ACK
+	LDA	#$45
+	STA	NET_TX_RAW
+	LDA	NET_SEQ
+	STA	NET_TX_RAW+1
+	INC	NET_SEQ
+	LDA	NET_REL_REV_LO
+	STA	NET_TX_RAW+2
+	LDA	NET_REL_REV_HI
+	STA	NET_TX_RAW+3
+	LDA	#4
+	JSR	NET_TX_FRAME
+	LDA	#0
+	STA	NET_REL_ACK_PEND
+	RTS
+
+NET_ENDC
+	LDA	NET_ACTIVE
+	BEQ	NET_END_FW
+	JSR	NS_END
+NET_END_FW
+	LDA	#0
+	STA	NET_ACTIVE
+	LDA	NET_FW_OPEN
+	BEQ	NET_ENDX
+	JSR	NET_FW_CLOSE
+	LDA	#0
+	STA	NET_FW_OPEN
+NET_ENDX	RTS
+
+; OPTION is the temporary direct-connect leave control. Phase 08-10 routes the
+; same bounded state machine from the room menu; keeping it callable here makes
+; physical close/reopen behavior testable before Lobby UI exists.
+NET_LEAVE_INPUT
+	LDA	NET_LEAVING
+	BNE	NLI_X
+	LDA	CONSOL
+	AND	#$04		;OPTION is active low
+	BNE	NLI_X
+	LDA	NET_ACTIVE
+	BEQ	NLI_X
+	LDA	NET_WELCOME
+	BEQ	NLI_X
+	LDA	#1
+	STA	NET_LEAVING
+	LDA	#0
+	STA	NET_LEAVE_SENT
+	STA	NET_LEAVE_ACKED
+	STA	NET_ROUND_READY
+	STA	NET_MOVE_DUE
+	STA	NET_PEND_COUNT
+	STA	NET_TRIG_LATCH
+	STA	HOST_MSG
+	STA	HOST_MSG+1
+	LDA	RTCLOK
+	STA	NET_LEAVE_CLK
+	LDA	#NET_LEAVE_NTSC
+	LDX	PALNTS
+	BEQ	NLI_TIMER
+	LDA	#NET_LEAVE_PAL
+NLI_TIMER
+	STA	NET_LEAVE_TIMER
+NLI_X	RTS
+
+NET_LEAVE_TICK
+	LDA	NET_LEAVING
+	BEQ	NLT_X
+	LDA	NET_LEAVE_ACKED
+	BNE	NLT_DONE
+	LDA	RTCLOK
+	CMP	NET_LEAVE_CLK
+	BEQ	NLT_X
+	STA	NET_LEAVE_CLK
+	DEC	NET_LEAVE_TIMER
+	BNE	NLT_X
+NLT_DONE
+	JMP	NET_HOSTRET
+NLT_X	RTS
+
+; Firmware leaves NetStream only when COMMAND is asserted. NS_END restores the
+; Atari IRQ/POKEY side but does not assert COMMAND, so perform the harmless Fuji
+; high-speed-index query after a menu-safe VBI is installed. Its result is not
+; used; the command edge itself makes FujiNet stop and close the TCP socket.
+NET_FW_CLOSE
+	LDA	#$70
+	STA	DDEVIC
+	LDA	#1
+	STA	DUNIT
+	LDA	#$3F
+	STA	DCOMND
+	LDA	#$40
+	STA	DSTATS
+	LDA	# <NET_TX_BUF
+	STA	DBUFLO
+	LDA	# >NET_TX_BUF
+	STA	DBUFHI
+	LDA	#1
+	STA	DTIMLO
+	STA	DBYTLO
+	LDA	#0
+	STA	DBYTHI
+	STA	DAUX1
+	STA	DAUX2
+	JSR	SIOV
+	RTS
 NET_HIGH_CODE_END
 	ORG	CORE_DISPATCH_CONT
 NET_RX_40DONE
@@ -3239,6 +3410,9 @@ NVU_FILLED
 	LDA	NET_ERASE_MASK
 	AND	PLRMSKINV,X
 	STA	NET_ERASE_MASK
+	LDA	NET_REDRAW_MASK		;the vacant pass erased its PM image; a
+	ORA	PLRMSK,X		;snapshot at the same cell cannot reveal that,
+	STA	NET_REDRAW_MASK		;so force one still-frame draw on seat fill
 	LDA	#1			;let the reconcile place it where the server says
 	STA	NET_P_PENDING,X
 NVU_NX
@@ -7692,6 +7866,13 @@ NET_PRED_FLG	.DS	1	;shot publish parameter: flags (active | dir<<1)
 NET_WAIT_LO	.DS	1	;frames waited for the first authoritative sync (lo)
 NET_WAIT_HI	.DS	1	;frames waited for the first authoritative sync (hi)
 NET_INIT_TRY	.DS	1	;consecutive NS_INIT failures for the current host
+NET_FW_OPEN	.DS	1	;NS_INIT reached firmware; COMMAND/SIO close is required
+NET_LEAVING	.DS	1	;clean leave suppresses gameplay/name TX while RX stays live
+NET_LEAVE_SENT	.DS	1	;$56 frame was queued on this connection
+NET_LEAVE_SEQ	.DS	1	;sequence echoed by $57 LEAVE_ACK
+NET_LEAVE_ACKED	.DS	1	;matching server acknowledgement received
+NET_LEAVE_TIMER	.DS	1	;frames left before bounded forced close
+NET_LEAVE_CLK	.DS	1	;RTCLOK edge used to age the leave timer
 HOST_MSG	.DS	2	;pending host-screen status string ($0000 = none)
 NET_TX_CLKLAST	.DS	1	;last RTCLOK used for pacing
 NET_TX_LAST_STICK	.DS	1	;last transmitted stick nibble

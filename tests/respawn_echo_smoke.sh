@@ -152,7 +152,7 @@ if a.pid is None or b.pid is None or a.pid == b.pid:
 # Hunt: b walks onto a's row, closes in, and fires. The map is open, so this is
 # straight lines only.
 deadline = time.time() + 30.0
-while time.time() - deadline < 0 and not any(f & 0x01 for _, f in a.respawns):
+while time.time() - deadline < 0 and not any(f == 0x01 for _, f in a.respawns):
     a.pump(0.05)
     b.pump(0.05)
     if b.pid not in b.pos or a.pid not in b.pos:

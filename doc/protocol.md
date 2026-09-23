@@ -54,6 +54,8 @@ therefore not required in the hostname field.
 | 0x53 | RELIABLE_EVENT | S->C | 7..56 | Ordered wrapper for reliable events |
 | 0x54 | MATCH_END   | S->C* | 43   | Frozen authoritative result |
 | 0x55 | ROUND_START | S->C* | 3    | New-round authorization |
+| 0x56 | LEAVE_ROOM  | C->S  | 2    | Voluntary seat release request |
+| 0x57 | LEAVE_ACK   | S->C  | 2    | Echoed voluntary-leave acknowledgement |
 
 `*` means the payload is carried as the inner body of `RELIABLE_EVENT`.
 
@@ -452,6 +454,21 @@ use modulo-256 comparison: distances 1..127 are newer, 128..255 are stale, and
 equality is a duplicate/current epoch. The handshake anchor makes wrap 255->0
 unambiguous within the bounded session and retry lifetimes.
 
+### 0x56 LEAVE_ROOM (2 bytes, C->S) and 0x57 LEAVE_ACK (2 bytes, S->C)
+
+Both payloads are `[type, leave_seq]`. `leave_seq` is selected by the client
+and echoed by the server. These messages use the normal COBS/CRC frame but are
+separate from the server-to-client reliable revision stream.
+
+On a valid `LEAVE_ROOM`, the server queues `LEAVE_ACK` and releases the
+authenticated gameplay seat immediately. Any remaining TCP output is owned by
+a bounded, seatless departing-connection object for at most one second. A
+duplicate leave on that old socket can only repeat its ACK; it cannot affect a
+new occupant which reuses the slot. EOF after the request completes the same
+voluntary departure. Clients continue receive and reliable-ACK service while
+waiting, but stop name and gameplay transmission and close after 0.75 seconds
+even if the server is unreachable.
+
 ## Connection and Slot Semantics
 
 - Server tracks clients by their accepted TCP socket; the peer address is logged only.
@@ -463,6 +480,17 @@ unambiguous within the bounded session and retry lifetimes.
 - Client timeout is 15 seconds without received bytes; a new connection must
   complete an inbound packet within 3 seconds. EOF and socket failures release
   the seat immediately. Both Linux clients send idle keepalives.
+- Startup rooms are clean and dormant until a HELLO authenticates a human.
+  Voluntary departure of the final human resets directly to a clean dormant
+  next round. Unexpected loss of the final human instead preserves the active
+  round, bricks, actors, and Zombie simulation for 60 seconds. A human HELLO
+  during that window cancels expiry and joins the preserved round with a fresh
+  seat and score. Expiry resets the room and returns it to dormant state.
+- No-human grace is independent of round phase. If the last human disappears
+  during results, the server resolves the unobserved transition immediately
+  without extending the original grace deadline. Zombie AI continues to target
+  humans only, and in-flight shots are cleared when the room loses its final
+  human so Zombie-only combat cannot manufacture a winner.
 
 ### Slot allocation order
 
@@ -489,15 +517,21 @@ the slot's transient state so the new occupant does not inherit the old one's:
 - `score` returns to 0,
 - zombie think/move/fire schedules are re-based to the current time.
 
-The actor is **not** moved. Its position is the slot's physical location rather
-than stale state, so the wizard becomes a zombie (or vice versa) where it
-stands, and other clients see no unexplained jump. A pending respawn is left to
-finish through the normal `RESPAWN` path.
+A live actor is **not** moved during a Zombie/human handoff. Its position is the
+slot's physical location rather than stale state, so the wizard becomes a
+Zombie (or vice versa) where it stands and other clients see no unexplained
+jump. A human joining a vacant seat receives a new collision-safe spawn because
+the seat's stored coordinates are only history and another actor may now occupy
+them. Taking over a Zombie that is awaiting respawn also gets a fresh visible
+spawn. Every successful gameplay join broadcasts a final `RESPAWN`, including
+an in-place live-Zombie handoff, so all clients place and draw the actor
+immediately rather than waiting for it to move.
 
 Each reconnect is a new connection and uses the normal free-slot preference.
-A cleanly closed old connection releases its slot immediately. An old half-open
-connection can still occupy a seat until the silence timeout; TCP is not a
-persistent player identity or session-resume mechanism.
+`LEAVE_ROOM` is the deterministic clean path. A plain close is unexpected and
+therefore participates in final-human grace; an old half-open connection can
+still occupy a seat until the silence timeout. TCP is not a persistent player
+identity or session-resume mechanism.
 
 ## Client Input Model
 

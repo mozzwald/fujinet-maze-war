@@ -69,13 +69,17 @@ make clean
 ```text
 build/maze-war-server [--port PORT | --port-base PORT] [--room-count N]
                      [--zombies N | --room-zombies LIST]
-                     [--tick-hz N] [--brick PATH] [--debug]
+                     [--tick-hz N] [--brick PATH] [--kill-limit N]
+                     [--intermission-ms N] [--no-human-grace-ms N] [--debug]
 ```
 
 Defaults:
 - `--port 9000`
 - `--tick-hz 10`
 - `--zombies 1` (0..3 accepted)
+- `--kill-limit 5`
+- `--intermission-ms 15000`
+- `--no-human-grace-ms 60000`
 - `--brick server/brick_layout.txt`
 - one isolated four-seat room
 
@@ -156,8 +160,11 @@ Controls (SDL client):
   port defaults to 9000 and accepts decimal values from 1 through 65535.
 - Max players: 4 total slots
 - Server tick: fixed rate (`--tick-hz`, default 10 Hz)
-- A disconnected Linux client exits; restart it to reconnect. The Atari returns
-  to its host prompt after its silence watchdog expires.
+- Esc/window close makes each Linux client send a bounded clean leave. OPTION
+  does the same on Atari and returns to host/port/name setup in about one
+  second. An unreachable server cannot extend that bound.
+- Unexpected final-client loss preserves the room for the configured no-human
+  grace; an explicit final leave resets it directly to a clean dormant round.
 - Sequence numbers: 8-bit packet seq for ordering/duplicate filtering
 
 Core packet flow:
@@ -169,6 +176,8 @@ Core packet flow:
    for destroyed bricks.
 5. Server sends `SHOT` (`0x42`) and `RESPAWN` (`0x52`) events as gameplay
    changes occur.
+6. Client sends `LEAVE_ROOM` (`0x56`) and waits briefly for `LEAVE_ACK`
+   (`0x57`) before closing its transport.
 
 See [doc/protocol.md](doc/protocol.md) for byte-level packet layout.
 
@@ -190,7 +199,9 @@ During mixed-session debugging, start the server with `--debug` and capture both
 - Clients are input/render frontends: they send control state and render what
   the server publishes.
 - On join, a client is assigned a slot (player id), receives full brick state,
-  then follows snapshots/events.
+  and gets an authoritative final-spawn event before following snapshots. A
+  vacant seat receives a fresh collision-safe position; a live Zombie handoff
+  keeps its existing position.
 - AI zombies are simulated on the server in unused slots (globally configurable
   with `--zombies`, or per room with `--room-zombies`).
 - A server process may host isolated rooms on consecutive TCP ports; the

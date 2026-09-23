@@ -100,16 +100,16 @@ for name, size in (("GAMESCR", 760), ("BOTSCRN", 11 + 69)):
 
 # 5. The fixed loaded-core, zero-page and NetStream-state budgets must retain
 # their existing safety margins. The handler uses $EE, while state may grow
-# only up to $7F00. The reachable 08-04 result state machine extends the
-# deliberately isolated high-code reserve by one page.
+# only up to $7F00. Round presentation plus 08-05 session teardown occupy the
+# deliberately isolated high-code reserve through $8AFF.
 if sym["CORE_DATA_END"] > 0x6F00:
     fail(f"loaded core ends at ${sym['CORE_DATA_END']:04X}, leaving less than $100 before display buffers")
 if sym["ZP_END"] > 0xE9:
     fail(f"zero page ends at ${sym['ZP_END']:04X}, leaving less than five bytes before handler $EE")
 if sym["NET_STATE_END"] > 0x7F00:
     fail(f"NetStream state ends at ${sym['NET_STATE_END']:04X}, leaving less than $100 before $8000")
-if sym["NET_HIGH_CODE_END"] > 0x8900:
-    fail(f"high code ends at ${sym['NET_HIGH_CODE_END']:04X}, past its guarded $8400-$88FF reserve")
+if sym["NET_HIGH_CODE_END"] > 0x8B00:
+    fail(f"high code ends at ${sym['NET_HIGH_CODE_END']:04X}, past its guarded $8400-$8AFF reserve")
 
 # 6. Segments must not overlap each other either.
 for j in range(len(segs)):

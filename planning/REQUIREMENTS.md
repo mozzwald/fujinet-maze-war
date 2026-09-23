@@ -80,7 +80,7 @@
 - [x] **ROOM-02**: Each room enforces configured Zombie capacity and human priority without transferring scores or transient state between occupants.
 - [x] **ROND-01**: The server alone selects the first player to reach a validated kill limit and broadcasts one idempotent frozen round result, keeping final occupant roles separate from historical Zombie participation.
 - [x] **ROND-02**: A new round resets scores, bricks, spawns, shots, respawns, input queues, timers, and round-local effects before authoritative play resumes. Versioned round identity and a recoverable authorization/map/snapshot barrier prevent stale events or lost reset frames from reopening old state; intermission preserves both endpoint watchdogs.
-- [ ] **ROND-03**: Atari presents loser vaporization, winner animation/vaporization, fade, and frozen results without disabling VBI, stopping network service, enabling DLI, or locally restarting the round.
+- [x] **ROND-03**: Atari presents loser vaporization, winner animation/vaporization, fade, and frozen results without disabling VBI, stopping network service, enabling DLI, or locally restarting the round.
 - [ ] **GRCE-01**: Voluntary leave releases a seat immediately, while unexpected loss of the final human preserves the room for a bounded grace period independent of round state.
 - [ ] **CONF-01**: Public host, TCP room range, default port, Lobby base, appkey, and kill limit are validated build inputs that regenerate Atari constants/data.
 - [ ] **APKY-01**: Atari reads the shared Lobby username AppKey with bounded validation and manual fallback.
@@ -130,7 +130,7 @@
 | ROOM-02 | Phase 8 | Complete |
 | ROND-01 | Phase 8 | Complete |
 | ROND-02 | Phase 8 | Complete |
-| ROND-03 | Phase 8 | Pending |
+| ROND-03 | Phase 8 | Complete |
 | GRCE-01 | Phase 8 | Pending |
 | CONF-01 | Phase 8 | Pending |
 | APKY-01 | Phase 8 | Pending |
@@ -147,4 +147,4 @@
 
 ---
 *Requirements defined: 2026-04-07*
-*Last updated: 2026-09-12 for Phase 8 authoritative-round hardware acceptance*
+*Last updated: 2026-09-12 for the Phase 08-05 mixed-hardware checkpoint and join safe-spawn/immediate-redraw follow-up*
