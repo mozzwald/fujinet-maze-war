@@ -1,10 +1,16 @@
+#include <signal.h>
+#include "../../net/tcp_stream.h"
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <SDL/SDL.h>
+#ifdef __APPLE__
+#undef main
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,14 +23,29 @@ enum {
   PKT_SNAPSHOT = 0x40,
   PKT_DELTA = 0x41,
   PKT_SHOT = 0x42,
+  PKT_NAME = 0x43,
+  PKT_SEATS = 0x44,
+  PKT_RELIABLE_ACK = 0x45,
+  PKT_HELLO = 0x46,
+  PKT_WELCOME = 0x47,
+  PKT_REJECT = 0x48,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
-  PKT_RESPAWN = 0x52
+  PKT_RESPAWN = 0x52,
+  PKT_RELIABLE_EVENT = 0x53,
+  PKT_MATCH_END = 0x54,
+  PKT_ROUND_START = 0x55,
+  PKT_LEAVE_ROOM = 0x56,
+  PKT_LEAVE_ACK = 0x57
 };
 
 enum { MAX_PLAYERS = 4 };
+enum { PROTOCOL_VERSION = 1, ROUND_PLAYING = 0, ROUND_OVER = 1 };
 enum { MAZE_W = 20, MAZE_H = 19 };
 enum { HOST_MAX = 63 };
+/* Matches the Atari HUD field; the server sanitizes and space-pads. */
+enum { NAME_LEN = 8 };
+enum { NAME_RESEND_MS = 2000 };
 enum { FX_MAX = 96 };
 
 enum {
@@ -81,8 +102,22 @@ struct game_state {
   struct fx_state fx[FX_MAX];
   int fx_cursor;
   uint8_t zombie_mask;
+  uint8_t result_active_mask;
+  uint8_t zombie_history_mask;
+  /* Slots a client actually holds. The zombie mask only names AI-driven
+     slots, so without this an empty seat looks like a silent human. */
+  uint8_t seat_mask;
+  uint8_t names[MAX_PLAYERS][NAME_LEN];
   int local_pid;
   int have_snapshot;
+  int have_welcome;
+  uint8_t round_id;
+  uint8_t round_phase;
+  uint8_t kill_limit;
+  uint8_t winner_pid;
+  int round_authorized;
+  int round_map_ready;
+  int round_snapshot_ready;
 };
 
 struct input_state {
@@ -133,6 +168,39 @@ static uint64_t now_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static void clean_leave(int sock, struct tcp_tx *tx, struct tcp_rx *rx,
+                        uint8_t *seq) {
+  uint8_t leave_seq = (*seq)++;
+  uint8_t pkt[2] = {PKT_LEAVE_ROOM, leave_seq};
+  if (tcp_tx_queue_frame(sock, tx, pkt, sizeof(pkt)) < 0) return;
+  uint64_t deadline = now_ms() + 750;
+  while (now_ms() < deadline) {
+    if (tcp_tx_flush(sock, tx) < 0) return;
+    for (int frames = 0; frames < 64; frames++) {
+      uint8_t reply[64];
+      int n = tcp_recv_frame(sock, rx, reply, sizeof(reply));
+      if (n < 0) return;
+      if (n == 0) break;
+      if (n == 2 && reply[0] == PKT_LEAVE_ACK && reply[1] == leave_seq) {
+        return;
+      }
+    }
+    struct pollfd pfd = {.fd = sock, .events = POLLIN | POLLOUT};
+    (void)poll(&pfd, 1, 20);
+  }
+}
+
+static int round_is_newer(uint8_t candidate, uint8_t current) {
+  uint8_t distance = (uint8_t)(candidate - current);
+  return distance != 0 && distance < 0x80;
+}
+
+static int game_ready(const struct game_state *g) {
+  return g->have_welcome && g->round_phase == ROUND_PLAYING &&
+         g->round_authorized && g->round_map_ready &&
+         g->round_snapshot_ready;
 }
 
 static int iabs_i(int v) {
@@ -234,6 +302,39 @@ static void fill_rect(SDL_Surface *screen, int x, int y, int w, int h, Uint32 co
   r.w = (Uint16)w;
   r.h = (Uint16)h;
   SDL_FillRect(screen, &r, color);
+}
+
+/* A slot with neither a client nor a zombie in it is not in the game: it gets
+   no HUD line and no sprite on the board. Our own slot always counts, so the
+   view is right before the first SEATS packet arrives. */
+static int slot_in_play(const struct game_state *g, int i) {
+  return (g->zombie_mask & (1u << i)) || (g->seat_mask & (1u << i)) ||
+         i == g->local_pid;
+}
+
+/* A slot the server has no name for shows the role label instead. */
+static int name_is_set(const uint8_t *name) {
+  int i;
+  for (i = 0; i < NAME_LEN; i++) {
+    if (name[i] != 0 && name[i] != ' ') {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void display_name(const struct game_state *g, int slot,
+                         char out[NAME_LEN + 1]) {
+  int i;
+  if (name_is_set(g->names[slot])) {
+    memcpy(out, g->names[slot], NAME_LEN);
+    out[NAME_LEN] = '\0';
+    for (i = NAME_LEN - 1; i >= 0 && out[i] == ' '; i--) out[i] = '\0';
+    return;
+  }
+  snprintf(out, NAME_LEN + 1,
+           (g->zombie_mask & (1u << slot)) ? "ZOMBIE %d" : "WIZARD %d",
+           slot + 1);
 }
 
 static int glyph_for_char(char ch, uint8_t out[7]) {
@@ -641,7 +742,7 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
     float gy;
     int px;
     int py;
-    if (!g->panim[i].known || g->panim[i].dead) {
+    if (!g->panim[i].known || g->panim[i].dead || !slot_in_play(g, i)) {
       continue;
     }
     interp_player(&g->panim[i], now, &gx, &gy);
@@ -658,8 +759,27 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
     int row_y = l->hud_y + (i * l->line_h);
     int role_x = l->board_x + (4 * l->text_scale);
     int score_x = l->board_x + (l->board_w - (20 * l->text_scale));
-    const char *role = (g->zombie_mask & (1u << i)) ? "ZOMBIE" : "WIZARD";
+    char label[NAME_LEN + 1];
+    const char *role;
     Uint32 color = theme->player_colors[i];
+    if (!slot_in_play(g, i)) {
+      continue; /* nobody in this seat: no name and no score */
+    }
+    if (g->zombie_mask & (1u << i)) {
+      role = "ZOMBIE";
+    } else if (name_is_set(g->names[i])) {
+      memcpy(label, g->names[i], NAME_LEN);
+      label[NAME_LEN] = '\0';
+      {
+        int t;
+        for (t = NAME_LEN - 1; t >= 0 && label[t] == ' '; t--) {
+          label[t] = '\0';
+        }
+      }
+      role = label;
+    } else {
+      role = "WIZARD";
+    }
     draw_text(screen, role_x, row_y, role, l->text_scale, color);
     snprintf(line, sizeof(line), "%3u", g->players[i].score);
     draw_text(screen, score_x, row_y, line, l->text_scale, color);
@@ -677,17 +797,62 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
     draw_text(screen, l->win_w - (35 * l->text_scale), l->win_h - (7 * l->text_scale),
               "WAITING FOR SLOT", l->text_scale - 1, theme->text_blue);
   }
+
+  if (g->round_phase == ROUND_OVER && g->have_welcome) {
+    int box_w = (l->board_w * 3) / 4;
+    int box_h = 8 * l->line_h;
+    int box_x = l->board_x + (l->board_w - box_w) / 2;
+    int box_y = l->board_y + (l->board_h - box_h) / 2;
+    char winner[NAME_LEN + 1];
+    int result_row = 0;
+    fill_rect(screen, box_x - 2 * l->scale, box_y - 2 * l->scale,
+              box_w + 4 * l->scale, box_h + 4 * l->scale,
+              theme->border_blue);
+    fill_rect(screen, box_x, box_y, box_w, box_h, theme->black);
+    draw_text(screen, box_x + 6 * l->scale, box_y + 2 * l->scale,
+              "ROUND OVER", l->text_scale + 1, theme->text_gold);
+    display_name(g, g->winner_pid, winner);
+    if (g->zombie_mask & (1u << g->winner_pid)) {
+      snprintf(line, sizeof(line), "%s WINS", winner);
+    } else if (g->zombie_history_mask) {
+      snprintf(line, sizeof(line), "%s BEATS ZOMBIES", winner);
+    } else {
+      snprintf(line, sizeof(line), "%s WINS", winner);
+    }
+    draw_text(screen, box_x + 6 * l->scale, box_y + 2 * l->line_h,
+              line, l->text_scale, theme->white);
+    for (i = 0; i < MAX_PLAYERS; i++) {
+      char result_name[NAME_LEN + 1];
+      if (!(g->result_active_mask & (1u << i))) continue;
+      display_name(g, i, result_name);
+      snprintf(line, sizeof(line), "%u  %-8s  %02u", (unsigned)(i + 1),
+               result_name, (unsigned)g->players[i].score);
+      draw_text(screen, box_x + 6 * l->scale,
+                box_y + ((result_row + 3) * l->line_h), line,
+                l->text_scale, theme->player_colors[i]);
+      result_row++;
+    }
+    draw_text(screen, box_x + 6 * l->scale, box_y + (7 * l->line_h),
+              "NEXT ROUND", l->text_scale - 1, theme->text_blue);
+  } else if (g->have_welcome && !game_ready(g)) {
+    snprintf(line, sizeof(line), "SYNCING ROUND %u", (unsigned)g->round_id);
+    draw_text(screen, l->board_x + 4 * l->scale,
+              l->board_y + 4 * l->scale, line, l->text_scale,
+              theme->white);
+  }
 }
 
 static void render_prompt(SDL_Surface *screen, const struct layout *l,
                           const struct theme *theme, const char *host,
-                          const char *msg, uint64_t now) {
+                          const char *name, int field, const char *msg,
+                          uint64_t now) {
   int box_w = l->board_w - (8 * l->scale);
   int box_h = l->board_h / 3;
   int box_x = l->board_x + (4 * l->scale);
   int box_y = l->board_y + (l->board_h / 3);
   int blink = ((now / 450ULL) & 1ULL) ? 1 : 0;
-  char host_line[HOST_MAX + 4];
+  char host_line[HOST_MAX + 8];
+  char name_line[NAME_LEN + 10];
 
   clear_screen(screen, theme);
   draw_checker_tile(screen, l->board_x, l->board_y, l->board_w, l->board_h,
@@ -702,13 +867,22 @@ static void render_prompt(SDL_Surface *screen, const struct layout *l,
   draw_text(screen, box_x + (6 * l->scale), box_y + (14 * l->scale),
             "ENTER HOSTNAME", l->text_scale, theme->text_green);
 
-  snprintf(host_line, sizeof(host_line), "HOST: %s%s", host, blink ? "_" : " ");
+  snprintf(host_line, sizeof(host_line), "HOST: %s%s", host,
+           (field == 0 && blink) ? "_" : " ");
   draw_text(screen, box_x + (6 * l->scale), box_y + (24 * l->scale),
-            host_line, l->text_scale, theme->white);
+            host_line, l->text_scale,
+            (field == 0) ? theme->white : theme->text_blue);
 
-  draw_text(screen, box_x + (6 * l->scale), box_y + (33 * l->scale),
-            "ENTER TO CONNECT", l->text_scale - 1, theme->text_blue);
+  snprintf(name_line, sizeof(name_line), "NAME: %s%s", name,
+           (field == 1 && blink) ? "_" : " ");
+  draw_text(screen, box_x + (6 * l->scale), box_y + (31 * l->scale),
+            name_line, l->text_scale,
+            (field == 1) ? theme->white : theme->text_blue);
+
   draw_text(screen, box_x + (6 * l->scale), box_y + (39 * l->scale),
+            (field == 0) ? "ENTER FOR NAME" : "ENTER TO CONNECT",
+            l->text_scale - 1, theme->text_blue);
+  draw_text(screen, box_x + (6 * l->scale), box_y + (45 * l->scale),
             "ESC TO QUIT", l->text_scale - 1, theme->text_blue);
 
   if (msg && msg[0]) {
@@ -719,9 +893,11 @@ static void render_prompt(SDL_Surface *screen, const struct layout *l,
 
 static int host_prompt_loop(SDL_Surface *screen, const struct layout *l,
                             const struct theme *theme, char *host,
-                            size_t host_len, const char *msg) {
+                            size_t host_len, char *name, size_t name_len,
+                            const char *msg) {
   int done = 0;
   int accepted = 0;
+  int field = 0; /* 0 = host, 1 = name */
   uint64_t next_frame = now_ms();
   while (!done) {
     SDL_Event ev;
@@ -736,26 +912,38 @@ static int host_prompt_loop(SDL_Surface *screen, const struct layout *l,
           return 0;
         }
         if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-          if (host[0] != '\0') {
+          if (field == 0) {
+            if (host[0] != '\0') {
+              field = 1; /* the name may be left empty */
+            }
+          } else {
             accepted = 1;
             done = 1;
           }
           continue;
         }
-        if (key == SDLK_BACKSPACE) {
-          size_t n = strlen(host);
-          if (n > 0) {
-            host[n - 1] = '\0';
-          }
+        if (key == SDLK_TAB) {
+          field = field ? 0 : 1;
           continue;
         }
-        if (uni >= 32 && uni < 127) {
-          char ch = (char)uni;
-          size_t n = strlen(host);
-          if (isalnum((unsigned char)ch) || ch == '.' || ch == '-') {
-            if (n + 1 < host_len) {
-              host[n] = ch;
-              host[n + 1] = '\0';
+        {
+          char *buf = (field == 0) ? host : name;
+          size_t cap = (field == 0) ? host_len : name_len;
+          if (key == SDLK_BACKSPACE) {
+            size_t n = strlen(buf);
+            if (n > 0) {
+              buf[n - 1] = '\0';
+            }
+            continue;
+          }
+          if (uni >= 32 && uni < 127) {
+            char ch = (char)uni;
+            size_t n = strlen(buf);
+            if (isalnum((unsigned char)ch) || ch == '.' || ch == '-') {
+              if (n + 1 < cap) {
+                buf[n] = ch;
+                buf[n + 1] = '\0';
+              }
             }
           }
         }
@@ -763,7 +951,7 @@ static int host_prompt_loop(SDL_Surface *screen, const struct layout *l,
     }
 
     if (now_ms() >= next_frame) {
-      render_prompt(screen, l, theme, host, msg, now_ms());
+      render_prompt(screen, l, theme, host, name, field, msg, now_ms());
       SDL_Flip(screen);
       next_frame = now_ms() + 16;
     }
@@ -781,7 +969,7 @@ static int resolve_host(const char *host, int port, struct sockaddr_in *out_addr
 
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_DGRAM;
+  hints.ai_socktype = SOCK_STREAM;
   snprintf(port_str, sizeof(port_str), "%d", port);
 
   rc = getaddrinfo(host, port_str, &hints, &res);
@@ -801,18 +989,11 @@ static int resolve_host(const char *host, int port, struct sockaddr_in *out_addr
   return -1;
 }
 
-static int open_udp_socket_nonblocking(void) {
-  int sock = socket(AF_INET, SOCK_DGRAM, 0);
-  int flags;
-  if (sock < 0) {
-    return -1;
-  }
-  flags = fcntl(sock, F_GETFL, 0);
-  if (flags < 0) {
-    close(sock);
-    return -1;
-  }
-  if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0) {
+static int open_tcp_socket(const struct sockaddr_in *addr) {
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (sock < 0) return -1;
+  if (connect(sock, (const struct sockaddr *)addr, sizeof(*addr)) < 0 ||
+      tcp_configure(sock) < 0) {
     close(sock);
     return -1;
   }
@@ -908,14 +1089,114 @@ static void apply_player_snapshot(struct game_state *g, int pid,
   }
 }
 
+static void send_reliable_ack(int sock, struct tcp_tx *tx, uint8_t *seq,
+                              uint16_t rev) {
+  uint8_t pkt[4];
+  pkt[0] = PKT_RELIABLE_ACK;
+  pkt[1] = (*seq)++;
+  pkt[2] = (uint8_t)rev;
+  pkt[3] = (uint8_t)(rev >> 8);
+  tcp_tx_queue_frame(sock, tx, pkt, sizeof(pkt));
+}
+
+static int reliable_inner_is_valid(const uint8_t *buf, ssize_t n) {
+  if (n == 5 && buf[0] == PKT_BRICK_DELTA) {
+    return 1;
+  }
+  if (n == 7 && buf[0] == PKT_RESPAWN) {
+    return 1;
+  }
+  if (n == 3 + NAME_LEN && buf[0] == PKT_NAME) {
+    return 1;
+  }
+  if (n == 52 && buf[0] == PKT_BRICK_FULL) return 1;
+  if (n == 43 && buf[0] == PKT_MATCH_END) return 1;
+  if (n == 3 && buf[0] == PKT_ROUND_START) return 1;
+  return 0;
+}
+
 static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
-                          uint64_t now, int debug) {
-  if (n >= 51 && buf[0] == PKT_BRICK_FULL) {
-    decode_brick_full(g, &buf[3]);
+                          uint64_t now, int debug, int sock,
+                          struct tcp_tx *tx, uint8_t *seq,
+                          uint16_t *reliable_applied_rev,
+                          int from_reliable) {
+  if (n == 5 && buf[0] == PKT_WELCOME && buf[1] == PROTOCOL_VERSION) {
+    g->have_welcome = 1;
+    g->round_id = buf[2];
+    g->round_phase = buf[3];
+    g->kill_limit = buf[4];
+    g->round_authorized = 0;
+    g->round_map_ready = 0;
+    g->round_snapshot_ready = 0;
+    return;
+  }
+  if (n >= 2 && buf[0] == PKT_REJECT) {
+    fprintf(stderr, "server rejected protocol version (requires %u)\n",
+            (unsigned)buf[1]);
+    return;
+  }
+  if (!g->have_welcome) return;
+
+  if (n >= 7 && buf[0] == PKT_RELIABLE_EVENT) {
+    uint16_t rev = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
+    const uint8_t *inner = &buf[4];
+    ssize_t inner_len = n - 4;
+    if (rev != (uint16_t)(*reliable_applied_rev + 1) ||
+        !reliable_inner_is_valid(inner, inner_len)) {
+      send_reliable_ack(sock, tx, seq, *reliable_applied_rev);
+      return;
+    }
+    *reliable_applied_rev = rev;
+    send_reliable_ack(sock, tx, seq, *reliable_applied_rev);
+    handle_packet(g, inner, inner_len, now, debug, sock, tx, seq,
+                  reliable_applied_rev, 1);
     return;
   }
 
-  if (n >= 4 && buf[0] == PKT_BRICK_DELTA) {
+  if (n == 3 && buf[0] == PKT_ROUND_START) {
+    uint8_t incoming = buf[1];
+    if (incoming == g->round_id || round_is_newer(incoming, g->round_id)) {
+      if (incoming != g->round_id || !g->round_authorized) {
+        memset(g->shots, 0, sizeof(g->shots));
+        memset(g->panim, 0, sizeof(g->panim));
+        memset(g->fx, 0, sizeof(g->fx));
+        g->round_map_ready = 0;
+        g->round_snapshot_ready = 0;
+        g->have_snapshot = 0;
+      }
+      g->round_id = incoming;
+      g->kill_limit = buf[2];
+      g->round_phase = ROUND_PLAYING;
+      g->round_authorized = 1;
+    }
+    return;
+  }
+
+  if (n == 43 && buf[0] == PKT_MATCH_END) {
+    if (buf[1] == g->round_id) {
+      g->round_phase = ROUND_OVER;
+      g->winner_pid = buf[2];
+      g->result_active_mask = buf[3];
+      g->seat_mask = (uint8_t)(buf[3] & (uint8_t)~buf[4]);
+      g->zombie_mask = buf[4];
+      g->kill_limit = buf[5];
+      g->zombie_history_mask = buf[10];
+      for (int i = 0; i < MAX_PLAYERS; i++) g->players[i].score = buf[6 + i];
+      memcpy(g->names, &buf[11], MAX_PLAYERS * NAME_LEN);
+      memset(g->shots, 0, sizeof(g->shots));
+      memset(g->fx, 0, sizeof(g->fx));
+    }
+    return;
+  }
+
+  if (n == 52 && buf[0] == PKT_BRICK_FULL && buf[51] == g->round_id) {
+    decode_brick_full(g, &buf[3]);
+    if (from_reliable) g->round_map_ready = 1;
+    return;
+  }
+
+  if (n == 5 && buf[0] == PKT_BRICK_DELTA && buf[4] == g->round_id &&
+      g->round_phase == ROUND_PLAYING) {
     int x = buf[2];
     int y = buf[3];
     if (x >= 0 && x < MAZE_W && y >= 0 && y < MAZE_H) {
@@ -927,7 +1208,22 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
     return;
   }
 
-  if (n >= 6 && buf[0] == PKT_SHOT) {
+  if (n >= 3 && buf[0] == PKT_SEATS) {
+    if (g->round_phase != ROUND_OVER)
+      g->seat_mask = (uint8_t)(buf[2] & 0x0F);
+    return;
+  }
+
+  if (n >= 3 + NAME_LEN && buf[0] == PKT_NAME) {
+    uint8_t np = buf[2];
+    if (np < MAX_PLAYERS && g->round_phase != ROUND_OVER) {
+      memcpy(g->names[np], &buf[3], NAME_LEN);
+    }
+    return;
+  }
+
+  if (n == 7 && buf[0] == PKT_SHOT && buf[6] == g->round_id &&
+      g->round_phase == ROUND_PLAYING) {
     int pid = buf[2];
     if (pid >= 0 && pid < MAX_PLAYERS) {
       uint8_t flags = buf[5];
@@ -950,7 +1246,8 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
     return;
   }
 
-  if (n >= 6 && buf[0] == PKT_RESPAWN) {
+  if (n == 7 && buf[0] == PKT_RESPAWN && buf[6] == g->round_id &&
+      g->round_phase == ROUND_PLAYING) {
     int pid = buf[2];
     uint8_t flags = buf[5];
     if (pid >= 0 && pid < MAX_PLAYERS) {
@@ -981,11 +1278,21 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
     return;
   }
 
-  if (n >= 19 && buf[0] == PKT_SNAPSHOT) {
+  if (n == 21 && buf[0] == PKT_SNAPSHOT && buf[20] == g->round_id &&
+      g->round_phase == ROUND_PLAYING) {
     int pid;
+    int ack_valid;
+    uint8_t ack_seq = 0;
     g->have_snapshot = 1;
+    g->round_snapshot_ready = 1;
     pid = (int)((buf[2] >> 1) & 0x03);
     g->zombie_mask = (uint8_t)((buf[2] >> 3) & 0x0F);
+    ack_valid = (buf[2] & 0x80) != 0;
+    if (n >= 20) {
+      ack_seq = buf[19];
+    } else {
+      ack_valid = 0;
+    }
     if (pid != g->local_pid) {
       g->local_pid = pid;
       if (debug) {
@@ -1011,6 +1318,10 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
     g->players[1].score = buf[16];
     g->players[2].score = buf[17];
     g->players[3].score = buf[18];
+    if (debug) {
+      fprintf(stderr, "snapshot ack pid=%d ack_valid=%d ack_seq=%u\n", pid,
+              ack_valid, (unsigned)ack_seq);
+    }
 
     for (pid = 0; pid < MAX_PLAYERS; pid++) {
       apply_player_snapshot(g, pid, g->players[pid].x, g->players[pid].y,
@@ -1061,7 +1372,9 @@ static uint8_t compute_stick(const struct input_state *in) {
 
 static void usage(const char *argv0) {
   fprintf(stderr,
-          "Usage: %s [--port PORT] [--host HOST] [--pid N] [--scale N] [--debug]\n",
+          "Usage: %s [--port PORT] [--host HOST] [--pid N] [--name NAME] "
+          "[--scale N] [--debug]\n"
+          "  --name NAME  display name, up to 8 chars; also promptable at start\n",
           argv0);
 }
 
@@ -1071,8 +1384,14 @@ int main(int argc, char **argv) {
   int opt_pid = -1;
   int scale = 4;
   char host[HOST_MAX + 1] = "127.0.0.1";
+  char name[NAME_LEN + 1] = "";
+  uint8_t my_name[NAME_LEN];
+  uint64_t last_name_send_ms = 0;
   char prompt_msg[128] = "";
   int sock = -1;
+  struct tcp_tx tx = {0};
+  struct tcp_rx rx = {0};
+  signal(SIGPIPE, SIG_IGN);
   struct sockaddr_in server_addr;
   struct layout layout;
   struct theme theme;
@@ -1081,6 +1400,7 @@ int main(int argc, char **argv) {
   struct input_state input;
   uint8_t seq = 0;
   uint8_t last_joy = 0xFF;
+  uint16_t reliable_applied_rev = 0;
   uint64_t last_send_ms = 0;
   uint64_t next_frame_ms;
   int running = 1;
@@ -1097,6 +1417,9 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
       strncpy(host, argv[++i], HOST_MAX);
       host[HOST_MAX] = '\0';
+    } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
+      strncpy(name, argv[++i], NAME_LEN);
+      name[NAME_LEN] = '\0';
     } else if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
       opt_pid = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--scale") == 0 && i + 1 < argc) {
@@ -1141,7 +1464,8 @@ int main(int argc, char **argv) {
   theme_init(screen, &theme);
 
   while (1) {
-    if (!host_prompt_loop(screen, &layout, &theme, host, sizeof(host), prompt_msg)) {
+    if (!host_prompt_loop(screen, &layout, &theme, host, sizeof(host), name,
+                          sizeof(name), prompt_msg)) {
       return 0;
     }
     if (resolve_host(host, port, &server_addr) == 0) {
@@ -1150,14 +1474,27 @@ int main(int argc, char **argv) {
     snprintf(prompt_msg, sizeof(prompt_msg), "COULD NOT RESOLVE HOST");
   }
 
-  sock = open_udp_socket_nonblocking();
+  sock = open_tcp_socket(&server_addr);
   if (sock < 0) {
     perror("socket");
     return 1;
   }
+  {
+    uint8_t hello[2] = {PKT_HELLO, PROTOCOL_VERSION};
+    tcp_tx_queue_frame(sock, &tx, hello, sizeof(hello));
+  }
 
   game.local_pid = opt_pid;
   game.zombie_mask = 0;
+  memset(game.names, 0, sizeof(game.names));
+  game.seat_mask = 0;
+  memset(my_name, ' ', sizeof(my_name));
+  {
+    size_t i;
+    for (i = 0; i < NAME_LEN && name[i]; i++) {
+      my_name[i] = (uint8_t)name[i];
+    }
+  }
 
   if (debug) {
     char ip[INET_ADDRSTRLEN] = "";
@@ -1207,31 +1544,48 @@ int main(int argc, char **argv) {
 
     now = now_ms();
 
-    while (1) {
-      uint8_t buf[256];
-      ssize_t n = recvfrom(sock, buf, sizeof(buf), 0, NULL, NULL);
-      if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          break;
-        }
-        break;
+    if (tcp_tx_flush(sock, &tx) < 0) break;
+    for (int frames = 0; frames < 64; frames++) {
+      uint8_t buf[64];
+      int n = tcp_recv_frame(sock, &rx, buf, sizeof(buf));
+      if (n < 0) { running = 0; break; }
+      if (n == 0) break;
+      handle_packet(&game, buf, n, now, debug, sock, &tx, &seq,
+                    &reliable_applied_rev, 0);
+    }
+    if (!running) break;
+
+    /* The server repeats names it knows, but it cannot repeat one it never
+       received, so keep sending until our own slot comes back named. */
+    if (game.have_welcome && name[0] &&
+        (now - last_name_send_ms) >= NAME_RESEND_MS) {
+      int known = (game.local_pid >= 0) && name_is_set(game.names[game.local_pid]);
+      if (!known) {
+        uint8_t pkt[3 + NAME_LEN];
+        pkt[0] = PKT_NAME;
+        pkt[1] = seq++;
+        pkt[2] = (uint8_t)((game.local_pid >= 0) ? game.local_pid : 0);
+        memcpy(&pkt[3], my_name, NAME_LEN);
+        tcp_tx_queue_frame(sock, &tx, pkt, sizeof(pkt));
       }
-      handle_packet(&game, buf, n, now, debug);
+      last_name_send_ms = now;
     }
 
     {
-      uint8_t stick = compute_stick(&input);
-      uint8_t joy = pack_joy(stick, (uint8_t)input.fire);
-      if (joy != last_joy ||
+      int ready = game_ready(&game);
+      uint8_t stick = ready ? compute_stick(&input) : 0x0F;
+      uint8_t joy = ready ? pack_joy(stick, (uint8_t)input.fire) : 0x0F;
+      if (game.have_welcome && (joy != last_joy ||
           (joy != 0x0F && (now - last_send_ms) >= 100) ||
-          (now - last_send_ms) >= 1000) {
-        uint8_t pkt[4];
+          (now - last_send_ms) >= 1000)) {
+        uint8_t pkt[5];
         int tx_pid = (game.local_pid >= 0) ? game.local_pid : ((opt_pid >= 0) ? opt_pid : 0);
         pkt[0] = PKT_DELTA;
         pkt[1] = seq++;
         pkt[2] = (uint8_t)tx_pid;
         pkt[3] = joy;
-        sendto(sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        pkt[4] = game.round_id;
+        tcp_tx_queue_frame(sock, &tx, pkt, sizeof(pkt));
         last_joy = joy;
         last_send_ms = now;
       }
@@ -1246,6 +1600,7 @@ int main(int argc, char **argv) {
     SDL_Delay(1);
   }
 
+  if (game.have_welcome) clean_leave(sock, &tx, &rx, &seq);
   close(sock);
   return 0;
 }

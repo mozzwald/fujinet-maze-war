@@ -32,10 +32,16 @@ DLIST	=	$0230
 DMACTL	=	$022F
 GPRIOR	=	$026F
 GRACTL	=	$D01D
+HPOSM0	=	$D004
 HPOSP0	=	$D000
 KEYCODES	=	$79
 KEYIN	=	$02FC
+MENU_KEY_UP	=	$1C	;ATASCII cursor-up
+MENU_KEY_DOWN	=	$1D	;ATASCII cursor-down
+MENU_KEY_LEFT	=	$1E	;ATASCII cursor-left
+MENU_KEY_RIGHT	=	$1F	;ATASCII cursor-right
 NMIEN	=	$D40E
+PALNTS	=	$62	;OS television-standard flag: zero NTSC, nonzero PAL
 PCOLR0	=	$02C0
 PCOLR1	=	$02C1
 PCOLR2	=	$02C2
@@ -43,6 +49,7 @@ PCOLR3	=	$02C3
 PMBASE	=	$D407
 RANDOM	=	$D20A
 RTCLOK	=	$14
+SIZEM	=	$D00C
 SIZEP0	=	$D008
 SKCTL	=	$D20F
 STICK0	=	$0278
@@ -52,12 +59,60 @@ CDTMF5	=	$022E
 SETVBV	=	$E45C
 XITVBV	=	$E462
 C_SP	=	$0082
+SIOV	=	$E459
+DDEVIC	=	$0300
+DUNIT	=	$0301
+DCOMND	=	$0302
+DSTATS	=	$0303
+DBUFLO	=	$0304
+DBUFHI	=	$0305
+DTIMLO	=	$0306
+DBYTLO	=	$0308
+DBYTHI	=	$0309
+DAUX1	=	$030A
+DAUX2	=	$030B
+DVSTAT	=	$02EA
+APPKEY_DEVICE	=	$70
+APPKEY_UNIT	=	1
+APPKEY_OPEN_CMD	=	$DC
+APPKEY_CLOSE_CMD	=	$DB
+APPKEY_READ_CMD	=	$DD
+APPKEY_WRITE_CMD	=	$DE
+; Maze War owns every AppKey it writes. The Lobby namespace is read-only and
+; exists only to honor the official Lobby's cold-start launch handoff.
+MAZEWAR_APPKEY_USER_KEY =	$00
+MAZEWAR_APPKEY_ROOM_KEY =	$01
+LOBBY_APPKEY_CREATOR	=	$0001
+LOBBY_APPKEY_APP	=	$01
+LOBBY_APPKEY_USER_KEY =	$00
+APPKEY_MAX	=	64
+APPKEY_READ_SIZE =	66	;two-byte length plus 64-byte default payload
+APPKEY_SCRATCH_SIZE =	67	;read response plus one bounded local terminator
+LOBBY_DEVICE	=	$71
+LOBBY_UNIT	=	1
+LOBBY_OPEN_CMD	=	'O'
+LOBBY_CLOSE_CMD	=	'C'
+LOBBY_STATUS_CMD =	'S'
+LOBBY_READ_CMD	=	'R'
+LOBBY_RECORD_SIZE =	189
+LOBBY_PAGE_SIZE =	4
+LOBBY_MAX_PAGES =	8
+LOBBY_GAME_OFF =	1
+LOBBY_SERVER_OFF =	18
+LOBBY_URL_OFF	=	51
+LOBBY_CLIENT_OFF =	116
+LOBBY_REGION_OFF =	181
+LOBBY_ONLINE_OFF =	184
+LOBBY_PLAYERS_OFF =	185
+LOBBY_MAXPLAY_OFF =	186
 ;
 ;NETSTREAM HANDLER
 ;
 ; Packet ids used on the wire:
-;   $40 SNAPSHOT (19 bytes), $42 SHOT (6), $50 BRICK_FULL (51),
-;   $51 BRICK_DELTA (4), $52 RESPAWN (6), and client TX $41 DELTA (4).
+;   $40 SNAPSHOT (21 bytes), $42 SHOT (7), $50 BRICK_FULL (52),
+;   $51 BRICK_DELTA (5), $52 RESPAWN (7), $53 RELIABLE_EVENT,
+;   $54 MATCH_END, $55 ROUND_START, $57 LEAVE_ACK; client TX $41 DELTA (5),
+;   $45 RELIABLE_ACK (4), $46 HELLO (2), and $56 LEAVE_ROOM (2).
 ; Client simulation is presentation-oriented: server state remains authoritative.
 NS_BASE	=	$2800
 NS_BEGN	=	NS_BASE+0
@@ -65,19 +120,49 @@ NS_END	=	NS_BASE+3
 NS_SEND	=	NS_BASE+12
 NS_RECV	=	NS_BASE+15
 NS_AVAIL	=	NS_BASE+18
-NS_INIT	=	NS_BASE+30
-NS_TX_COUNT	=	$2CEF	;NSENGINE internal TX queue fill (0..$20)
+NS_STAT	=	NS_BASE+21
+NS_INIT	=	NS_BASE+27
 ;
-NET_FLAGS	=	$04	;external TX, internal RX clock (UDP)
+	icl	'build/maze-war-config.inc'
+NET_FLAGS	=	$05	;external TX, internal RX clock (TCP)
 NET_BAUD_LO	=	$00	;57600
 NET_BAUD_HI	=	$E1
-NET_PORT_LO	=	$23	;swap16(9000) -> $2823
-NET_PORT_HI	=	$28
-NET_FRAME_DIV	=	6	;~10 Hz @ 60 FPS (matches server tick)
+NET_PORT_LO	=	CFG_DEFAULT_PORT_A	;9000 -> $23/$28; generated build default
+NET_PORT_HI	=	CFG_DEFAULT_PORT_X
+NET_FRAME_DIV	=	6	;10 Hz at 60 FPS, matching the server tick.  The
+			;server applies one queued input per tick and sets
+			;neutral when the queue is empty, so slower pacing
+			;creates visible 100/200 ms remote movement gaps on
+			;clean TCP.  Overflow remains bounded by the server
+			;queue and by the pending/replay contract.
 NET_RECON_P0	=	3	;local player reconcile threshold (manhattan cells)
-NET_RECON_P1	=	10	;remote actor hard-snap threshold (manhattan cells)
+NET_IDLE_SETTLE	=	20	;frames of held-neutral before idle convergence
+NET_RECON_P1	=	10	;remote catastrophic hard-snap guard
+NET_GLIDE_MAX	=	6	;local drift still worth walking off rather than snapping
+NET_FRAME_MAX	=	60	;longest frame we accept (BRICK_FULL encodes to 53)
+NET_DESYNC_MAX	=	3	;remote failed-recovery attempts before forced snap
 NET_HARD_P0	=	12	;local hard-snap guard (only on severe divergence)
 HOST_MAX	=	31	;max hostname length
+PORT_MAX	=	5	;decimal TCP port, 1..65535
+NAME_LEN	=	8	;HUD gives each slot columns 4..11 before the score digit
+NAME_PKT_LEN	=	3+NAME_LEN	;$43, seq, pid, then the name
+REL_PKT_MAX	=	4+52+2	;$53 wrapper + largest inner BRICK_FULL + CRC
+NET_TX_RAW_MAX	=	NAME_PKT_LEN+2	;payload plus CRC-16 trailer
+NET_TX_BUF_MAX	=	NET_TX_RAW_MAX+2	;COBS code byte and delimiter worst case
+NET_WAIT_MAX	=	3	;~13s (3*256 frames) with no server data before giving up
+NET_INIT_TRIES	=	3	;NS_INIT attempts before falling back to the host prompt
+NET_SHOT_TTL_MAX	=	60	;~1s without an active refresh before a drawn shot expires
+NET_LEAVE_NTSC	=	60	;bounded clean leave: about one second
+NET_LEAVE_PAL	=	50
+HUD_MISSILE_X	=	58	;small shirt-colour swatches beside the HUD names
+HUD_MISSILE_Y0	=	192	;PM Y for the first 20-column HUD row
+RP_BEGIN	=	1
+RP_LOSER_EVAP	=	2
+RP_WINNER_DANCE	=	3
+RP_WINNER_EVAP	=	4
+RP_FADE	=	5
+RP_RESULTS	=	6
+RP_WAIT_START	=	7
 ;
 ;CUSTOM CHARACTER SET (1K-aligned RAM)
 ;
@@ -127,7 +212,6 @@ HOLDIT	.DS	1	;GENL PURPOSE
 PLYRS	.DS	1	;# OF PLAYERS
 DIRSHFT	;		BACKLASH DIRECTION REG
 DX	;		ZOMBIE MOVE X DIST
-SAVEIT	;		WINNER # SAVE
 ZMBYS	.DS	1	;# OF ZOMBIES
 DIST	;		ZOMBIE MOVE CRNT SHORT DIST
 DIREC	.DS	1	;BACKLASH DIRECTION
@@ -138,8 +222,10 @@ ACTFLAG	.DS	4	;WHAT HE'S DOING
 DIR	.DS	4	;DIRECTION POINTING/MOVING
 LOCHI	.DS	4	;ABSOLUTE MEM LOC HI
 LOCLO	.DS	4	;ABSOLUTE MEM LOC LO
-LOCX	.DS	4	;X LOCATION (0-19)
-LOCY	.DS	4	;Y LOCATION (0-18)
+LOCX	.DS	4	;X LOCATION (0-19) -- SIMULATION CELL
+LOCY	.DS	4	;Y LOCATION (0-18) -- SIMULATION CELL
+RNDX	.DS	4	;X LOCATION AS DRAWN; trails or leads LOCX by one
+RNDY	.DS	4	;Y LOCATION AS DRAWN; cell during an animation
 MOVCLOK	.DS	4	;TIME TILL NEXT MOVE
 MOVEST	.DS	4	;STATUS IN MOVE
 MOVRATE	.DS	4	;MOVEMENT RATE
@@ -155,6 +241,13 @@ TYPE	.DS	4	;WIZARD=0, ZOMBIE=1
 HOSTLEN	.DS	1
 HOST_DONE	.DS	1
 HOST_CHSAV	.DS	1
+HOST_MPTR	.DS	2	;HOST_MSGDRAW SOURCE POINTER (NEEDS TO BE ZERO PAGE)
+INBUF	.DS	2	;TEXT FIELD: EDIT BUFFER
+INPROM	.DS	2	;TEXT FIELD: PROMPT STRING
+INROW	.DS	2	;TEXT FIELD: SCREEN ROW
+INMAX	.DS	1	;TEXT FIELD: MAX CHARACTERS
+INCURS	.DS	1	;TEXT FIELD: COLUMN THE NEXT CHARACTER LANDS IN
+ZP_END
 ;
 	ORG	CHRSET_BASE
 ;
@@ -222,16 +315,16 @@ OUTWALL	.BYTE	94,91,94,85,229
 	.BYTE	102,102,102,252	;D
 	.BYTE	0,254,102,96
 	.BYTE	120,96,102,254	;E
-	.BYTE	128,176,176,176,178
-	.BYTE	186,171,63	;TITLE CHAR
+	.BYTE	0,254,102,96,120
+	.BYTE	96,96,240	;TITLE CHAR
 	.BYTE	0,126,198,192
 	.BYTE	206,198,198,126	;G
-	.BYTE	2,10,42,174,170
-	.BYTE	254,194,0	;TITLE CHAR
+	.BYTE	0,231,102,102,126
+	.BYTE	102,102,231	;TITLE CHAR
 	.BYTE	0,60,24,24
 	.BYTE	24,24,24,60	;I
-	.BYTE	42,207,192,194,202
-	.BYTE	235,234,207	;TITLE CHAR
+	.BYTE	0,30,12,12,12
+	.BYTE	12,204,120	;TITLE CHAR
 	.BYTE	0,206,216,240
 	.BYTE	252,204,204,206	;K
 	.BYTE	0,240,96,96
@@ -244,8 +337,8 @@ OUTWALL	.BYTE	94,91,94,85,229
 	.BYTE	198,198,198,124	;O
 	.BYTE	0,252,102,102
 	.BYTE	124,96,96,240	;P
-	.BYTE	168,235,175,190,240
-	.BYTE	192,168,255	;TITLE CHAR
+	.BYTE	0,124,198,198,198
+	.BYTE	214,204,123	;TITLE CHAR
 	.BYTE	0,252,102,102
 	.BYTE	124,108,108,230	;R
 	.BYTE	0,126,198,192
@@ -254,12 +347,12 @@ OUTWALL	.BYTE	94,91,94,85,229
 	.BYTE	24,24,24,60	;T
 	.BYTE	0,231,102,102
 	.BYTE	102,102,102,60	;U
-	.BYTE	10,43,175,170
-	.BYTE	175,40,10,3	;TITLE CHAR
+	.BYTE	0,231,102,102
+	.BYTE	102,102,60,24	;TITLE CHAR
 	.BYTE	0,99,99,99
 	.BYTE	107,127,119,99	;W
-	.BYTE	0,192,0,0
-	.BYTE	192,0,0,192	;TITLE CHAR
+	.BYTE	0,231,102,60
+	.BYTE	24,60,102,231	;TITLE CHAR
 	.BYTE	0,231,102,60
 	.BYTE	24,24,24,60	;Y
 	.BYTE	0,254,204,24
@@ -395,32 +488,31 @@ SUITS	.BYTE	0,0,0,124,24,24,20,0
 	.BYTE	0,0,24,126,24,20,16,0
 	.BYTE	0,0,24,126,24,40,8,0
 	.BYTE	0,0,24,126,24,20,16,0
-	.BYTE	0,0,24,126,24,40,8
-;
-;WINNING PLAYER ALL IN PM
-;
-WINPLYR	.BYTE	0,0,0,124,24,24,20,0
-	.BYTE	0,0,3,0,0,0,0,0
-	.BYTE	0,0,0,0,0,0,0,54
-	.BYTE	24,24,16,2,64,0,0,0
+	.BYTE	0,0,24,126,24,40,8,0
+; SETSUIT copies bytes 8..0 from an eight-byte frame. The old final up-moving
+; frame had seven explicit bytes, then borrowed WINPLYR's first zero as byte
+; eight and its second as the ninth clear byte. 08-01 removed that unreachable
+; data, exposing SMOKE's $1C. Complete the frame here and retain an explicit
+; ninth zero so upward movement cannot leave PM fragments below a player.
+SUITS_PAD	.BYTE	0
 ;
 ;EVAPORATION DATA
 ;
-SMOKE	.BYTE	$1C,$66,$75,$1C
-	.BYTE	$0C,$18,$0C,0
-	.BYTE	$38,$6E,$D7,$FE
-	.BYTE	$18,$10,$18,0
-	.BYTE	$3C,$7E,$FF,$FF
-	.BYTE	$DB,$18,$18,$18
-	.BYTE	$3C,$7E,$FF,$FF
-	.BYTE	$FF,$3C,$3C,$3C
-	.BYTE	0,$3C,$7E,$7E
-	.BYTE	$7E,$3C,$3C,$7E
+SMOKE	.BYTE	28,102,117,28
+	.BYTE	12,24,12,0
+	.BYTE	56,110,215,254
+	.BYTE	24,16,24,0
+	.BYTE	60,126,255,255
+	.BYTE	219,24,24,24
+	.BYTE	60,126,255,255
+	.BYTE	255,60,60,60
+	.BYTE	0,60,126,126
+	.BYTE	126,60,60,126
 ;
 ;COLOR DATA
 ;
-COLTBL	.BYTE	$C8,$86,$58,$28
-	.BYTE	$96,$2A,$00,$34
+COLTBL	.BYTE	200,134,88,40
+	.BYTE	150,42,0,52
 ;
 ;
 ;******************
@@ -442,27 +534,55 @@ INITPLR	LDA	#0	;INIT PLAYERS
 STWIDTH	STA	SIZEP0,X	;SET WIDTHS
 	DEX
 	BPL	STWIDTH
-	STA	AUDCTL
 	STA	COLOR4	;COLOR 4=BLACK
+;
+; PMAREA and the player pages are .DS, which reserves without emitting, so on
+; real hardware they hold power-up RAM until something writes them.  Emulation
+; zeroes memory, which is why the dotted column this produced was only ever
+; visible on hardware.  Clear the whole 2K PM area BEFORE the DMA registers
+; below are programmed -- doing it merely "early in START" would not do, the
+; ordering against PMBASE/DMACTL/GRACTL is the point.
+PM_CLEAR
+	LDA	#0
+	TAY
+PMCLR_LP
+	STA	PMAREA,Y
+	STA	PMAREA+$100,Y
+	STA	PMAREA+$200,Y
+	STA	PMAREA+$300,Y
+	STA	PL0,Y
+	STA	PL1,Y
+	STA	PL2,Y
+	STA	PL3,Y
+	INY
+	BNE	PMCLR_LP
+;
 	LDA	# >PMAREA	;SET PMBASE,
 	STA	PMBASE	; DMACTL, GRACTL,
 	LDA	#$3E	; AND GPRIOR
 	STA	DMACTL
-	LDA	#$03
+	LDA	#$02	;player output only; HUD missiles start when GAME is shown
 	STA	GRACTL
+	LDA	HOST_DONE	;AUDCTL/SKCTL BELONG TO THE
+	BNE	INITPSK	;NETSTREAM HANDLER AFTER FIRST
+	LDA	#0	;NET INIT; COLD START ONLY
+	STA	AUDCTL
+	LDA	#$03
 	STA	SKCTL	;INIT SOUND
-	LDA	#$01
+INITPSK	LDA	#$01
 	STA	GPRIOR
 	LDA	# >CHRSET	;SET CHRSET
 	STA	CHBASE
 	LDA	#$40	;DISABLE DLI
 	STA	NMIEN
-	LDA	# <DLI	;SET DLI VECTOR
-	STA	VDSLST
-	LDA	# >DLI
-	STA	VDSLST+1
 	LDA	HOST_DONE
 	BNE	RESTART
+	LDA	#0	;COLD START: NO PENDING STATUS MESSAGE
+	STA	HOST_MSG	;AND A FULL NS_INIT ATTEMPT BUDGET
+	STA	HOST_MSG+1
+	STA	NET_INIT_TRY
+	JSR	UI_CONFIG_DEFAULTS
+	JSR	APPKEY_BOOT_LOAD	;safe here: NetStream has not been started
 	JSR	HOST_BOOT
 	LDA	#1
 	STA	HOST_DONE
@@ -473,14 +593,13 @@ STWIDTH	STA	SIZEP0,X	;SET WIDTHS
 ;
 RESTART	LDA	#$40	;DISABLE DLI
 	STA	NMIEN
+	JSR	VBIOFF	;ordinary SIO close below needs a menu-safe VBI
 	JSR	NET_ENDC	;STOP NETSTREAM IF ACTIVE
 	LDA	#$FF
 	STA	KEYIN
-	LDA	#0	;TURN OFF SOUND
+	LDA	#0	;TURN OFF GAME SOUND (CH3/4 ARE NETSTREAM'S)
 	STA	AUDC1
 	STA	AUDC2
-	STA	AUDC3
-	STA	AUDC4
 	STA	CDTMF5
 	JMP	START
 ;
@@ -495,7 +614,13 @@ STIMER	LDA	#5	;SET TIMER 5
 ;GAME START SETUP
 ;----------------
 ;
-START	JSR	STIMER
+START	JSR	NET_SESSION_RESET
+	LDA	#0	;POKEY CH1/2 MAY STILL HOLD POWER-UP OR A PRIOR GAME TONE
+	STA	AUDC1	;NETSTREAM OWNS CH3/4, SO SILENCE ONLY THE GAME CHANNELS
+	STA	AUDC2
+	LDA	#$FF
+	STA	SND_CH2_PID	;NO REMOTE EFFECT OWNS THE SHARED CHANNEL YET
+	JSR	STIMER
 	LDA	#4	;net-only: track all 4 server slots as active participants
 	STA	PLYRS
 	LDA	#0
@@ -503,10 +628,7 @@ START	JSR	STIMER
 	LDA	#3
 	STA	ACTIVE	;ACTIVE stores count-1
 ;
-	LDX	#0	;ERASE WALKERS
-	JSR	ERASMAN
-	INX
-	JSR	ERASMAN
+	; walkers are erased after SETALLP has built their screen pointers
 ;
 ;SETUP GAME SCREEN
 ;
@@ -549,6 +671,13 @@ ERASBOT	STA	(SCRPTR),Y
 ;
 	LDA	#0
 	STA	NET_ROLE_MASK
+	STA	NET_SEAT_MASK
+	STA	NET_VACANT_MASK
+	STA	NET_STAGE_LOCAL_PID
+	LDX	#3		;NET_NAMES lives after NET_INIT_ARGS, outside
+STNCLR	JSR	NET_NAME_CLR	;NET_STATE_CLEAR; blank it before the first HUD draw
+	DEX
+	BPL	STNCLR
 	JSR	NET_SCORE_INIT
 ;
 ;INITIALIZE ACTIVE PARTICIPANTS
@@ -563,28 +692,40 @@ SETALLP	LDA	#0	;TYPE = PLAYER
 	STA	SOUND,X
 	STA	MOVEST,X
 	STA	DIR,X
-	LDA	#3	;net-only move cadence ~= server 10 Hz
+	LDA	#1	;one visual phase per VBI; enough capacity for 10 Hz net play
 	STA	MOVRATE,X
 	STA	MOVCLOK,X
 	LDA	#5	;NEXT HIT SCORE=5
 	STA	NXTSCR,X
 	LDA	#1	;placeholder net-only coordinates until authoritative snapshot/respawn
 	STA	LOCX,X
+	STA	RNDX,X
 	TXA
 	CLC
 	ADC	#1
 	STA	LOCY,X
+	STA	RNDY,X
 	JSR	NET_CALC_LOC
 	DEX		;DO NEXT
 	BPL	SETALLP
 	LDA	#$0F	;hide all actors until server authoritative state arrives
 	STA	NET_DEAD_MASK
 	STA	NET_ERASE_MASK
+	LDX	#3		;now that every slot has a valid screen pointer,
+STRT_ERS	JSR	ERASMAN	;clear all four, characters and PM alike
+	DEX
+	BPL	STRT_ERS
 ;
 PUTINVB
-	LDA	# <GAME	;PUT UP GAME SCRN
+	LDA	# <MSG_CONNECT	;name the wait instead of showing a blank screen
+	STA	HOST_MSG
+	LDA	# >MSG_CONNECT
+	STA	HOST_MSG+1
+	JSR	HOST_CLR	;keep playfield hidden until first authoritative map+snapshot
+	JSR	HOST_MSGDRAW
+	LDA	# <HOSTDISP
 	STA	DLIST
-	LDA	# >GAME
+	LDA	# >HOSTDISP
 	STA	DLIST+1
 	LDY	#7		;restore color shadows (PCOLR0..3, COLOR0..3)
 GMCOLR	LDA	COLTBL,Y
@@ -611,159 +752,12 @@ GMCOLR	LDA	COLTBL,Y
 ;MAIN PROGRAM LOOP
 ;-----------------
 ;
-STRTCN	;net-only: ignore START/SELECT/OPTION local restart path
+STRTCN	;OPTION performs bounded clean leave back to direct-connect setup
 CHKSCRS
+	JSR	NET_LEAVE_INPUT
 	JSR	NET_POLL	;NETSTREAM TX/RX
+	JSR	NET_LEAVE_TICK
 	JMP	STRTCN	;net-only main loop
-;
-;GAME END HANDLING ROUTINES
-;--------------------------
-;
-GAMEOVR	STX	SAVEIT
-	JSR	VBIOFF	;TURN OFF VBI
-	LDA	#0	;AND ALL SOUND
-	STA	AUDC1
-	STA	AUDC2
-	STA	AUDC3
-	STA	AUDC4
-;
-;SET WINNER MESSAGE
-;
-	LDX	SAVEIT
-	LDY	#3	;INDEX - TEXT SET
-	LDA	SCRINDX,X	;SET POINTER TO
-	CLC		;WINNER'S SCORE
-	ADC	# <SCORE-1
-	STA	SCRPTR
-	LDA	# >SCORE-1
-	STA	SCRPTR+1
-	BCC	STENDTX
-	INC	SCRPTR+1
-STENDTX	LDA	ENDTXT,Y	;AND SET IT
-	STA	(SCRPTR),Y	;TO "WINS"
-	DEY
-	BPL	STENDTX
-;
-;EVAPORATE ALL LOSERS
-;
-	LDA	#0	;CLEAR
-	STA	ACTFLAG,X	;WINNER ACTION
-	STX	SAVEIT	;SAVE WINNER #
-	LDX	ACTIVE	;GET # TO DO
-STALLEV	CPX	SAVEIT	;IF =WINNER,
-	BEQ	STNXTEV	;DO NEXT ONE
-	JSR	ERASMAN	;ELSE ERASE 'IM
-	LDA	#2	;ACTION=EVAPORATE
-	STA	ACTFLAG,X
-	LDA	#9	;MOVEST FOR EVAP
-	STA	MOVEST,X
-STNXTEV	DEX		;DO THE NEXT ONE
-	BPL	STALLEV
-;
-DOALLEV	LDA	RTCLOK
-DOAL2	CMP	RTCLOK
-	BEQ	DOAL2
-	LDA	#0	;INIT END COUNT=0
-	STA	COUNT
-	LDX	ACTIVE	;LOOP FOR ALL
-EVAPEM	LDA	COUNT	;ADD THIS ACTFLAG
-	CLC		;TO COUNT
-	ADC	ACTFLAG,X	;(FOR END CHK)
-	STA	COUNT
-	JSR	EVAPRTE	;AND DO EVAP
-	DEX
-	BPL	EVAPEM	;DO NEXT
-	LDA	COUNT	;IF COUNT=ACTIVE,
-	CMP	ACTIVE	;WE'RE DONE,
-	BNE	DOALLEV	;OTHERWISE LOOP
-;
-;SET WINNER AS ALL PM
-;
-	LDX	SAVEIT	;GET WINNER #
-	JSR	ERASMAN	;ERASE 'IM + SET
-	LDA	PCOLR0,X	;1ST PM COLOR
-	STA	PCOLR0	;TO WINNING COLOR
-	LDA	#PFCOL0	;AND OTHERS TO
-	STA	PCOLR1	;NORMAL PF COLORS
-	LDA	#PFCOL1
-	STA	PCOLR2
-	LDA	#PFCOL3
-	STA	PCOLR3
-	LDA	# <WINPLYR	;SET POINTER
-	STA	POINTER	;TO ALL PM IMAGES
-	LDA	# >WINPLYR
-	STA	POINTER+1
-	LDA	LOCY,X	;SET SCRPTR
-	ASL	;TO LOC
-	ASL
-	ASL
-	CLC
-	ADC	#$20
-	STA	SCRPTR
-	LDA	# >PL0
-	STA	SCRPTR+1
-	LDA	#3	;COUNT THRU
-	STA	COUNT	;ALL 3 PLYRS
-SETWINR	LDY	#7	;SET ONE COLOR
-SETPRTS	LDA	(POINTER),Y
-	STA	(SCRPTR),Y
-	DEY
-	BPL	SETPRTS
-	LDA	LOCX,X	;SET HORIZ LOC
-	ASL	;TO XLOC*8+48
-	ASL
-	ASL
-	CLC
-	ADC	#48
-	LDY	COUNT
-	STA	HPOSP0,Y
-	LDA	POINTER	;POINT TO NEXT
-	CLC		;COLOR'S IMAGES
-	ADC	#8
-	STA	POINTER
-	BCC	UDWNSCP
-	INC	POINTER+1
-UDWNSCP	INC	SCRPTR+1	;POINT TO NEXT
-	DEC	COUNT	;PLAYER
-	BPL	SETWINR	;AND DO IT
-;
-;FADE ALL COLORS TO BLACK
-;
-	LDA	#16	;SET COLOR LUM
-	STA	COUNT	;LEVELS TO 16
-FADEALL	LDX	#3	;FADE COLRS=0..3
-FADACOL	LDA	COLOR0,X	;GET THE COLOR
-	AND	#$0F	;IF LUM <>0, CUT
-	BNE	CUTCOLR	;IT DOWN
-	STA	COLOR0,X	;SET TO BLACK
-	BEQ	FADNXCL
-CUTCOLR	DEC	COLOR0,X
-FADNXCL	LDY	RTCLOK	;WAIT FOR A BIT
-	INY
-	INY
-FADN2	CPY	RTCLOK
-	BNE	FADN2
-	DEX
-	BPL	FADACOL	;FADE NEXT COLOR
-	DEC	COUNT
-	BPL	FADEALL	;AND DO NEXT LUM
-;
-;WAIT A BIT TO SHOW OFF SCORES
-;
-	LDA	#7
-	STA	HOLDIT
-WAIT0	LDX	#$FF
-WAIT1	LDY	#$FF
-WAIT2	LDA	CONSOL	;END DELAY EARLY
-	CMP	#7	;IF A CONSOL KEY
-	BNE	ENDGOBK	;HAS BEEN PRESSED
-	DEY
-	BNE	WAIT2
-	DEX
-	BNE	WAIT1
-	DEC	HOLDIT
-	BPL	WAIT0
-ENDGOBK	JMP	RESTART	;GOTO TITLES
 ;
 ;MAIN PROGRAM SUBROUTINES
 ;------------------------
@@ -829,13 +823,51 @@ NET_INIT	LDA	#0
 	STA	NET_SNAP_IDX
 	STA	NET_BRICK_IDX
 	STA	NET_BRICK_DONE
+	STA	NET_WELCOME
+	STA	NET_ROUND_ID
+	STA	NET_ROUND_PHASE
+	STA	NET_ROUND_AUTH
+	STA	NET_ROUND_MAP
+	STA	NET_ROUND_SNAP
+	STA	NET_ROUND_READY
+	STA	NET_ROUND_WINNER
+	STA	NET_KILL_LIMIT
+	STA	NET_STAGE_SEQ
+	STA	NET_STAGE_APPLYSEQ
+	STA	NET_STAGE_REVEAL
 	STA	NET_TICK
 	STA	NET_SEQ
 	STA	NET_DEAD_MASK
 	STA	NET_ERASE_MASK
+	STA	NET_REDRAW_MASK
 	STA	NET_GUARD_MASK
+	STA	NET_STAGE_ACK_VALID
+	STA	NET_STAGE_ACK_SEQ
+	STA	NET_ACK_VALID
+	STA	NET_ACK_SEQ
+	STA	NET_PEND_HEAD
+	STA	NET_PEND_COUNT
+	STA	NET_NS_ERRS
+	STA	NET_PRED_TTL
+	STA	NET_WAIT_LO
+	STA	NET_WAIT_HI
+	STA	NET_ROLE_NEW
+	STA	NET_ROLE_CHG
+	STA	NET_DIAG_SNAPS
+	STA	NET_DIAG_MAXDRIFT
+	STA	NET_DIAG_PENDMAX
+	STA	NET_DIAG_SRC
+	STA	NET_DIAG_HOLD
+	STA	NET_DIAG_CNT
+	STA	NET_DIAG_CNT+1
+	STA	NET_DIAG_CNT+2
+	STA	NET_DIAG_CNT+3
+	STA	NET_SNAPLOG_IDX
+	STA	NET_IDLE_FRAMES
+	STA	NET_NAME_TMR
 	LDA	#$FF
 	STA	NET_TX_CLKLAST
+	STA	SND_CH2_PID
 	LDA	#$0F
 	STA	NET_RX_STICK
 	LDA	#1
@@ -847,13 +879,31 @@ NET_INIT	LDA	#0
 	STA	NET_LOCAL_PID
 	STA	NET_SCORE_PEND
 	STA	NET_SHOT_PEND
+	STA	NET_SHOT_DRAWN
 	LDX	#3
 NET_CLRPOS
 	STA	NET_P_PENDING,X
 	STA	NET_PX_X,X
 	STA	NET_PX_Y,X
+	STA	NET_PJOY,X
+	STA	NET_DESYNC_CNT,X
+	STA	NET_SHOT_SEQ,X
+	STA	NET_SHOT_APPLYSEQ,X
+	STA	NET_SHOT_TTL,X
+	STA	NET_RESP_SEQ,X
+	STA	NET_RESP_APPLYSEQ,X
+	STA	NET_STAGE_PENDING,X
+	STA	NET_STAGE_PX_X,X
+	STA	NET_STAGE_PX_Y,X
+	STA	NET_STAGE_PJOY,X
 	DEX
 	BPL	NET_CLRPOS
+	LDX	#7
+NET_CLRPEND
+	STA	NET_PEND_SEQ,X
+	STA	NET_PEND_JOY,X
+	DEX
+	BPL	NET_CLRPEND
 	; pessimistic init: block movement until first authoritative brick-full arrives
 	LDY	#0
 	LDA	#1
@@ -870,11 +920,15 @@ NET_CLRMAP1
 	LDA	#0
 	STA	NET_RX_DBG
 ;	STA	NET_DBG_COLOR
+	STA	NET_GAME_SHOW
 	LDA	STICK0
 	STA	NET_TX_LAST_STICK
 	LDA	STRIG0
 	AND	#$01
 	STA	NET_TX_LAST_TRIG
+	STA	NET_TRIG_PREV
+	LDA	#0
+	STA	NET_TRIG_LATCH
 	LDA	POINTER
 	STA	NET_SAVPTR
 	LDA	POINTER+1
@@ -883,8 +937,8 @@ NET_CLRMAP1
 	STA	C_SP
 	LDA	# >NET_INIT_ARGS
 	STA	C_SP+1
-	LDA	#NET_PORT_LO
-	LDX	#NET_PORT_HI
+	LDA	NET_PORT_ARG_A
+	LDX	NET_PORT_ARG_X
 	JSR	NS_INIT
 	STA	NET_INITST
 	LDA	NET_SAVPTR
@@ -892,37 +946,246 @@ NET_CLRMAP1
 	LDA	NET_SAVPTR+1
 	STA	POINTER+1
 	LDA	NET_INITST
-	BNE	NET_INITX
+	BNE	NET_INITF
+	LDA	#1	;the firmware stream now owns a TCP socket even before
+	STA	NET_FW_OPEN	;the Atari concurrent handler installs its IRQs
 	JSR	NS_BEGN
+	LDA	#0	;HANDLER IS UP: RESET THE ATTEMPT BUDGET
+	STA	NET_INIT_TRY
 	LDA	#1
 	STA	NET_ACTIVE
 	STA	NET_BOOT_HIDE
+	LDA	#1	;announce our name on this connection
+	STA	NET_NAME_PEND
 	LDA	#$0F	;hide local actors until authoritative server positions arrive
 	STA	NET_DEAD_MASK
 	STA	NET_ERASE_MASK
-	; one-time probe frame so server allocates our slot and begins snapshots.
-	; parser ignores unknown type bytes, so this safely acts as "hello".
-	LDA	#$A5
-	STA	NET_TX_BUF
-	LDA	NET_SEQ
-	STA	NET_TX_BUF+1
-	INC	NET_SEQ
-	LDA	#$0F
-	STA	NET_TX_BUF+2
-	LDA	#1
-	STA	NET_TX_BUF+3
-	LDA	#4
-	STA	NET_TX_STATE
-	LDA	#0
-	STA	NET_TX_IDX
+	; Versioned session handshake. Keep retrying it from NET_POLL until WELCOME;
+	; FujiNet-PC can reopen its host TCP socket while these first bytes are in
+	; flight, and sending NAME/DELTA first on the replacement socket made the
+	; strict server close it again forever.
+	JSR	NET_TX_BUILD_HELLO
 NET_INITX	RTS
 ;
-NET_ENDC	LDA	NET_ACTIVE
-	BEQ	NET_ENDX
-	JSR	NS_END
+;BOOT DIAGNOSTIC: RED BORDER = NS_INIT FAILED (FUJINET REJECTED OR
+;NO RESPONSE). NET_POLL PAINTS BLUE WHILE WAITING FOR FIRST SERVER
+;DATA; VBI CLEARS TO BLACK WHEN THE GAME SCREEN GOES LIVE.
+;
+;THE CALLER RETRIES THROUGH RESTART, SO THE ATTEMPT BUDGET IS WHAT
+;STOPS A DEAD FUJINET FROM SPINNING HERE FOREVER.
+;
+NET_INITF	LDA	#$34
+	STA	COLOR4
+	INC	NET_INIT_TRY
+	LDA	NET_INIT_TRY
+	CMP	#NET_INIT_TRIES
+	BCC	NET_INITFX	;BUDGET LEFT: LET RESTART TRY AGAIN
+	LDA	# <MSG_INITFAIL
+	STA	HOST_MSG
+	LDA	# >MSG_INITFAIL
+	STA	HOST_MSG+1
+	JMP	NET_HOSTRET
+NET_INITFX	RTS
+;
+;RETURN TO THE HOST PROMPT (NET FAILURE RECOVERY)
+;-----------------------------------------------
+;REACHED FROM MAINLINE ONLY, AND IT NEVER RETURNS, SO THE ABANDONED
+;NET_POLL FRAME IS DROPPED BY RESETTING THE STACK. HOST_MSG MUST
+;ALREADY POINT AT THE MESSAGE EXPLAINING WHY WE CAME BACK.
+;
+NET_HOSTRET
+	SEI
+	LDX	#$FF
+	TXS
+	CLI
+	LDA	#$40	;DISABLE DLI
+	STA	NMIEN
+	JSR	VBIOFF	;STOP THE GAME VBI BEFORE TOUCHING THE DISPLAY
+	JSR	NET_ENDC	;AND CLOSE THE STREAM BEFORE REOPENING IT
+	LDA	NET_LEAVING
+	BEQ	NHR_NOCLEAR
+	; OPTION is an explicit leave, not a transient connection failure. Clear
+	; both stored room choices only after NetStream has released FujiNet SIO.
+	JSR	APPKEY_ROOM_CLEAR
+NHR_NOCLEAR
 	LDA	#0
-	STA	NET_ACTIVE
-NET_ENDX	RTS
+	STA	AUDC1	;SILENCE GAME SOUND (CH3/4 ARE NETSTREAM'S)
+	STA	AUDC2
+	STA	CDTMF5
+	STA	COLOR4	;CLEAR THE BOOT DIAGNOSTIC BORDER
+	STA	NET_INIT_TRY	;FRESH ATTEMPT BUDGET FOR THE NEXT HOST
+	LDA	#$FF
+	STA	KEYIN
+	LDA	#0	;THE WIZARDS ARE PLAYER GRAPHICS AND WOULD
+	STA	GRACTL	;OTHERWISE HANG OVER THE PROMPT SCREEN
+	LDX	#0
+NHR_PMCLR
+	STA	PMAREA,X	;the missile quarter as well: START does not
+	STA	PMAREA+$100,X	;reprogram PMBASE and this path re-enables
+	STA	PMAREA+$200,X	;output below
+	STA	PMAREA+$300,X
+	STA	PL0,X
+	STA	PL1,X
+	STA	PL2,X
+	STA	PL3,X
+	INX
+	BNE	NHR_PMCLR
+	JSR	HOST_BOOT	;RE-PROMPT, SHOWING HOST_MSG
+	LDA	#$02	;RESTORE PLAYER OUTPUT ONLY; HUD MISSILES START
+	STA	GRACTL	;WHEN THE GAME DISPLAY IS SHOWN AGAIN.
+	JMP	START
+;
+;SILENCE WATCHDOG (ONE CALL PER FRAME FROM NET_POLL)
+;--------------------------------------------------
+;COUNTS FRAMES SINCE THE LAST ACCEPTED SNAPSHOT. NS_INIT SUCCEEDING ONLY
+;MEANS FUJINET OPENED A SOCKET; IT SAYS NOTHING ABOUT THE SERVER BEING
+;REACHABLE, SO WITHOUT THIS A WRONG HOST OR A PORT ANOTHER PROCESS HAS
+;TAKEN LEAVES THE GAME ON A BLANK SCREEN FOREVER. THE SAME COUNTER
+;CATCHES A SERVER THAT DIES MID-GAME, WHICH OTHERWISE FROZE THE MAZE.
+;THE SERVER TICKS AT 10 HZ, SO ONLY A REAL OUTAGE REACHES THE LIMIT.
+;
+NET_WAIT_TICK
+	JSR	NET_NAME_RETRY
+	JSR	NET_IDLE_TICK
+	INC	NET_WAIT_LO
+	BNE	NWT_X
+	INC	NET_WAIT_HI
+	LDA	NET_WAIT_HI
+	CMP	#NET_WAIT_MAX
+	BCC	NWT_X
+	LDA	# <MSG_NOSRV	;NEVER HEARD FROM THE SERVER AT ALL
+	LDX	# >MSG_NOSRV
+	LDY	NET_GAME_SHOW
+	BEQ	NWT_MSG
+	LDA	# <MSG_LOST	;WAS PLAYING, THEN THE SERVER WENT SILENT
+	LDX	# >MSG_LOST
+NWT_MSG	STA	HOST_MSG
+	STX	HOST_MSG+1
+	JMP	NET_HOSTRET
+NWT_X	RTS
+;
+; Track how long the stick has been centred. A direction change passes through
+; centre for a frame or two, which must not read as "the player has stopped".
+NET_IDLE_TICK
+	LDA	NET_RX_STICK
+	AND	#$0F
+	CMP	#$0F
+	BEQ	NIT_NEUTRAL
+	LDA	#0
+	STA	NET_IDLE_FRAMES
+	RTS
+NIT_NEUTRAL
+	LDA	NET_IDLE_FRAMES
+	CMP	#$FF
+	BEQ	NIT_X
+	INC	NET_IDLE_FRAMES
+NIT_X	RTS
+;
+; The server only re-broadcasts names it already knows, so a lost NAME would
+; never be noticed. Every ~2s, if we have a name but our own slot still reads
+; blank, queue it again.
+NET_NAME_RETRY
+	LDA	NET_NAME_TMR
+	BEQ	NNR_GO
+	DEC	NET_NAME_TMR
+	RTS
+NNR_GO
+	LDA	#120
+	STA	NET_NAME_TMR
+	LDA	NAMEBUF		;nothing to announce
+	BEQ	NNR_X
+	LDX	NET_LOCAL_PID
+	CPX	#4
+	BCS	NNR_X
+	JSR	NET_NAME_ECHO_OK
+	BEQ	NNR_X		;the server is showing exactly what we typed
+	LDA	#1
+	STA	NET_NAME_PEND
+NNR_X	RTS
+;
+; X = our slot -> A=0 (Z set) when the name the server is echoing for that slot
+; matches the one we typed, non-zero when it does not. Clobbers X and Y.
+;
+; It used to be enough to ask whether the slot had any name at all. But the
+; The client-to-server frame is COBS+CRC protected too. The echo comparison is
+; still useful: it detects a server-side normalization mismatch and makes any
+; rejected/changed name a two-second glitch rather than persistent HUD state.
+; Checking the echo against what we typed makes that a two-second glitch.
+;
+; The comparison mirrors the server's sanitize: fold to uppercase and pad with
+; spaces. Every character TXT_INPUT accepts is one the server keeps, so a
+; matching name always settles and this never retries forever.
+NET_NAME_ECHO_OK
+	TXA
+	ASL
+	ASL
+	ASL
+	STA	NET_NAME_OFF	;slot*8
+	LDY	#0
+NNE_LP
+	LDA	NAMEBUF,Y
+	BNE	NNE_UP
+	LDA	#$20		;short names are space padded
+NNE_UP	CMP	#'a'
+	BCC	NNE_CMP
+	CMP	#'z'+1
+	BCS	NNE_CMP
+	SEC
+	SBC	#$20		;and folded to uppercase
+NNE_CMP	STA	NET_NAME_CHK
+	TYA
+	CLC
+	ADC	NET_NAME_OFF
+	TAX
+	LDA	NET_NAMES,X
+	CMP	NET_NAME_CHK
+	BNE	NNE_DIFF
+	INY
+	CPY	#NAME_LEN
+	BCC	NNE_LP
+	LDA	#0
+	RTS
+NNE_DIFF
+	LDA	#1
+	RTS
+;
+;DRAW THE PENDING STATUS MESSAGE ON HOST SCREEN ROW 2. HOST_MSG=0 MEANS
+;THERE IS NOTHING TO SAY. STRINGS ARE SCREEN CODES TERMINATED BY $FF SO
+;THEY CAN CONTAIN SPACES (SCREEN CODE $00).
+;
+HOST_MSGDRAW
+	LDY	#39		;replace the whole previous status, including longer text
+	LDA	#0
+HMD_CLR	STA	HOSTSCR+80,Y
+	DEY
+	BPL	HMD_CLR
+	LDA	HOST_MSG+1
+	BEQ	HMD_X
+	STA	HOST_MPTR+1
+	LDA	HOST_MSG
+	STA	HOST_MPTR
+	LDY	#0
+HMD_LP	LDA	(HOST_MPTR),Y
+	CMP	#$FF
+	BEQ	HMD_X
+	STA	HOSTSCR+80,Y
+	INY
+	CPY	#40
+	BCC	HMD_LP
+HMD_X	RTS
+;
+;SOUND CHANNEL ALLOCATOR (NETSTREAM SAFE)
+;----------------------------------------
+;POKEY CH3+4 ARE THE NETSTREAM BAUD TIMER (AUDCTL=$28), SO ALL GAME
+;EFFECTS SHARE CH1+2: THE LOCAL WIZARD OWNS CH1, REMOTE ACTORS SHARE
+;CH2 WITH LAST-WRITER-WINS OWNERSHIP.
+;
+;SND_SEL: X=SLOT -> Y=0 (CH1) OR Y=2 (CH2, CLAIMS OWNERSHIP). A,X KEPT.
+;SND_OFF: SILENCE SLOT X'S CHANNEL. A REMOTE SLOT ONLY SILENCES CH2
+;IT STILL OWNS (SO AN OLD EFFECT'S OFF CANNOT CLIP A NEWER ONE).
+;RETURNS Y=CHANNEL OFFSET (0/2). A CLOBBERED, X KEPT.
+;The implementations live in the guarded high-code reserve: the base core is
+;too close to its required $100 display-buffer margin for another VBI helper.
 ;
 NET_POLL	LDA	NET_ACTIVE
 	BNE	NET_POLL_CONT
@@ -932,41 +1195,62 @@ NET_POLL_CONT
 	; 1) debounce local input and queue DELTA packets
 	; 2) pace periodic DELTA sends (~10 Hz) even without input edges
 	; 3) drain RX bytes and feed byte-stream parser
+	LDA	NET_GAME_SHOW	;blue border until first full map +
+	BNE	NP_BOOTCOL	;snapshot make the game screen live
+	LDA	#$84
+	STA	COLOR4
+NP_BOOTCOL
 	JSR	NET_SAMPLE_INPUT
 	; guard against memory scribbles from legacy draw/effect paths
 	LDA	NET_TX_STATE
-	CMP	#5
+	CMP	#NET_TX_BUF_MAX+1
 	BCC	NP_TXS_OK
 	LDA	#0
 	STA	NET_TX_STATE
 	STA	NET_TX_IDX
 NP_TXS_OK
 	LDA	NET_TX_IDX
-	CMP	#4
+	CMP	#NET_TX_BUF_MAX
 	BCC	NP_TXI_OK
 	LDA	#0
 	STA	NET_TX_IDX
 NP_TXI_OK
-	; send immediately on input edge so stop/turn/fire intent is not delayed
-	; until the next periodic frame slot.
+	LDA	NET_REL_ACK_PEND	;ack applied reliable events promptly
+	BEQ	NP_RELOK
 	LDA	NET_TX_STATE
-	BNE	NP_TICK
-	LDA	NET_RX_STICK
-	CMP	NET_TX_LAST_STICK
-	BNE	NP_MKDELTA
-	LDA	NET_RX_TRIG
-	CMP	NET_TX_LAST_TRIG
-	BEQ	NP_TICK
-NP_MKDELTA
-	JSR	NET_TX_BUILD_DELTA
-	LDA	#0
-	STA	NET_TICK
+	BNE	NP_RELOK
+	JSR	NET_TX_BUILD_REL_ACK
+NP_RELOK
+	LDA	NET_LEAVING	;during clean leave, only reliable ACKs and the
+	BEQ	NP_GAME_TX	;$56 request may enter the outbound stream
+	LDA	NET_TX_STATE
+	BNE	NET_PLSND
+	LDA	NET_LEAVE_SENT
+	BNE	NET_PLSND
+	JSR	NET_TX_BUILD_LEAVE
+	LDA	#1
+	STA	NET_LEAVE_SENT
+	JMP	NET_PLSND
+NP_GAME_TX
+	LDA	NET_NAME_PEND	;announce our name whenever the line is idle
+	BEQ	NP_NAMEOK
+	LDA	NET_WELCOME	;HELLO is the only legal pre-WELCOME client frame
+	BEQ	NP_NAMEOK
+	LDA	NET_TX_STATE
+	BNE	NP_NAMEOK
+	JSR	NET_TX_BUILD_NAME
+NP_NAMEOK
+	; Input edges no longer transmit on their own; the periodic slot below
+	; carries the newest stick, one delta per predicted cell. A turn waits at
+	; most one slot, which is the server's own tick granularity anyway.
 NP_TICK
 	LDA	RTCLOK
 	CMP	NET_TX_CLKLAST
 	BEQ	NET_PLSND
 	STA	NET_TX_CLKLAST
 	INC	NET_TICK
+	JSR	NET_PRED_TICK
+	JSR	NET_WAIT_TICK
 	LDA	NET_TICK
 	CMP	#NET_FRAME_DIV
 	BCC	NET_PLSND
@@ -974,12 +1258,26 @@ NP_TICK
 	STA	NET_TICK
 	LDA	NET_TX_STATE
 	BNE	NET_PLSND
+	LDA	NET_WELCOME
+	BNE	NP_DELTA
+	JSR	NET_TX_BUILD_HELLO	;retry until the server anchors the session
+	JMP	NET_PLSND
+NP_DELTA
 	JSR	NET_TX_BUILD_DELTA
+	LDA	NET_ROUND_READY
+	BEQ	NET_PLSND	;neutral heartbeat only: no prediction license
+	LDA	#1		;a delta went out: the prediction may now begin one
+	STA	NET_MOVE_DUE	;cell, so cells predicted and inputs sent stay 1:1
 NET_PLSND
 	JSR	NET_TX_STEP
 	JSR	NS_AVAIL
 	STA	NET_RX_AVLO
 	STX	NET_RX_AVHI
+	; accumulate sticky serial error latches ($80 framing, $40 overrun,
+	; $10 ring overflow); observability only, cleared on NET_INIT
+	JSR	NS_STAT
+	ORA	NET_NS_ERRS
+	STA	NET_NS_ERRS
 	JSR	NET_RX_STEP
 	JMP	NET_POLLX
 NET_POLLX	RTS
@@ -1004,6 +1302,15 @@ NSI_STOK
 	LDA	#1
 NSI_TROK
 	STA	NET_RX_TRIG
+	TAY			;press edge (released 1 -> pressed 0) latches
+	LDA	NET_TRIG_PREV	;so a tap between slots still reaches the server
+	BEQ	NSI_TRPREV
+	CPY	#0
+	BNE	NSI_TRPREV
+	LDA	#1
+	STA	NET_TRIG_LATCH
+NSI_TRPREV
+	STY	NET_TRIG_PREV
 	RTS
 ;
 ; map local stick input to non-diagonal canonical stick nibble so server
@@ -1041,12 +1348,40 @@ NET_SAN_STICKA
 	LDA	#$0F
 NSSA_OK
 	RTS
+
+; convert authoritative snapshot joy byte in A to internal DIR 0..3.
+; returns A=$FF for neutral/invalid so playback does not invent movement.
+NET_JOYDIRA
+	JSR	NET_SAN_STICKA
+	CMP	#$0F
+	BEQ	NJD_NEUT
+	EOR	#$0F
+	TAY
+	LDA	CONVERT,Y
+	CMP	#4
+	BCC	NJD_OK
+NJD_NEUT
+	LDA	#$FF
+NJD_OK
+	RTS
 ;
+; HELLO is the only packet sent before WELCOME. Rebuilding it on the normal
+; cadence makes a FujiNet-PC host-socket replacement recover without restarting
+; either the Atari program or the server.
+; LEAVE_ROOM is deliberately separate from the reliable-event stream. TCP and
+; the echoed sequence make retry/duplicate handling idempotent without changing
+; the session's server-to-client reliable revision.
 ; build DELTA packet from sampled input and arm TX state machine.
 NET_TX_BUILD_DELTA
+	LDA	NET_ROUND_READY
+	BNE	NTB_INPUT
+	LDA	#$0F		;results/sync heartbeat is always neutral
+	STA	NET_TX_RAW+3
+	JMP	NTB_PACKET
+NTB_INPUT
 	LDA	NET_RX_STICK
 	JSR	NET_SAN_STICKA
-	STA	NET_TX_BUF+3
+	STA	NET_TX_RAW+3
 	STA	NET_TX_LAST_STICK
 	LDA	NET_RX_TRIG
 	TAY
@@ -1054,36 +1389,283 @@ NET_TX_BUILD_DELTA
 	BNE	NTB_TRIGUP
 	TYA
 	BNE	NTB_TRIGUP
-	LDA	NET_TX_BUF+3
+	LDA	NET_TX_RAW+3
 	ORA	#$10
-	STA	NET_TX_BUF+3
+	STA	NET_TX_RAW+3
 NTB_TRIGUP
 	TYA
 	STA	NET_TX_LAST_TRIG
+	LDA	NET_TRIG_LATCH
+	BEQ	NTB_NOLATCH
+	LDA	#0
+	STA	NET_TRIG_LATCH
+	LDA	NET_TX_RAW+3
+	ORA	#$10
+	STA	NET_TX_RAW+3
+NTB_NOLATCH
+NTB_PACKET
 	LDA	#$41
-	STA	NET_TX_BUF
+	STA	NET_TX_RAW
 	LDA	NET_SEQ
-	STA	NET_TX_BUF+1
+	STA	NET_TX_RAW+1
 	INC	NET_SEQ
 	LDY	NET_LOCAL_PID
-	STY	NET_TX_BUF+2
-	LDA	#4
-	STA	NET_TX_STATE
+	STY	NET_TX_RAW+2
+	LDA	NET_ROUND_READY
+	BEQ	NTB_NOPUSH
+	JSR	NET_LOCAL_INPUT_PUSH
+NTB_NOPUSH
+	LDA	NET_ROUND_ID
+	STA	NET_TX_RAW+4
+	LDA	#5
+	JSR	NET_TX_FRAME
+	LDA	NET_ROUND_READY
+	BEQ	NTB_X
+	JSR	NET_SHOT_PREDICT
+NTB_X
+	RTS
+;
+; queue $43 seq pid + 8 name chars. The server ignores the pid and uses the
+; sender's own slot, so this cannot rename anyone else.
+NET_TX_BUILD_NAME
+	LDA	#$43
+	STA	NET_TX_RAW
+	LDA	NET_SEQ
+	STA	NET_TX_RAW+1
+	INC	NET_SEQ
+	LDA	NET_LOCAL_PID
+	STA	NET_TX_RAW+2
+	LDX	#0
+NTBN_CP
+	LDA	NAMEBUF,X
+	BNE	NTBN_ST
+	LDA	#$20		;pad short names with spaces
+NTBN_ST
+	STA	NET_TX_RAW+3,X
+	INX
+	CPX	#NAME_LEN
+	BCC	NTBN_CP
+	LDA	#NAME_PKT_LEN
+	JSR	NET_TX_FRAME
+	STA	NET_NAME_PEND
+	RTS
+;
+; queue $45 seq + highest applied reliable revision.
+; A = payload length in NET_TX_RAW. Append CRC-16/CCITT-FALSE, COBS encode it
+; into NET_TX_BUF, append the delimiter, and arm the byte-at-a-time handler TX.
+NET_TX_FRAME
+	STA	NET_TX_RAWLEN
+	LDA	#$FF
+	STA	NET_CK_LO
+	STA	NET_CK_HI
+	LDY	#0
+NTF_CBYTE
+	CPY	NET_TX_RAWLEN
+	BCS	NTF_CEND
+	LDA	NET_TX_RAW,Y
+	EOR	NET_CK_HI
+	STA	NET_CK_HI
+	LDX	#8
+NTF_CBIT
+	ASL	NET_CK_LO
+	ROL	NET_CK_HI
+	BCC	NTF_CNEXT
+	LDA	NET_CK_LO
+	EOR	#$21
+	STA	NET_CK_LO
+	LDA	NET_CK_HI
+	EOR	#$10
+	STA	NET_CK_HI
+NTF_CNEXT
+	DEX
+	BNE	NTF_CBIT
+	INY
+	JMP	NTF_CBYTE
+NTF_CEND
+	LDA	NET_CK_LO
+	STA	NET_TX_RAW,Y
+	INY
+	LDA	NET_CK_HI
+	STA	NET_TX_RAW,Y
+	INY
+	STY	NET_TX_RAWLEN
+	LDY	#0
+	STY	NET_TX_IDX
+	STY	NET_TX_CI
+	LDA	#1
+	STA	NET_TX_CODE
+	STA	NET_TX_BUF
+	LDA	#1
+	STA	NET_TX_WR
+NTF_ENC
+	LDY	NET_TX_IDX
+	CPY	NET_TX_RAWLEN
+	BCS	NTF_FIN
+	LDA	NET_TX_RAW,Y
+	BEQ	NTF_ZERO
+	LDY	NET_TX_WR
+	STA	NET_TX_BUF,Y
+	INC	NET_TX_WR
+	INC	NET_TX_CODE
+	INC	NET_TX_IDX
+	JMP	NTF_ENC
+NTF_ZERO
+	LDY	NET_TX_CI
+	LDA	NET_TX_CODE
+	STA	NET_TX_BUF,Y
+	LDA	#1
+	STA	NET_TX_CODE
+	LDY	NET_TX_WR
+	STY	NET_TX_CI
+	INC	NET_TX_WR
+	INC	NET_TX_IDX
+	JMP	NTF_ENC
+NTF_FIN
+	LDY	NET_TX_CI
+	LDA	NET_TX_CODE
+	STA	NET_TX_BUF,Y
+	LDY	NET_TX_WR
+	LDA	#0
+	STA	NET_TX_BUF,Y
+	INY
+	STY	NET_TX_STATE
 	LDA	#0
 	STA	NET_TX_IDX
 	RTS
+;
+NET_LOCAL_INPUT_PUSH
+	LDA	NET_PEND_COUNT
+	CLC
+	ADC	NET_PEND_HEAD
+	AND	#$07
+	TAX
+	LDA	NET_TX_RAW+1
+	STA	NET_PEND_SEQ,X
+	LDA	NET_TX_RAW+3
+	STA	NET_PEND_JOY,X
+	LDA	NET_PEND_COUNT
+	CMP	#8
+	BCC	NLIP_GROW
+	INC	NET_PEND_HEAD
+	LDA	NET_PEND_HEAD
+	AND	#$07
+	STA	NET_PEND_HEAD
+	RTS
+NLIP_GROW
+	INC	NET_PEND_COUNT
+	RTS
+;
+;LOCAL SHOT PREDICTION
+;---------------------
+;The server never broadcasts a SHOT at spawn (the first 0x42 arrives a
+;tick later, two cells out) and never for point-blank brick/player hits,
+;so a local fire showed nothing for 150ms or at all. Publish a synthetic
+;shot at the visible spawn cell through the same staged shot pipeline;
+;any authoritative 0x42 for our slot cancels the TTL and takes over, and
+;the TTL erases the prediction if the server never confirms the shot.
+;
+;publish {$42,seq,pid,NET_PRED_X,NET_PRED_Y,NET_PRED_FLG} for slot X
+;via the odd/even NET_SHOT_SEQ protocol. preserves X.
+NET_SHOT_PUBLISH
+	INC	NET_SHOT_SEQ,X
+	TXA
+	ASL
+	STA	NET_RX_TMP0
+	ASL
+	CLC
+	ADC	NET_RX_TMP0	;pid*6
+	TAY
+	LDA	#$42
+	STA	NET_SHOT_BUF,Y
+	LDA	NET_SEQ
+	STA	NET_SHOT_BUF+1,Y
+	TXA
+	STA	NET_SHOT_BUF+2,Y
+	LDA	NET_PRED_X
+	STA	NET_SHOT_BUF+3,Y
+	LDA	NET_PRED_Y
+	STA	NET_SHOT_BUF+4,Y
+	LDA	NET_PRED_FLG
+	STA	NET_SHOT_BUF+5,Y
+	INC	NET_SHOT_SEQ,X
+	RTS
+;
+NET_SHOT_PREDICT
+	LDA	NET_GAME_SHOW
+	BEQ	NSP_X
+	LDA	NET_PRED_TTL	;prediction already pending
+	BNE	NSP_X
+	LDX	NET_LOCAL_PID
+	CPX	#4
+	BCS	NSP_X
+	LDA	NET_TX_RAW+3
+	AND	#$10	;fire intent in outgoing DELTA?
+	BEQ	NSP_X
+	LDA	NET_TX_RAW+3
+	AND	#$0F
+	CMP	#$0F	;server requires a direction to fire
+	BEQ	NSP_X
+	TXA
+	TAY
+	LDA	NET_DEAD_MASK	;no shots while awaiting respawn
+	AND	PLRMSK,Y
+	BNE	NSP_X
+	LDA	NET_SHOT_DRAWN	;shot already drawn for our slot; ACTFLAG is also
+	AND	PLRMSK,Y	;used by actor effects and is not durable ownership
+	BNE	NSP_X
+	LDA	NET_TX_RAW+3
+	JSR	NET_JOYDIRA
+	CMP	#$FF
+	BEQ	NSP_X
+	STA	DIR,X
+	ASL
+	ORA	#$01	;active + dir<<1 (wire encoding)
+	STA	NET_PRED_FLG
+	JSR	NET_AHEAD_FREE	;spawn cell must be open: brick means the
+	BNE	NSP_X	;server just breaks it, player = instant hit
+	LDA	NET_AHEAD_X
+	STA	NET_PRED_X
+	LDA	NET_AHEAD_Y
+	STA	NET_PRED_Y
+	JSR	NET_SHOT_PUBLISH
+	LDA	#30	;~0.5s to be confirmed or self-clear
+	STA	NET_PRED_TTL
+NSP_X	RTS
+;
+;authoritative shot state for our slot supersedes any local prediction.
+NET_PRED_CONFIRM
+	LDA	NET_SHOT_PKT+2
+	CMP	NET_LOCAL_PID
+	BNE	NPC_X
+	LDA	#0
+	STA	NET_PRED_TTL
+NPC_X	RTS
+;
+;once per frame: age the predicted shot; if the server never sent any
+;shot state for our slot, publish a clear so the prediction erases.
+NET_PRED_TICK
+	LDA	NET_PRED_TTL
+	BEQ	NPT_X
+	DEC	NET_PRED_TTL
+	BNE	NPT_X
+	LDX	NET_LOCAL_PID
+	CPX	#4
+	BCS	NPT_X
+	LDA	#0
+	STA	NET_PRED_X
+	STA	NET_PRED_Y
+	STA	NET_PRED_FLG
+	JSR	NET_SHOT_PUBLISH
+NPT_X	RTS
 ;
 NET_TX_STEP	LDA	NET_TX_STATE
 	BEQ	NET_TX_DONE
 NET_TX_LOOP	LDA	NET_TX_STATE
 	BEQ	NET_TX_DONE
-	; NSENGINE TX fifo full: keep remaining bytes queued for next poll tick.
-	LDA	NS_TX_COUNT
-	CMP	#$20
-	BCS	NET_TX_DONE
 	LDY	NET_TX_IDX
 	LDA	NET_TX_BUF,Y
 	JSR	NS_SEND
+	BCS	NET_TX_DONE	;handler TX queue full: retry remaining bytes next poll
 	INC	NET_TX_IDX
 	DEC	NET_TX_STATE
 	JMP	NET_TX_LOOP
@@ -1098,8 +1680,8 @@ NET_RX_LOOP	LDA	NET_RX_AVLO
 	JSR	NS_RECV
 ;	LDA	#$0E	;debug: NS_RECV returned byte
 ;	STA	NET_DBG_COLOR
-	STA	NET_RX_TMP
-	LDA	NET_RX_TMP
+	STA	NET_PARSE_BYTE
+	LDA	NET_PARSE_BYTE
 	JSR	NET_RX_PARSE
 	LDA	NET_RX_AVLO
 	BNE	NET_RX_DECLO
@@ -1109,107 +1691,2896 @@ NET_RX_DECLO
 	JMP	NET_RX_LOOP
 NET_RX_DONE	RTS
 ;
-NET_RX_PARSE	STA	NET_RX_TMP	;preserve received byte
-	LDA	NET_RX_STATE
-	BNE	NET_RX_ST
-	JMP	NET_RX_WAIT
-NET_RX_ST
-	; NET_RX_STATE dispatch:
-	;   1=snapshot, 2=shot, 3=brick_full, 4=brick_delta, 5=respawn
-	CMP	#1
-	BEQ	NET_RX_COL40
-	CMP	#2
-	BEQ	NET_RX_COL42
-	CMP	#3
-	BEQ	NET_RX_COL50
-	CMP	#4
-	BEQ	NET_RX_COL51
-	CMP	#5
-	BNE	NET_RX_STDROP
-	JMP	NET_RX_COL52
-NET_RX_STDROP
-	JMP	NET_RX_DROP
-NET_RX_COL40
-	; collecting snapshot bytes
-	LDY	NET_SNAP_IDX
-	LDA	NET_RX_TMP
-	STA	NET_SNAP_BUF,Y
-	INY
-	STY	NET_SNAP_IDX
-	CPY	#19
-	BCS	NET_RX_40DONE
+; COBS FRAMING
+; ------------
+; Bytes accumulate until a zero delimiter, then the frame is COBS-decoded, its
+; CRC-16 checked, and it is dispatched by type. COBS guarantees no zero
+; appears inside an encoded frame, so the delimiter always realigns the parser.
+;
+; The old parser scanned the stream for a type marker and then took a fixed
+; count of bytes. On real hardware, where the SIO link delivers a byte stream
+; rather than datagrams, one byte lost or gained shifted everything and payload
+; bytes started being read as markers -- spurious brick deltas cleared random
+; cells, corrupt positions landed actors on the border, and a corrupt sequence
+; number parked the client ticks in the future. A checksum alone makes that
+; fail closed but cannot realign; the delimiter can, so a damaged frame now
+; costs exactly one frame.
+NET_RX_PARSE	STA	NET_PARSE_BYTE	;preserve received byte
+	BEQ	NET_FRAME_END		;zero is the delimiter, never data
+	LDY	NET_FRAME_IDX
+	CPY	#NET_FRAME_MAX
+	BCS	NRP_OVF
+	STA	NET_FRAME_BUF,Y
+	INC	NET_FRAME_IDX
 	RTS
+NRP_OVF	LDA	#1		;longer than any frame we send: junk
+	STA	NET_FRAME_OVF
+	RTS
+;
+NET_FRAME_END
+	LDA	NET_FRAME_IDX
+	BEQ	NFE_RESET	;delimiter run, nothing buffered
+	LDA	NET_FRAME_OVF
+	BNE	NFE_BAD
+	JSR	NET_COBS_DECODE	;A = decoded length, C set if malformed
+	BCS	NFE_BAD
+	CMP	#3		;type byte plus two CRC-16 trailer bytes at minimum
+	BCC	NFE_BAD
+	STA	NET_FRAME_LEN
+	JSR	NET_FRAME_CRC16
+	BCS	NFE_BAD
+	JSR	NET_FRAME_DISPATCH
+	JMP	NFE_RESET
+NFE_BAD	INC	NET_CK_BAD
+NFE_RESET
+	LDA	#0
+	STA	NET_FRAME_IDX
+	STA	NET_FRAME_OVF
+	RTS
+;
+; Decode in place: a group of code c consumes c bytes and emits c, so the write
+; index never overtakes the read index.
+NET_COBS_DECODE
+	LDA	#0
+	STA	NET_COBS_RD
+	STA	NET_COBS_WR
+NCD_GRP	LDY	NET_COBS_RD
+	CPY	NET_FRAME_IDX
+	BCS	NCD_OK
+	LDA	NET_FRAME_BUF,Y
+	BEQ	NCD_BAD		;a zero inside a frame cannot happen
+	STA	NET_COBS_CODE
+	INC	NET_COBS_RD
+	LDA	#1
+	STA	NET_COBS_N
+NCD_CPY	LDA	NET_COBS_N
+	CMP	NET_COBS_CODE
+	BCS	NCD_ZERO
+	LDY	NET_COBS_RD
+	CPY	NET_FRAME_IDX
+	BCS	NCD_BAD		;group overruns the delimiter
+	LDA	NET_FRAME_BUF,Y
+	LDY	NET_COBS_WR
+	STA	NET_FRAME_BUF,Y
+	INC	NET_COBS_RD
+	INC	NET_COBS_WR
+	INC	NET_COBS_N
+	JMP	NCD_CPY
+NCD_ZERO
+	LDA	NET_COBS_CODE	;a short group stands for a zero, unless it is
+	CMP	#$FF		;the group that ends the frame
+	BEQ	NCD_GRP
+	LDY	NET_COBS_RD
+	CPY	NET_FRAME_IDX
+	BCS	NCD_OK
+	LDA	#0
+	LDY	NET_COBS_WR
+	STA	NET_FRAME_BUF,Y
+	INC	NET_COBS_WR
+	JMP	NCD_GRP
+NCD_OK	LDA	NET_COBS_WR
+	CLC
+	RTS
+NCD_BAD	SEC
+	RTS
+;
+; CRC-16/CCITT-FALSE over every payload byte, then compare low/high trailer.
+; The bit loop costs 8 shifts per byte: 408 shifts for BRICK_FULL, well below
+; one VBI frame at the existing 60-byte parser bound.
+NET_FRAME_CRC16
+	LDA	NET_FRAME_LEN
+	SEC
+	SBC	#2
+	STA	NET_CK_LEN
+	LDA	#$FF
+	STA	NET_CK_LO
+	STA	NET_CK_HI
+	LDY	#0
+NFCRC_BYTE
+	CPY	NET_CK_LEN
+	BCS	NFCRC_END
+	LDA	NET_FRAME_BUF,Y
+	EOR	NET_CK_HI
+	STA	NET_CK_HI
+	LDX	#8
+NFCRC_BIT
+	ASL	NET_CK_LO
+	ROL	NET_CK_HI
+	BCC	NFCRC_NEXT
+	LDA	NET_CK_LO
+	EOR	#$21
+	STA	NET_CK_LO
+	LDA	NET_CK_HI
+	EOR	#$10
+	STA	NET_CK_HI
+NFCRC_NEXT
+	DEX
+	BNE	NFCRC_BIT
+	INY
+	JMP	NFCRC_BYTE
+NFCRC_END
+	LDY	NET_CK_LEN
+	LDA	NET_FRAME_BUF,Y
+	CMP	NET_CK_LO
+	BNE	NFCRC_BAD
+	INY
+	LDA	NET_FRAME_BUF,Y
+	CMP	NET_CK_HI
+	BEQ	NFCRC_OK
+NFCRC_BAD
+	SEC
+	RTS
+NFCRC_OK
+	CLC
+	RTS
+;
+; A = expected length. C set (and counted) when it does not match.
+NET_FRAME_LENCK
+	CMP	NET_FRAME_LEN
+	BEQ	NFL_OK
+	INC	NET_CK_BAD	;framed and intact, but wrong size for its type
+	SEC
+	RTS
+NFL_OK	CLC
+	RTS
+;
+; A/X = destination pointer low/high. Indirect indexed needs a zero page
+; pointer, and POINTER is mainline scratch the caller may still want, so it is
+; borrowed and put back.
+; This runs on the mainline and must not borrow POINTER.
+;
+; It used to save POINTER, aim it at the destination, copy, and restore. The
+; VBI is an NMI and interrupts any instruction: it draws through POINTER --
+; MOVEIM aims it at SHAPES, SETSUIT at SUITS -- so a VBI landing inside the
+; copy loop left POINTER on one of those tables, and the remaining
+; STA (POINTER),Y wrote packet bytes straight into the shape and sprite data.
+; That is the corrupted bullet and wizard glyphs: payload bytes, which is why
+; the values read like coordinates, landing in SHOTSHP and SUITS and staying
+; there for the rest of the game.
+;
+; Use the same self-modifying absolute,Y store the other mainline RX helpers
+; use, so no shared zero page is touched and the VBI cannot disturb it.
+NET_FRAME_COPY
+	STA	NFCP_I+1
+	STX	NFCP_I+2
+	LDY	#0
+NFCP_LP	CPY	NET_FRAME_LEN
+	BCS	NFCP_X
+	LDA	NET_FRAME_BUF,Y
+NFCP_I	STA	$FFFF,Y
+	INY
+	BNE	NFCP_LP
+NFCP_X	RTS
+;
+; Hand the decoded frame to the collector buffer its apply path already reads.
+; The whole frame is copied, payload plus the two-byte CRC trailer, so each of
+; those buffers is declared two bytes longer than its payload. They were sized
+; before the checksum existed, and the overflow landed on the variable that
+; happened to follow: NET_NAME_PKT wrote over NET_NAMES[0], so the first
+; character of the first name changed once a second as the server rotated
+; through them; NET_SHOT_PKT wrote over NET_SHOT_SEQ; NET_BRICK_BUF over
+; NET_BRICK_DONE; NET_SNAP_BUF over NET_SHOT_IDX ten times a second.
+CORE_DISPATCH_CONT
+	ORG	$8400	;round-capable decoder lives after the fixed maze data
+NET_FRAME_DISPATCH
+	LDA	NET_FRAME_BUF
+	CMP	#$40
+	BNE	NFD_C42
+	JMP	NFD_SNAP
+NFD_C42
+	CMP	#$42
+	BNE	NFD_C43
+	JMP	NFD_SHOT
+NFD_C43
+	CMP	#$43
+	BNE	NFD_C44
+	JMP	NFD_NAME
+NFD_C44
+	CMP	#$44
+	BNE	NFD_C47
+	JMP	NFD_SEAT
+NFD_C47
+	CMP	#$47
+	BNE	NFD_C50
+	JMP	NFD_WELCOME
+NFD_C50
+	CMP	#$50
+ BNE	NFD_C51
+	JMP	NFD_FULL
+NFD_C51
+	CMP	#$51
+	BNE	NFD_C52
+	JMP	NFD_BRK
+NFD_C52
+	CMP	#$52
+	BNE	NFD_C53
+	JMP	NFD_RESP
+NFD_C53
+	CMP	#$53
+	BNE	NFD_C57
+	JMP	NFD_REL
+NFD_C57
+	CMP	#$57
+	BNE	NFD_X
+	JMP	NFD_LEAVE_ACK
+NFD_X	RTS			;unknown type: ignore, the stream stays aligned
+NFD_LEAVE_ACK
+	LDA	#4		;two-byte payload plus CRC trailer
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	NET_LEAVING
+	BEQ	NFD_X
+	LDA	NET_FRAME_BUF+1
+	CMP	NET_LEAVE_SEQ
+	BNE	NFD_X
+	LDA	#1
+	STA	NET_LEAVE_ACKED
+	RTS
+NFD_SNAP
+	LDA	#23
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	NET_WELCOME
+	BEQ	NFD_X
+	LDA	NET_FRAME_BUF+20
+	CMP	NET_ROUND_ID
+	BNE	NFD_X
+	LDA	NET_ROUND_PHASE
+	BNE	NFD_SNAP_HEART
+	LDA	# <NET_SNAP_BUF
+	LDX	# >NET_SNAP_BUF
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_40DONE
+NFD_SNAP_HEART
+	LDA	#0		;matching frozen snapshot keeps watchdog alive
+	STA	NET_WAIT_LO
+	STA	NET_WAIT_HI
+	RTS
+NFD_SHOT
+	LDA	#9
+	JSR	NET_FRAME_LENCK
+	BCC	NFD_SHOT_LENOK
+	RTS
+NFD_SHOT_LENOK
+	LDA	NET_FRAME_BUF+6
+	CMP	NET_ROUND_ID
+	BEQ	NFD_SHOT_EPOCH
+	RTS
+NFD_SHOT_EPOCH
+	LDA	NET_ROUND_READY
+	BNE	NFD_SHOT_READY
+	RTS
+NFD_SHOT_READY
+	LDA	# <NET_SHOT_PKT
+	LDX	# >NET_SHOT_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_42DONE
+NFD_NAME
+	LDA	#NAME_PKT_LEN+2
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_NAME_PKT
+	LDX	# >NET_NAME_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_43DONE
+NFD_SEAT
+	LDA	#5
+	JSR	NET_FRAME_LENCK
+	BCS	NFD_X
+	LDA	# <NET_SEAT_PKT
+	LDX	# >NET_SEAT_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_44DONE
+NFD_WELCOME
+	LDA	#7
+	JSR	NET_FRAME_LENCK
+	BCC	NFD_WEL_LENOK
+	RTS
+NFD_WEL_LENOK
+	LDA	NET_FRAME_BUF+1
+	CMP	#1
+	BEQ	NFD_WEL_VEROK
+	RTS
+NFD_WEL_VEROK
+	LDA	NET_FRAME_BUF+3
+	CMP	#2
+	BCC	NFD_WEL_PHASEOK
+	RTS
+NFD_WEL_PHASEOK
+	STA	NET_ROUND_PHASE
+	LDA	NET_FRAME_BUF+4
+	BNE	NFD_WEL_LIMITNZ
+	RTS
+NFD_WEL_LIMITNZ
+	CMP	#11
+	BCC	NFD_WEL_LIMITOK
+	RTS
+NFD_WEL_LIMITOK
+	STA	NET_KILL_LIMIT
+	LDA	NET_FRAME_BUF+2
+	STA	NET_ROUND_ID
+	LDA	#1
+	STA	NET_WELCOME
+	LDA	#0
+	STA	NET_WAIT_LO
+	STA	NET_WAIT_HI
+	RTS
+NFD_FULL
+	LDA	#54
+	JSR	NET_FRAME_LENCK
+	BCC	NFD_FULL_LENOK
+	RTS
+NFD_FULL_LENOK
+	LDA	NET_FRAME_BUF+51
+	CMP	NET_ROUND_ID
+	BEQ	NFD_FULL_EPOCH
+	RTS
+NFD_FULL_EPOCH
+	LDA	# <NET_BRICK_BUF
+	LDX	# >NET_BRICK_BUF
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_50DONE
+NFD_BRK
+	LDA	#7
+	JSR	NET_FRAME_LENCK
+	BCC	NFD_BRK_LENOK
+	RTS
+NFD_BRK_LENOK
+	LDA	NET_FRAME_BUF+4
+	CMP	NET_ROUND_ID
+	BEQ	NFD_BRK_EPOCH
+	RTS
+NFD_BRK_EPOCH
+	LDA	NET_ROUND_READY
+	BNE	NFD_BRK_READY
+	RTS
+NFD_BRK_READY
+	LDA	# <NET_SNAP_BUF
+	LDX	# >NET_SNAP_BUF
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_51DONE
+NFD_RESP
+	LDA	#9
+	JSR	NET_FRAME_LENCK
+	BCC	NFD_RESP_LENOK
+	RTS
+NFD_RESP_LENOK
+	LDA	NET_FRAME_BUF+6
+	CMP	NET_ROUND_ID
+	BEQ	NFD_RESP_EPOCH
+	RTS
+NFD_RESP_EPOCH
+	LDA	NET_ROUND_READY
+	BNE	NFD_RESP_READY
+	RTS
+NFD_RESP_READY
+	LDA	# <NET_RESP_PKT
+	LDX	# >NET_RESP_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_52DONE
+NFD_REL
+	LDA	NET_FRAME_LEN
+	CMP	#9
+	BCS	NFD_REL_MINOK
+	RTS
+NFD_REL_MINOK
+	CMP	#REL_PKT_MAX+1
+	BCC	NFD_REL_OK
+	JMP	NFD_X
+NFD_REL_OK
+	LDA	# <NET_REL_PKT
+	LDX	# >NET_REL_PKT
+	JSR	NET_FRAME_COPY
+	JMP	NET_RX_53DONE
+;
+; Network shots are rendered into playfield character memory. Their clear
+; packets are deliberately transient, so serial loss must not leave the last
+; glyph there forever. Keep draw ownership separate from ACTFLAG: actor death
+; cleanup legitimately rewrites that shared byte while the actor's projectile
+; can still be on screen.
+; X = slot. VBI-only; preserves X.
+NET_SHOT_CLEAR_X
+	TXA
+	TAY
+	LDA	NET_SHOT_DRAWN
+	AND	PLRMSK,Y
+	BEQ	NSCX_FLAGS
+	JSR	ERASHOT
+	LDA	NET_SHOT_DRAWN
+	AND	PLRMSKINV,Y
+	STA	NET_SHOT_DRAWN
+NSCX_FLAGS
+	LDA	ACTFLAG,X
+	AND	#$7F
+	STA	ACTFLAG,X
+	LDA	#0
+	STA	SOUND,X
+	RTS
+;
+; X = slot. Mark its newly painted shot without growing the nearly-full core
+; segment; this high code block has ample room after the frame dispatcher.
+NET_SHOT_MARK_X
+	TXA
+	TAY
+	LDA	NET_SHOT_DRAWN
+	ORA	PLRMSK,Y
+	STA	NET_SHOT_DRAWN
+	RTS
+;
+; Active SHOT packets refresh one second of life. The server publishes at
+; 10 Hz, so this tolerates a long burst of bad frames but eventually removes
+; an orphan if every repeated clear is lost. Results/intermission clears all
+; shots on its first VBI, matching the Linux clients' MATCH_END behavior.
+NET_SHOT_WATCH_TICK
+	LDX	#3
+NSWT_LP
+	LDA	NET_ROUND_PHASE
+	BEQ	NSWT_AGE
+	LDA	NET_SHOT_TTL,X	;intermission cleanup is idempotent: once no
+	BNE	NSWT_CLEAR	;timer or glyph remains, leave sound/effect state alone
+	TXA
+	TAY
+	LDA	NET_SHOT_DRAWN
+	AND	PLRMSK,Y
+	BEQ	NSWT_NX
+	BNE	NSWT_CLEAR
+NSWT_AGE
+	LDA	NET_SHOT_TTL,X
+	BEQ	NSWT_NX
+	DEC	NET_SHOT_TTL,X
+	BNE	NSWT_NX
+NSWT_CLEAR
+	LDA	#0
+	STA	NET_SHOT_TTL,X
+	JSR	NET_SHOT_CLEAR_X
+NSWT_NX
+	DEX
+	BPL	NSWT_LP
+	RTS
+;
+; Sound allocator implementation. Kept here to preserve the base-core safety
+; margin while remaining ordinary loaded code callable by the VBI.
+SND_SEL	CPX	NET_LOCAL_PID
+	BEQ	SNDSLOC
+	STX	SND_CH2_PID
+	LDY	#2
+	RTS
+SNDSLOC	LDY	#0
+	RTS
+;
+SND_OFF	CPX	NET_LOCAL_PID
+	BNE	SNDOREM
+	LDY	#0
+	LDA	#0
+	STA	AUDC1
+	RTS
+SNDOREM	LDY	#2
+	CPX	SND_CH2_PID
+	BNE	SNDOX
+	LDA	#0
+	STA	AUDC2
+	LDA	#$FF	;silence also releases the last-writer claim
+	STA	SND_CH2_PID
+SNDOX	RTS
+;
+; Server-triggered round-end presentation. This runs one bounded step from the
+; deferred VBI; mainline NET_POLL therefore keeps receiving, ACKing reliable
+; events, and sending the neutral intermission heartbeat throughout.
+ROUND_PRESENT_TICK
+	LDA	ROUND_PRESENT_STATE
+	CMP	#RP_BEGIN
+	BNE	RPT_C2
+	JMP	RP_BEGIN_RUN
+RPT_C2	CMP	#RP_LOSER_EVAP
+	BNE	RPT_C3
+	JMP	RP_LOSER_RUN
+RPT_C3	CMP	#RP_WINNER_DANCE
+	BNE	RPT_C4
+	JMP	RP_DANCE_RUN
+RPT_C4	CMP	#RP_WINNER_EVAP
+	BNE	RPT_C5
+	JMP	RP_WINNER_RUN
+RPT_C5	CMP	#RP_FADE
+	BNE	RPT_C6
+	JMP	RP_FADE_RUN
+RPT_C6	CMP	#RP_RESULTS
+	BNE	RPT_X
+	JMP	RP_SHOW_RESULTS
+RPT_X	RTS
+
+RP_BEGIN_RUN
+	JSR	NET_SHOT_WATCH_TICK	;phase=results makes this erase every live shot
+	LDX	#3		;discard old-round respawns without applying them
+RPB_RESP
+	LDA	NET_RESP_SEQ,X
+	STA	NET_RESP_APPLYSEQ,X
+	DEX
+	BPL	RPB_RESP
+	LDA	NET_GAME_SHOW	;late join has no live board to animate
+	BNE	RPB_BOARD
+	JMP	RP_SHOW_RESULTS
+RPB_BOARD
+	LDX	NET_ROUND_WINNER
+	LDA	PLRMSK,X
+	EOR	#$FF
+	AND	ROUND_ACTIVE_MASK
+	STA	ROUND_EFFECT_MASK
+	LDX	#3
+RPB_LOSER
+	LDA	ROUND_EFFECT_MASK
+	AND	PLRMSK,X
+	BEQ	RPB_NEXT
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,X
+	BNE	RPB_SKIP
+	LDA	RNDX,X
+	BEQ	RPB_SKIP
+	CMP	#19
+	BCS	RPB_SKIP
+	LDA	RNDY,X
+	BEQ	RPB_SKIP
+	CMP	#18
+	BCS	RPB_SKIP
+	JSR	ERASMAN
+	LDA	#$02
+	STA	ACTFLAG,X
+	LDA	#9
+	STA	MOVEST,X
+	JMP	RPB_NEXT
+RPB_SKIP
+	LDA	ROUND_EFFECT_MASK
+	AND	PLRMSKINV,X
+	STA	ROUND_EFFECT_MASK
+RPB_NEXT
+	DEX
+	BPL	RPB_LOSER
+	LDA	#RP_LOSER_EVAP
+	STA	ROUND_PRESENT_STATE
+	LDA	ROUND_EFFECT_MASK
+	BNE	RPT_X
+	JMP	RP_DANCE_BEGIN
+
+RP_LOSER_RUN
+	LDA	RTCLOK
+	AND	#$01
+	BNE	RPT_X
+	LDX	#3
+RPL_LOOP
+	LDA	ROUND_EFFECT_MASK
+	AND	PLRMSK,X
+	BEQ	RPL_NEXT
+	JSR	EVAPRTE
+	LDA	ACTFLAG,X
+	AND	#$02
+	BNE	RPL_NEXT
+	LDA	ROUND_EFFECT_MASK
+	AND	PLRMSKINV,X
+	STA	ROUND_EFFECT_MASK
+RPL_NEXT
+	DEX
+	BPL	RPL_LOOP
+	LDA	ROUND_EFFECT_MASK
+	BEQ	RPL_DONE
+	RTS
+RPL_DONE
+
+RP_DANCE_BEGIN
+	LDX	NET_ROUND_WINNER
+	LDA	ROUND_ACTIVE_MASK
+	AND	PLRMSK,X
+	BEQ	RPD_SKIP
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,X
+	BNE	RPD_SKIP
+	LDA	RNDX,X
+	BEQ	RPD_SKIP
+	CMP	#19
+	BCS	RPD_SKIP
+	LDA	RNDY,X
+	BEQ	RPD_SKIP
+	CMP	#18
+	BCS	RPD_SKIP
+	JSR	NET_AUTH_REPOS
+	LDA	#0
+	STA	MOVEST,X
+	STA	DIR,X
+	JSR	SETSTIL
+	LDA	PALNTS		;five seconds: 300 NTSC frames or 250 PAL frames
+	BNE	RPD_PAL
+	LDA	#44		;300 = $012C
+	LDY	#1
+	BNE	RPD_TIME
+RPD_PAL
+	LDA	#250
+	LDY	#0
+RPD_TIME
+	STA	ROUND_PRESENT_TIMER
+	STY	ROUND_PRESENT_TIMER_HI
+	LDA	#RP_WINNER_DANCE
+	STA	ROUND_PRESENT_STATE
+	RTS
+RPD_SKIP
+	JMP	RP_FADE_BEGIN
+
+RP_DANCE_RUN
+	LDA	ROUND_PRESENT_TIMER
+	BNE	RPD_DEC
+	DEC	ROUND_PRESENT_TIMER_HI
+RPD_DEC
+	DEC	ROUND_PRESENT_TIMER
+	LDA	ROUND_PRESENT_TIMER
+	ORA	ROUND_PRESENT_TIMER_HI
+	BEQ	RP_WINNER_BEGIN
+	LDA	RTCLOK
+	AND	#$07
+	BEQ	RPD_STEP
+	RTS
+RPD_STEP
+	LDX	NET_ROUND_WINNER
+	INC	DIR,X
+	LDA	DIR,X
+	AND	#$03
+	STA	DIR,X
+	JMP	SETSTIL
+
+RP_WINNER_BEGIN
+	LDX	NET_ROUND_WINNER
+	JSR	ERASMAN
+	LDA	#$02
+	STA	ACTFLAG,X
+	LDA	#9
+	STA	MOVEST,X
+	LDA	#RP_WINNER_EVAP
+	STA	ROUND_PRESENT_STATE
+	RTS
+
+RP_WINNER_RUN
+	LDA	RTCLOK
+	AND	#$01
+	BEQ	RPW_STEP
+	RTS
+RPW_STEP
+	LDX	NET_ROUND_WINNER
+	JSR	EVAPRTE
+	LDA	ACTFLAG,X
+	AND	#$02
+	BEQ	RPW_DONE
+	RTS
+RPW_DONE
+
+RP_FADE_BEGIN
+	LDA	#0
+	STA	GRACTL
+	STA	AUDC1
+	STA	AUDC2
+	LDA	#$FF
+	STA	SND_CH2_PID
+	LDA	#RP_FADE
+	STA	ROUND_PRESENT_STATE
+	RTS
+
+RP_FADE_RUN
+	LDA	RTCLOK
+	AND	#$03
+	BEQ	RPF_STEP
+	RTS
+RPF_STEP
+	LDA	#0
+	STA	ROUND_PRESENT_TIMER
+	LDX	#7
+RPF_LOOP
+	LDA	PCOLR0,X
+	AND	#$0F
+	BEQ	RPF_NEXT
+	LDA	PCOLR0,X
+	SEC
+	SBC	#1
+	STA	PCOLR0,X
+	INC	ROUND_PRESENT_TIMER
+RPF_NEXT
+	DEX
+	BPL	RPF_LOOP
+	LDA	ROUND_PRESENT_TIMER
+	BEQ	RPF_DONE
+	RTS
+RPF_DONE
+	LDA	#RP_RESULTS
+	STA	ROUND_PRESENT_STATE
+	RTS
+
+; X=slot, SCRPTR=destination. Frozen MATCH_END names are always populated with
+; either the accepted name or the server's slot-qualified role fallback.
+RP_DRAW_NAME
+	TXA
+	ASL
+	ASL
+	ASL
+	STA	COUNT
+	LDY	#0
+RPN_LOOP
+	STY	HOLDIT
+	TYA
+	CLC
+	ADC	COUNT
+	TAY
+	LDA	NET_NAMES,Y
+	JSR	HOST_SCR
+	LDY	HOLDIT
+	STA	(SCRPTR),Y
+	INY
+	CPY	#NAME_LEN
+	BCC	RPN_LOOP
+	RTS
+
+; POINTER=screen-code string terminated by $FF, SCRPTR=destination.
+RP_DRAW_STRING
+	LDY	#0
+RPS_LOOP
+	LDA	(POINTER),Y
+	CMP	#$FF
+	BEQ	RPS_X
+	STA	(SCRPTR),Y
+	INY
+	BNE	RPS_LOOP
+RPS_X	RTS
+
+RP_SHOW_RESULTS
+	LDA	#0
+	STA	GRACTL
+	STA	NET_GAME_SHOW
+	STA	AUDC1
+	STA	AUDC2
+	STA	COLOR4
+	LDA	#$0E		;ROM text foreground after the game palette reached black
+	STA	COLOR2
+	LDA	#$E0
+	STA	CHBASE
+	JSR	HOST_CLR
+	LDA	# <RP_TITLE
+	STA	POINTER
+	LDA	# >RP_TITLE
+	STA	POINTER+1
+	LDA	# <[HOSTSCR+95]	;row 2, centered
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+95]
+	STA	SCRPTR+1
+	JSR	RP_DRAW_STRING
+	LDX	NET_ROUND_WINNER
+	LDA	# <[HOSTSCR+164]	;row 4: winner name and outcome
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+164]
+	STA	SCRPTR+1
+	JSR	RP_DRAW_NAME
+	CLC
+	LDA	SCRPTR
+	ADC	#8
+	STA	SCRPTR
+	BCC	RPSW_PTR
+	INC	SCRPTR+1
+RPSW_PTR
+	LDA	ROUND_FINAL_ROLE
+	AND	PLRMSK,X
+	BNE	RPSW_WINS
+	LDA	ROUND_ZOMBIE_HISTORY
+	BEQ	RPSW_WINS
+	LDA	# <RP_BEATS
+	LDY	# >RP_BEATS
+	BNE	RPSW_TEXT
+RPSW_WINS
+	LDA	# <RP_WINS
+	LDY	# >RP_WINS
+RPSW_TEXT
+	STA	POINTER
+	STY	POINTER+1
+	JSR	RP_DRAW_STRING
+	LDX	#0
+RPS_ROW
+	LDA	ROUND_ACTIVE_MASK
+	AND	PLRMSK,X
+	BEQ	RPS_NEXT
+	LDA	RP_ROW_LO,X
+	STA	SCRPTR
+	LDA	RP_ROW_HI,X
+	STA	SCRPTR+1
+	TXA
+	CLC
+	ADC	#$11		;screen-code slot number at column 4
+	LDY	#0
+	STA	(SCRPTR),Y
+	CLC
+	LDA	SCRPTR
+	ADC	#3		;name begins at column 7
+	STA	SCRPTR
+	BCC	RPS_NAME
+	INC	SCRPTR+1
+RPS_NAME
+	JSR	RP_DRAW_NAME
+	LDA	ROUND_FINAL_SCORE,X
+	CMP	#10
+	BCC	RPS_ONE
+	LDA	#$11
+	LDY	#11
+	STA	(SCRPTR),Y
+	LDA	#$10
+	INY
+	STA	(SCRPTR),Y
+	JMP	RPS_NEXT
+RPS_ONE
+	PHA
+	LDA	#$10
+	LDY	#11
+	STA	(SCRPTR),Y
+	PLA
+	CLC
+	ADC	#$10
+	INY
+	STA	(SCRPTR),Y
+RPS_NEXT
+	INX
+	CPX	#4
+	BCC	RPS_ROW
+	LDA	# <RP_SOON
+	STA	POINTER
+	LDA	# >RP_SOON
+	STA	POINTER+1
+	LDA	# <[HOSTSCR+812]	;row 20
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+812]
+	STA	SCRPTR+1
+	JSR	RP_DRAW_STRING
+	LDA	# <HOSTDISP	;publish only after the text screen is complete
+	STA	DLIST
+	LDA	# >HOSTDISP
+	STA	DLIST+1
+	LDA	#$40
+	STA	NMIEN
+	LDA	#RP_WAIT_START
+	STA	ROUND_PRESENT_STATE
+	RTS
+
+; ROUND_START can interrupt any effect. Leave the result screen visible while
+; its map/snapshot barrier fills, but reset every game resource before reveal.
+ROUND_PRESENT_RESTORE
+	LDA	#0
+	STA	ROUND_PRESENT_STATE
+	STA	ROUND_PRESENT_TIMER_HI
+	STA	ROUND_EFFECT_MASK
+	STA	NET_GAME_SHOW
+	STA	GRACTL
+	STA	AUDC1
+	STA	AUDC2
+	LDY	#7
+RPR_COLOR
+	LDA	COLTBL,Y
+	STA	PCOLR0,Y
+	DEY
+	BPL	RPR_COLOR
+	LDA	#0
+	STA	COLOR4
+	LDX	#3
+RPR_SLOT
+	LDA	NET_RESP_SEQ,X
+	STA	NET_RESP_APPLYSEQ,X
+	LDA	#0
+	STA	ACTFLAG,X
+	STA	MOVEST,X
+	STA	NET_SHOT_TTL,X
+	JSR	NET_SHOT_CLEAR_X
+	DEX
+	BPL	RPR_SLOT
+	LDA	#$FF
+	STA	SND_CH2_PID
+	LDA	#$40
+	STA	NMIEN
+	RTS
+;
+; These small tables live at the tail of executable presentation code. Keeping
+; the larger vocabulary in the reclaimed title area leaves both regions within
+; explicit, independently checked bounds.
+RP_WINS	.BYTE	" WINS",$FF
+RP_ROW_LO	.BYTE	<[HOSTSCR+324],<[HOSTSCR+404],<[HOSTSCR+484],<[HOSTSCR+564]
+RP_ROW_HI	.BYTE	>[HOSTSCR+324],>[HOSTSCR+404],>[HOSTSCR+484],>[HOSTSCR+564]
+
+; Every path which abandons a connection returns through START and this shared
+; reset. Preserve typed host/port/name and mutable validated port bytes, while
+; clearing the contiguous NetStream runtime plus older actor/render transients.
+NET_SESSION_RESET
+	JSR	NET_STATE_CLEAR
+	LDA	#0
+	LDX	#3
+NSR_SLOT
+	STA	ACTFLAG,X
+	STA	MOVEST,X
+	STA	SOUND,X
+	STA	SHOTDIR,X
+	STA	SHOTMST,X
+	STA	SCRPND,X
+	STA	DIR,X
+	DEX
+	BPL	NSR_SLOT
+	LDA	#$FF
+	STA	SND_CH2_PID
+	RTS
+
+; Session-control builders live in the guarded high-code segment to preserve
+; the fixed $100 margin between the base core and display RAM.
+NET_TX_BUILD_HELLO
+	LDA	#$46
+	STA	NET_TX_RAW
+	LDA	#1
+	STA	NET_TX_RAW+1
+	LDA	#2
+	JMP	NET_TX_FRAME
+
+NET_TX_BUILD_LEAVE
+	LDA	#$56
+	STA	NET_TX_RAW
+	LDA	NET_SEQ
+	STA	NET_TX_RAW+1
+	STA	NET_LEAVE_SEQ
+	INC	NET_SEQ
+	LDA	#2
+	JMP	NET_TX_FRAME
+
+NET_TX_BUILD_REL_ACK
+	LDA	#$45
+	STA	NET_TX_RAW
+	LDA	NET_SEQ
+	STA	NET_TX_RAW+1
+	INC	NET_SEQ
+	LDA	NET_REL_REV_LO
+	STA	NET_TX_RAW+2
+	LDA	NET_REL_REV_HI
+	STA	NET_TX_RAW+3
+	LDA	#4
+	JSR	NET_TX_FRAME
+	LDA	#0
+	STA	NET_REL_ACK_PEND
+	RTS
+
+NET_ENDC
+	LDA	NET_ACTIVE
+	BEQ	NET_END_FW
+	JSR	NS_END
+NET_END_FW
+	LDA	#0
+	STA	NET_ACTIVE
+	LDA	NET_FW_OPEN
+	BEQ	NET_ENDX
+	JSR	NET_FW_CLOSE
+	LDA	#0
+	STA	NET_FW_OPEN
+NET_ENDX	RTS
+
+; OPTION, ESC, and Q leave an active game through the same bounded close/reopen
+; state machine. Keyboard controls are sampled only after the welcome packet,
+; so menu/setup keystrokes cannot trigger a leave.
+NET_LEAVE_INPUT
+	LDA	NET_LEAVING
+	BNE	NLI_X
+	LDA	NET_ACTIVE
+	BEQ	NLI_X
+	LDA	NET_WELCOME
+	BEQ	NLI_X
+	LDA	CONSOL
+	AND	#$04		;OPTION is active low
+	BEQ	NLI_LEAVE
+	LDA	KEYIN
+	CMP	#$FF
+	BEQ	NLI_X
+	TAY
+	LDA	#$FF
+	STA	KEYIN		;consume ESC/Q; gameplay itself is joystick-driven
+	LDA	(KEYCODES),Y
+	CMP	#$1B		;ATASCII ESC
+	BEQ	NLI_LEAVE
+	CMP	#'Q'
+	BEQ	NLI_LEAVE
+	CMP	#'q'
+	BNE	NLI_X
+NLI_LEAVE
+	LDA	#1
+	STA	NET_LEAVING
+	LDA	#0
+	STA	NET_LEAVE_SENT
+	STA	NET_LEAVE_ACKED
+	STA	NET_ROUND_READY
+	STA	NET_MOVE_DUE
+	STA	NET_PEND_COUNT
+	STA	NET_TRIG_LATCH
+	STA	HOST_MSG
+	STA	HOST_MSG+1
+	LDA	RTCLOK
+	STA	NET_LEAVE_CLK
+	LDA	#NET_LEAVE_NTSC
+	LDX	PALNTS
+	BEQ	NLI_TIMER
+	LDA	#NET_LEAVE_PAL
+NLI_TIMER
+	STA	NET_LEAVE_TIMER
+NLI_X	RTS
+
+NET_LEAVE_TICK
+	LDA	NET_LEAVING
+	BEQ	NLT_X
+	LDA	NET_LEAVE_ACKED
+	BNE	NLT_DONE
+	LDA	RTCLOK
+	CMP	NET_LEAVE_CLK
+	BEQ	NLT_X
+	STA	NET_LEAVE_CLK
+	DEC	NET_LEAVE_TIMER
+	BNE	NLT_X
+NLT_DONE
+	JMP	NET_HOSTRET
+NLT_X	RTS
+
+; Firmware leaves NetStream only when COMMAND is asserted. NS_END restores the
+; Atari IRQ/POKEY side but does not assert COMMAND, so perform the harmless Fuji
+; high-speed-index query after a menu-safe VBI is installed. Its result is not
+; used; the command edge itself makes FujiNet stop and close the TCP socket.
+NET_FW_CLOSE
+	LDA	#$70
+	STA	DDEVIC
+	LDA	#1
+	STA	DUNIT
+	LDA	#$3F
+	STA	DCOMND
+	LDA	#$40
+	STA	DSTATS
+	LDA	# <NET_TX_BUF
+	STA	DBUFLO
+	LDA	# >NET_TX_BUF
+	STA	DBUFHI
+	LDA	#1
+	STA	DTIMLO
+	STA	DBYTLO
+	LDA	#0
+	STA	DBYTHI
+	STA	DAUX1
+	STA	DAUX2
+	JSR	SIOV
+	RTS
+
+; ---------------------------------------------------------------------------
+; Reachable title and Direct Connect flow. This lives in the measured high-code
+; reserve because the reclaimed $8042-$81EF allocation is occupied by the
+; persistent round transition decoder. HOSTSCR is the only title/setup surface.
+; ---------------------------------------------------------------------------
+UI_CONFIG_DEFAULTS
+	JSR	UI_CONNECTION_DEFAULTS
+	LDA	#0
+	STA	NAMEBUF
+	STA	APPKEY_AUTOJOIN
+	RTS
+
+UI_CONNECTION_DEFAULTS
+	LDY	#0
+UCD_HOST	LDA	CFG_HOST,Y
+	STA	HOSTBUF,Y
+	BEQ	UCD_PORT
+	INY
+	CPY	#HOST_MAX+1
+	BCC	UCD_HOST
+UCD_PORT	LDY	#0
+UCD_PORTCP	LDA	CFG_PORT_TEXT,Y
+	STA	PORTBUF,Y
+	BEQ	UCD_NAME
+	INY
+	CPY	#PORT_MAX+1
+	BCC	UCD_PORTCP
+UCD_NAME
+	LDA	#CFG_DEFAULT_PORT_A
+	STA	NET_PORT_ARG_A
+	LDA	#CFG_DEFAULT_PORT_X
+	STA	NET_PORT_ARG_X
+	RTS
+
+UI_HOST_BOOT
+	LDA	#$40		;menu-safe while HOSTSCR owns the display
+	STA	NMIEN
+	LDA	#0		;host text background: black in hardware and OS shadow
+	STA	COLBK
+	STA	COLOR4
+	; Match the palette that remains after a normal OPTION leave. ANTIC mode 2
+	; uses PF1 for text and PF2 for its background; PF2 must stay black.
+	LDA	#PFCOL1
+	STA	COLPF1
+	STA	COLOR1
+	LDA	#PFCOL2
+	STA	COLPF2
+	STA	COLOR2
+	LDA	CHBASE
+	STA	HOST_CHSAV
+	LDA	#$E0		;ROM character set for host, port, and title text
+	STA	CHBASE
+	LDA	APPKEY_AUTOJOIN
+	BEQ	UHB_TITLE
+	LDA	#0		;stored launch is one-shot even if the connection fails
+	STA	APPKEY_AUTOJOIN
+	LDA	CONSOL
+	AND	#$04		;holding OPTION deliberately bypasses stored autojoin
+	BEQ	UHB_BOOT_OPTION
+	LDA	HOST_CHSAV
+	STA	CHBASE
+	RTS
+UHB_BOOT_OPTION
+	LDA	CONSOL
+	AND	#$04
+	BEQ	UHB_BOOT_OPTION	;debounce the held startup override
+	JSR	HOST_SETUP
+	BCS	UHB_TITLE
+	LDA	HOST_CHSAV
+	STA	CHBASE
+	RTS
+UHB_TITLE
+	LDA	# <HOSTDISP
+	STA	DLIST
+	LDA	# >HOSTDISP
+	STA	DLIST+1
+	LDA	#CFG_BUILD_FLAVOR
+	BNE	UHB_LOBBY	;QA/production builds include the Lobby browser
+	JSR	UI_TITLE_DRAW	;LAN builds retain the established direct-connect title
+UHB_WAIT
+	LDA	CONSOL
+	AND	#$04
+	BNE	UHB_KEY
+UHB_RELEASE
+	LDA	CONSOL
+	AND	#$04
+	BEQ	UHB_RELEASE
+	JSR	HOST_SETUP
+	JMP	UHB_TITLE
+UHB_KEY
+	LDA	KEYIN
+	CMP	#$FF
+	BEQ	UHB_WAIT
+	TAY
+	LDA	#$FF
+	STA	KEYIN
+	LDA	(KEYCODES),Y
+	CMP	#$9B
+	BNE	UHB_WAIT
+	JMP	UHB_JOIN_READY
+UHB_LOBBY
+	JSR	LOBBY_MENU
+UHB_JOIN_READY
+	LDA	HOST_CHSAV
+	STA	CHBASE
+	RTS
+
+UI_TITLE_DRAW
+	JSR	HOST_CLR
+	; Name field doubles as the title's username line and keeps the existing
+	; conversion/bounds behavior used by the editor.
+	JSR	NAME_FIELD
+	JSR	TXT_DRAW
+	LDA	# <TITLE_HEAD
+	STA	HOST_MPTR
+	LDA	# >TITLE_HEAD
+	STA	HOST_MPTR+1
+	LDA	# <HOSTSCR
+	STA	SCRPTR
+	LDA	# >HOSTSCR
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	LDA	# <TITLE_FIRST
+	STA	HOST_MPTR
+	LDA	# >TITLE_FIRST
+	STA	HOST_MPTR+1
+	LDA	# <[HOSTSCR+240]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+240]
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	LDA	#CFG_KILL_LIMIT
+	CMP	#10
+	BCC	UTD_ONE
+	LDA	#'1'
+	JSR	HOST_SCR
+	LDY	#0
+	STA	(SCRPTR),Y
+	JSR	UI_PTR_INC
+	LDA	#'0'
+	BNE	UTD_DRAW
+UTD_ONE	CLC
+	ADC	#'0'
+UTD_DRAW	JSR	HOST_SCR
+	LDY	#0
+	STA	(SCRPTR),Y
+	JSR	UI_PTR_INC
+UTD_SUFFIX
+	LDA	# <TITLE_KILLS
+	STA	HOST_MPTR
+	LDA	# >TITLE_KILLS
+	STA	HOST_MPTR+1
+	JSR	UI_PUT
+	LDA	# <TITLE_RETURN
+	STA	HOST_MPTR
+	LDA	# >TITLE_RETURN
+	STA	HOST_MPTR+1
+	LDA	# <[HOSTSCR+320]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+320]
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	LDA	# <TITLE_OPTION
+	STA	HOST_MPTR
+	LDA	# >TITLE_OPTION
+	STA	HOST_MPTR+1
+	LDA	# <[HOSTSCR+400]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+400]
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	JSR	HOST_MSGDRAW	;preserves failed-connect diagnostics on the title
+	RTS
+
+; Copy one $FF-terminated ROM-screen-code string to SCRPTR.
+UI_PUT
+	LDY	#0
+UIP_LOOP
+	LDA	(HOST_MPTR),Y
+	CMP	#$FF
+	BEQ	UIP_DONE
+	STA	(SCRPTR),Y
+	INY
+	BNE	UIP_LOOP
+UIP_DONE	TYA
+	CLC
+	ADC	SCRPTR
+	STA	SCRPTR
+	BCC	UIP_X
+	INC	SCRPTR+1
+UIP_X
+	RTS
+
+UI_PTR_INC
+	INC	SCRPTR
+	BNE	UIP_X
+	INC	SCRPTR+1
+	RTS
+
+TITLE_HEAD	.BYTE	"FUJINET MAZE WAR",$FF
+TITLE_FIRST	.BYTE	"FIRST TO ",$FF
+TITLE_KILLS	.BYTE	" KILLS WINS",$FF
+TITLE_RETURN	.BYTE	"RETURN: PLAY",$FF
+TITLE_OPTION	.BYTE	"OPTION: SERVER SETUP",$FF
+
+; This generated data is intentionally in the high-code segment, whose
+; below-$A000 bound is checked by memory_layout_smoke.sh. It stays immutable;
+; UI_CONFIG_DEFAULTS copies only host/port defaults to the mutable buffers.
+	icl	'build/maze-war-config-data.inc'
+; Erase the two-byte character pair at POINTR0 unless a live actor currently
+; owns that render cell. Projectiles are transient, while a stationary actor
+; redraws only when it next moves; clearing an old shot under that actor would
+; leave the PM shirt with no character-cell body. Preserves X and Y.
+ERASHOT_PAIR
+	TYA
+	PHA
+	LDY	#3
+ERSHP_LP
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,Y
+	BNE	ERSHP_NX
+	LDA	LOCLO,Y
+	CMP	POINTR0
+	BNE	ERSHP_NX
+	LDA	LOCHI,Y
+	CMP	POINTR0+1
+	BEQ	ERSHP_X	;the actor owns these two bytes
+ERSHP_NX
+	DEY
+	BPL	ERSHP_LP
+	LDY	#0
+	LDA	#0
+	STA	(POINTR0),Y
+	INY
+	STA	(POINTR0),Y
+ERSHP_X
+	PLA
+	TAY
+	RTS
+
+; ---------------------------------------------------------------------------
+; Lobby AppKey startup support. These routines run only on the title/setup
+; path while NetStream is stopped. APPKEY_BUF overlays packet staging whose
+; lifetime starts after NS_INIT; the 67-byte extent is checked below and by
+; the memory smoke test. FujiNet's default read transfers a little-endian
+; two-byte count plus 64 payload bytes, so the terminator lives at +2+count.
+; ---------------------------------------------------------------------------
+APPKEY_BUF	=	NET_BRICK_BUF
+
+; Lobby browsing is a title-only lifetime. The record and URL scratch occupy
+; the authoritative map cache only while NetStream and the game VBI are
+; stopped. Compact room state reuses the beginning of runtime state; visible
+; names and occupancy live in HOSTSCR rows instead of another RAM allocation.
+LOBBY_BUF	=	NET_MAP_CELLS
+LOBBY_COUNT	=	NET_TICK
+LOBBY_RAW_COUNT =	NET_TX_STATE
+LOBBY_SELECT	=	NET_TX_IDX
+LOBBY_PAGE	=	NET_TX_WR
+LOBBY_HAVE_NEXT =	NET_TX_CI
+LOBBY_OPEN	=	NET_TX_CODE
+LOBBY_TIMER	=	NET_TX_RAWLEN
+LOBBY_CLOCK	=	NET_SEQ
+LOBBY_NAME_LEN =	NET_RX_STATE
+LOBBY_NUM	=	NET_ACTIVE
+LOBBY_REQ_LO	=	NET_INITST
+LOBBY_REQ_HI	=	NET_SAVPTR
+LOBBY_PORT_LO	=	NET_RX_TMP0	;four packed validated room ports
+LOBBY_PORT_HI	=	NET_RX_TMP0+4	;four high bytes, indexed 0..3
+
+; Keep the editor controller out of the legacy core so its fixed $100 margin
+; below display RAM remains intact as AppKey save feedback is added.
+UI_HOST_SETUP
+	JSR	HOST_CLR
+	JSR	HOST_MSGDRAW
+	JSR	NAME_FIELD
+	JSR	TXT_DRAW
+	JSR	PORT_FIELD
+	JSR	TXT_DRAW
+	JSR	HOST_FIELD
+	JSR	TXT_INPUT
+	BCS	UHS_CANCEL
+UHS_PORT
+	JSR	PORT_FIELD
+	JSR	TXT_INPUT
+	BCS	UHS_CANCEL
+	JSR	PORT_PARSE
+	BCC	UHS_PORT_OK
+	LDA	# <MSG_BADPORT
+	STA	HOST_MSG
+	LDA	# >MSG_BADPORT
+	STA	HOST_MSG+1
+	JSR	HOST_MSGDRAW
+	JMP	UHS_PORT
+UHS_PORT_OK
+	LDA	#0
+	STA	HOST_MSG
+	STA	HOST_MSG+1
+	JSR	HOST_MSGDRAW
+	JSR	NAME_FIELD
+	JSR	TXT_INPUT
+	BCS	UHS_CANCEL
+	JSR	APPKEY_USERNAME_WRITE
+	BCC	UHS_SAVED
+	LDA	# <MSG_NOTSAVED
+	STA	HOST_MSG
+	LDA	# >MSG_NOTSAVED
+	STA	HOST_MSG+1
+UHS_SAVED
+	CLC
+	RTS
+UHS_CANCEL
+	SEC
+	RTS
+
+APPKEY_BOOT_LOAD
+	LDA	#0
+	STA	APPKEY_AUTOJOIN
+	STA	APPKEY_NAME_OK
+	STA	APPKEY_URL_OK
+	LDA	#MAZEWAR_APPKEY_USER_KEY
+	JSR	APPKEY_READ
+	BCS	AKBL_LOBBY_NAME
+	JSR	APPKEY_NAME_APPLY
+	LDA	APPKEY_NAME_OK
+	BNE	AKBL_ROOM
+AKBL_LOBBY_NAME
+	LDA	#LOBBY_APPKEY_USER_KEY
+	JSR	APPKEY_LOBBY_READ
+	BCS	AKBL_ROOM
+	JSR	APPKEY_NAME_APPLY
+AKBL_ROOM
+	; A Lobby launch handoff is one-shot and takes precedence over Maze War's
+	; remembered direct room. Once it has supplied a valid room, clear it in
+	; the Lobby namespace so a later ordinary cold boot stays at the menu.
+	LDA	#CFG_MAZEWAR_APP_ID
+	JSR	APPKEY_LOBBY_READ
+	BCS	AKBL_SAVED_ROOM
+	JSR	APPKEY_URL_APPLY
+	BCS	AKBL_SAVED_ROOM
+	JSR	APPKEY_LOBBY_HANDOFF_CLEAR
+	JMP	AKBL_DONE
+AKBL_SAVED_ROOM
+	LDA	#MAZEWAR_APPKEY_ROOM_KEY
+	JSR	APPKEY_READ
+	BCS	AKBL_BADURL
+	JSR	APPKEY_URL_APPLY
+	BCC	AKBL_DONE
+AKBL_BADURL
+	JSR	UI_CONNECTION_DEFAULTS
+AKBL_DONE
+	LDA	APPKEY_NAME_OK
+	BEQ	AKBL_X
+	LDA	APPKEY_URL_OK
+	BEQ	AKBL_X
+	LDA	#1
+	STA	APPKEY_AUTOJOIN
+AKBL_X	RTS
+
+; Read key A in pinned default/read mode. Carry clear returns a validated
+; 0..64 count in APPKEY_COUNT and an in-bounds terminator after the payload.
+APPKEY_READ
+	PHA			;preserve caller's requested AppKey ID
+	LDA	#0
+	STA	APPKEY_SCOPE
+	PLA
+	JMP	APPKEY_READ_OPEN
+
+; The shared Lobby namespace is intentionally available only through this
+; read wrapper. All saving paths select the Maze War scope explicitly.
+APPKEY_LOBBY_READ
+	PHA			;preserve caller's requested Lobby AppKey ID
+	LDA	#1
+	STA	APPKEY_SCOPE
+	PLA
+APPKEY_READ_OPEN
+	LDX	#0
+	JSR	APPKEY_OPEN
+	BCS	AKR_FAIL
+	LDA	#APPKEY_READ_CMD
+	STA	DCOMND
+	LDA	#$40
+	STA	DSTATS
+	LDA	# <APPKEY_BUF
+	STA	DBUFLO
+	LDA	# >APPKEY_BUF
+	STA	DBUFHI
+	LDA	#1
+	STA	DTIMLO
+	LDA	#APPKEY_READ_SIZE
+	STA	DBYTLO
+	LDA	#0
+	STA	DBYTHI
+	STA	DAUX1
+	STA	DAUX2
+	JSR	SIOV
+	LDA	DSTATS
+	CMP	#1
+	BNE	AKR_FAIL
+	LDA	APPKEY_BUF+1
+	BNE	AKR_FAIL	;default mode cannot return a 256-byte count
+	LDA	APPKEY_BUF
+	CMP	#APPKEY_MAX+1
+	BCS	AKR_FAIL
+	STA	APPKEY_COUNT
+	TAY
+	LDA	#0
+	STA	APPKEY_BUF+2,Y
+	JSR	APPKEY_CLOSE
+	CLC
+	RTS
+AKR_FAIL
+	JSR	APPKEY_CLOSE
+	SEC
+	RTS
+
+; A=key, X=0 read / 1 write. The six-byte metadata layout is the official
+; creator-lo, creator-hi, app, key, mode, reserved AppKey OPEN contract.
+APPKEY_OPEN
+	STA	APPKEY_KEY
+	LDA	APPKEY_SCOPE
+	BNE	AKO_LOBBY
+	LDA	# <CFG_MAZEWAR_CREATOR_ID
+	JMP	AKO_CREATOR_LO
+AKO_LOBBY
+	LDA	# <LOBBY_APPKEY_CREATOR
+AKO_CREATOR_LO
+	STA	APPKEY_BUF
+	LDA	APPKEY_SCOPE
+	BNE	AKO_LOBBY_HI
+	LDA	# >CFG_MAZEWAR_CREATOR_ID
+	JMP	AKO_CREATOR_HI
+AKO_LOBBY_HI
+	LDA	# >LOBBY_APPKEY_CREATOR
+AKO_CREATOR_HI
+	STA	APPKEY_BUF+1
+	LDA	APPKEY_SCOPE
+	BNE	AKO_LOBBY_APP
+	LDA	#CFG_MAZEWAR_APP_ID
+	JMP	AKO_APP
+AKO_LOBBY_APP
+	LDA	#LOBBY_APPKEY_APP
+AKO_APP
+	STA	APPKEY_BUF+2
+	LDA	APPKEY_KEY
+	STA	APPKEY_BUF+3
+	TXA
+	STA	APPKEY_BUF+4
+	LDA	#0
+	STA	APPKEY_BUF+5
+	LDA	#APPKEY_DEVICE
+	STA	DDEVIC
+	LDA	#APPKEY_UNIT
+	STA	DUNIT
+	LDA	#APPKEY_OPEN_CMD
+	STA	DCOMND
+	LDA	#$80
+	STA	DSTATS
+	LDA	# <APPKEY_BUF
+	STA	DBUFLO
+	LDA	# >APPKEY_BUF
+	STA	DBUFHI
+	LDA	#1
+	STA	DTIMLO
+	LDA	#6
+	STA	DBYTLO
+	LDA	#0
+	STA	DBYTHI
+	STA	DAUX1
+	STA	DAUX2
+	JSR	SIOV
+	LDA	DSTATS
+	CMP	#1
+	BEQ	AKO_OK
+	SEC
+	RTS
+AKO_OK	CLC
+	RTS
+
+; CLOSE is issued on every read/write exit, including an OPEN error. Its
+; status is deliberately not allowed to replace the primary operation result.
+APPKEY_CLOSE
+	LDA	#APPKEY_DEVICE
+	STA	DDEVIC
+	LDA	#APPKEY_UNIT
+	STA	DUNIT
+	LDA	#APPKEY_CLOSE_CMD
+	STA	DCOMND
+	LDA	#0
+	STA	DSTATS
+	STA	DBYTLO
+	STA	DBYTHI
+	STA	DAUX1
+	STA	DAUX2
+	LDA	#1
+	STA	DTIMLO
+	JSR	SIOV
+	RTS
+
+; Apply the server's public-name sanitizer: lower case folds to upper case;
+; letters, digits, spaces, '-' and '.' survive; everything else is skipped.
+; More than eight surviving display characters is invalid rather than silently
+; changing the public identity stored by Lobby.
+APPKEY_NAME_APPLY
+	LDX	#0
+	LDY	#0
+AKN_LOOP
+	CPX	APPKEY_COUNT
+	BCS	AKN_DONE
+	LDA	APPKEY_BUF+2,X
+	CMP	#'a'
+	BCC	AKN_VALID
+	CMP	#'z'+1
+	BCS	AKN_VALID
+	SEC
+	SBC	#$20
+AKN_VALID
+	CMP	#'A'
+	BCC	AKN_DIGIT
+	CMP	#'Z'+1
+	BCC	AKN_KEEP
+AKN_DIGIT
+	CMP	#'0'
+	BCC	AKN_OTHER
+	CMP	#'9'+1
+	BCC	AKN_KEEP
+AKN_OTHER
+	CMP	#' '
+	BEQ	AKN_KEEP
+	CMP	#'-'
+	BEQ	AKN_KEEP
+	CMP	#'.'
+	BNE	AKN_NEXT
+AKN_KEEP
+	CPY	#NAME_LEN
+	BCS	AKN_BAD
+	STA	NAMEBUF,Y
+	INY
+AKN_NEXT
+	INX
+	BNE	AKN_LOOP
+AKN_DONE
+	CPY	#0
+	BEQ	AKN_BAD
+	LDA	#0
+	STA	NAMEBUF,Y
+	LDA	#1
+	STA	APPKEY_NAME_OK
+	CLC
+	RTS
+AKN_BAD
+	LDA	#0
+	STA	NAMEBUF
+	STA	APPKEY_NAME_OK
+	SEC
+	RTS
+
+; Validate the exact selected-room grammar tcp://CFG_HOST:decimal-port. The
+; parser consumes the firmware count rather than trusting NUL, rejects every
+; suffix, lets PORT_PARSE do overflow-safe decimal conversion, and admits only
+; the configured contiguous room range. Invalid input restores build defaults.
+APPKEY_URL_APPLY
+	LDA	#0
+	STA	APPKEY_URL_OK
+	LDA	APPKEY_COUNT
+	CMP	#8+CFG_HOST_LEN
+	BCS	AKU_LENOK
+	JMP	AKU_BAD
+AKU_LENOK
+	LDX	#0
+AKU_PREFIX
+	LDA	APPKEY_BUF+2,X
+	CMP	APPKEY_TCP_PREFIX,X
+	BNE	AKU_BAD
+	INX
+	CPX	#6
+	BCC	AKU_PREFIX
+	LDY	#0
+AKU_HOST
+	CPY	#CFG_HOST_LEN
+	BCS	AKU_COLON
+	LDA	APPKEY_BUF+2,X
+	CMP	CFG_HOST,Y
+	BNE	AKU_BAD
+	INX
+	INY
+	BNE	AKU_HOST
+AKU_COLON
+	LDA	APPKEY_BUF+2,X
+	CMP	#':'
+	BNE	AKU_BAD
+	INX
+	LDY	#0
+AKU_PORT
+	CPX	APPKEY_COUNT
+	BCS	AKU_PORT_DONE
+	LDA	APPKEY_BUF+2,X
+	CMP	#'0'
+	BCC	AKU_BAD
+	CMP	#'9'+1
+	BCS	AKU_BAD
+	CPY	#PORT_MAX
+	BCS	AKU_BAD
+	STA	PORTBUF,Y
+	INX
+	INY
+	BNE	AKU_PORT
+AKU_PORT_DONE
+	CPY	#0
+	BEQ	AKU_BAD
+	LDA	#0
+	STA	PORTBUF,Y
+	JSR	PORT_PARSE
+	BCS	AKU_BAD
+	LDA	PORTVAL_HI
+	CMP	# >CFG_ROOM_PORT_BASE
+	BCC	AKU_BAD
+	BNE	AKU_MAX
+	LDA	PORTVAL_LO
+	CMP	# <CFG_ROOM_PORT_BASE
+	BCC	AKU_BAD
+AKU_MAX
+	LDA	PORTVAL_HI
+	CMP	# >[CFG_ROOM_PORT_BASE+CFG_ROOM_COUNT-1]
+	BCC	AKU_GOOD
+	BNE	AKU_BAD
+	LDA	PORTVAL_LO
+	CMP	# <[CFG_ROOM_PORT_BASE+CFG_ROOM_COUNT-1]
+	BCC	AKU_GOOD
+	BNE	AKU_BAD
+AKU_GOOD
+	LDA	#1
+	STA	APPKEY_URL_OK
+	CLC
+	RTS
+AKU_BAD
+	JSR	UI_CONNECTION_DEFAULTS
+	SEC
+	RTS
+
+; Save the edited public username without ever exposing adjacent state: the
+; firmware write command always transfers 64 bytes, while DAUX is the length.
+; Blank manual names remain session-local and do not replace the Lobby key.
+APPKEY_USERNAME_WRITE
+	LDA	#0
+	STA	APPKEY_SCOPE
+	LDY	#0
+AKW_LEN
+	LDA	NAMEBUF,Y
+	BEQ	AKW_LEN_DONE
+	INY
+	CPY	#NAME_LEN
+	BCC	AKW_LEN
+AKW_LEN_DONE
+	CPY	#0
+	BEQ	AKW_OK
+	STY	APPKEY_COUNT
+	LDA	#MAZEWAR_APPKEY_USER_KEY
+	LDX	#1
+	JSR	APPKEY_OPEN
+	BCS	AKW_FAIL
+	LDX	#0
+	LDA	#0
+AKW_ZERO
+	STA	APPKEY_BUF,X
+	INX
+	CPX	#APPKEY_MAX
+	BCC	AKW_ZERO
+	LDX	#0
+AKW_COPY
+	CPX	APPKEY_COUNT
+	BCS	AKW_SEND
+	LDA	NAMEBUF,X
+	STA	APPKEY_BUF,X
+	INX
+	BNE	AKW_COPY
+AKW_SEND
+	LDA	#APPKEY_WRITE_CMD
+	STA	DCOMND
+	LDA	#$80
+	STA	DSTATS
+	LDA	# <APPKEY_BUF
+	STA	DBUFLO
+	LDA	# >APPKEY_BUF
+	STA	DBUFHI
+	LDA	#2
+	STA	DTIMLO
+	LDA	#APPKEY_MAX
+	STA	DBYTLO
+	LDA	#0
+	STA	DBYTHI
+	LDA	APPKEY_COUNT
+	STA	DAUX1
+	LDA	#0
+	STA	DAUX2
+	JSR	SIOV
+	LDA	DSTATS
+	CMP	#1
+	BNE	AKW_FAIL
+	JSR	APPKEY_CLOSE
+AKW_OK	CLC
+	RTS
+AKW_FAIL
+	JSR	APPKEY_CLOSE
+	SEC
+	RTS
+
+APPKEY_TCP_PREFIX	.BYTE	$74,$63,$70,$3A,$2F,$2F	;ASCII, not MADS screen text
+MSG_NOTSAVED	.BYTE	"NAME OK - APPKEY WAS NOT SAVED",$FF
+
+; ---------------------------------------------------------------------------
+; Bounded QA Lobby browser. This path owns HOSTSCR and the title-only aliases
+; above. NetStream is stopped, so ordinary FujiNet network-device SIO is safe.
+; The response is consumed as a three-byte header followed by one fixed 189
+; byte format-1 record at a time; no full response is retained in RAM.
+; ---------------------------------------------------------------------------
+LOBBY_MENU
+	LDA	#0
+	STA	LOBBY_PAGE
+LBM_REFRESH
+	JSR	LOBBY_FETCH
+LBM_WAIT
+	LDA	CONSOL
+	AND	#$04
+	BNE	LBM_KEYS
+LBM_OPTREL
+	LDA	CONSOL
+	AND	#$04
+	BEQ	LBM_OPTREL
+	JSR	HOST_SETUP	;OPTION remains the explicit Direct Connect path
+	BCS	LBM_REFRESH
+	RTS
+LBM_KEYS
+	LDA	KEYIN
+	CMP	#$FF
+	BEQ	LBM_STICK
+	TAY
+	LDA	#$FF
+	STA	KEYIN
+	LDA	(KEYCODES),Y
+	CMP	#$9B		;RETURN joins the highlighted room
+	BEQ	LBM_JOIN
+	CMP	#MENU_KEY_UP
+	BNE	LBM_KEY_NOTUP
+	JMP	LBM_UP
+LBM_KEY_NOTUP
+	CMP	#MENU_KEY_DOWN
+	BNE	LBM_KEY_NOTDOWN
+	JMP	LBM_DOWN
+LBM_KEY_NOTDOWN
+	CMP	#MENU_KEY_LEFT
+	BNE	LBM_KEY_NOTLEFT
+	JMP	LBM_LEFT
+LBM_KEY_NOTLEFT
+	CMP	#MENU_KEY_RIGHT
+	BNE	LBM_KEY_NOTRIGHT
+	JMP	LBM_RIGHT
+LBM_KEY_NOTRIGHT
+	CMP	#'R'
+	BEQ	LBM_REFRESH
+	CMP	#'r'
+	BEQ	LBM_REFRESH
+LBM_STICK
+	LDA	STICK0
+	AND	#$0F
+	CMP	#$0E		;up
+	BEQ	LBM_UP
+	CMP	#$0D		;down
+	BEQ	LBM_DOWN
+	CMP	#$0B		;left: previous bounded page
+	BEQ	LBM_LEFT
+	CMP	#$07		;right: next page only when a full page arrived
+	BEQ	LBM_RIGHT
+	LDA	STRIG0
+	AND	#1
+	BNE	LBM_WAIT
+LBM_JOIN
+	LDA	LOBBY_COUNT
+	BEQ	LBM_RELEASE
+	JSR	LOBBY_SELECT_APPLY
+	BCS	LBM_RELEASE
+	; Do not carry the menu-select trigger into gameplay as an immediate shot.
+LBM_FIRE_RELEASE
+	LDA	STRIG0
+	AND	#1
+	BEQ	LBM_FIRE_RELEASE
+	RTS
+LBM_UP
+	LDA	LOBBY_COUNT
+	BEQ	LBM_RELEASE
+	JSR	LOBBY_SELECT_UNDRAW
+	LDA	LOBBY_SELECT
+	BEQ	LBM_UP_WRAP
+	DEC	LOBBY_SELECT
+	BNE	LBM_SEL_DRAW
+	BEQ	LBM_SEL_DRAW
+LBM_UP_WRAP
+	LDA	LOBBY_COUNT
+	SEC
+	SBC	#1
+	STA	LOBBY_SELECT
+	JMP	LBM_SEL_DRAW
+LBM_DOWN
+	LDA	LOBBY_COUNT
+	BEQ	LBM_RELEASE
+	JSR	LOBBY_SELECT_UNDRAW
+	INC	LOBBY_SELECT
+	LDA	LOBBY_SELECT
+	CMP	LOBBY_COUNT
+	BCC	LBM_SEL_DRAW
+	LDA	#0
+	STA	LOBBY_SELECT
+LBM_SEL_DRAW
+	JSR	LOBBY_SELECT_DRAW
+LBM_RELEASE
+	LDA	STICK0
+	AND	#$0F
+	CMP	#$0F
+	BNE	LBM_RELEASE
+	LDA	STRIG0
+	AND	#1
+	BEQ	LBM_RELEASE
+	JMP	LBM_WAIT
+LBM_LEFT
+	LDA	LOBBY_PAGE
+	BEQ	LBM_RELEASE
+	DEC	LOBBY_PAGE
+	JMP	LBM_PAGE_RELEASE
+LBM_RIGHT
+	LDA	LOBBY_HAVE_NEXT
+	BEQ	LBM_RELEASE
+	LDA	LOBBY_PAGE
+	CMP	#LOBBY_MAX_PAGES-1
+	BCS	LBM_RELEASE
+	INC	LOBBY_PAGE
+LBM_PAGE_RELEASE
+	LDA	STICK0
+	AND	#$0F
+	CMP	#$0F
+	BNE	LBM_PAGE_RELEASE
+	JMP	LBM_REFRESH
+
+LOBBY_FETCH
+	LDA	#0
+	STA	LOBBY_COUNT
+	STA	LOBBY_RAW_COUNT
+	STA	LOBBY_SELECT
+	STA	LOBBY_HAVE_NEXT
+	STA	LOBBY_OPEN
+	JSR	LOBBY_DRAW_WAIT
+	JSR	LOBBY_NET_OPEN
+	BCC	LBF_OPENED
+	JMP	LBF_ERROR
+LBF_OPENED
+	LDA	#1
+	STA	LOBBY_OPEN
+	LDA	#255		;one bounded ~4.25 second response budget
+	STA	LOBBY_TIMER
+	LDA	RTCLOK
+	STA	LOBBY_CLOCK
+	LDA	#3
+	LDX	#0
+	JSR	LOBBY_NET_READ
+	BCS	LBF_ERROR_CLOSE
+	LDA	LOBBY_BUF
+	CMP	#'{'
+	BEQ	LBF_HTTP_EMPTY	;Lobby returns JSON for its no-results 404
+	CMP	#LOBBY_PAGE_SIZE+1
+	BCS	LBF_ERROR_CLOSE
+	STA	LOBBY_RAW_COUNT
+	LDA	LOBBY_BUF+1
+	ORA	LOBBY_BUF+2
+	BNE	LBF_ERROR_CLOSE	;format-1 reserved header must remain zero
+	LDX	#0
+LBF_RECORD
+	CPX	LOBBY_RAW_COUNT
+	BCS	LBF_RECORDS_DONE
+	TXA
+	PHA
+	LDA	# <LOBBY_RECORD_SIZE
+	LDX	# >LOBBY_RECORD_SIZE
+	JSR	LOBBY_NET_READ
+	PLA
+	TAX
+	BCS	LBF_ERROR_CLOSE
+	TXA
+	PHA
+	JSR	LOBBY_RECORD_VALIDATE
+	BCS	LBF_SKIP
+	JSR	LOBBY_RECORD_DRAW
+	INC	LOBBY_COUNT
+LBF_SKIP
+	PLA
+	TAX
+	INX
+	JMP	LBF_RECORD
+LBF_RECORDS_DONE
+	LDA	LOBBY_RAW_COUNT
+	CMP	#LOBBY_PAGE_SIZE
+	BNE	LBF_NO_NEXT
+	LDA	LOBBY_PAGE
+	CMP	#LOBBY_MAX_PAGES-1
+	BCS	LBF_NO_NEXT
+	LDA	#1
+	STA	LOBBY_HAVE_NEXT
+LBF_NO_NEXT
+	JSR	LOBBY_NET_STATUS
+	BCS	LBF_ERROR_CLOSE
+	LDA	DVSTAT
+	ORA	DVSTAT+1
+	BNE	LBF_ERROR_CLOSE	;reject bytes beyond header + declared records
+	JSR	LOBBY_NET_CLOSE
+	JSR	LOBBY_DRAW_DONE
+	RTS
+LBF_HTTP_EMPTY
+	JSR	LOBBY_NET_CLOSE
+	JSR	LOBBY_DRAW_DONE
+	RTS
+LBF_ERROR_CLOSE
+	JSR	LOBBY_NET_CLOSE
+LBF_ERROR
+	LDA	#0
+	STA	LOBBY_COUNT
+	STA	LOBBY_HAVE_NEXT
+	JSR	LOBBY_DRAW_ERROR
+	RTS
+
+; Build N:<base>/view?bin=1&platform=atari&appkey=N&pagesize=4&page=N in
+; LOBBY_BUF. OPEN always transfers a zero-filled 256-byte devicespec.
+LOBBY_NET_OPEN
+	LDA	#0
+	TAX
+LNO_ZERO
+	STA	LOBBY_BUF,X
+	INX
+	BNE	LNO_ZERO
+	LDX	#0
+	LDA	#'N'
+	STA	LOBBY_BUF,X
+	INX
+	LDA	#':'
+	STA	LOBBY_BUF,X
+	INX
+	LDY	#0
+LNO_BASE
+	LDA	CFG_LOBBY_BASE,Y
+	BEQ	LNO_PATH
+	STA	LOBBY_BUF,X
+	INX
+	INY
+	CPY	#CFG_LOBBY_BASE_LEN
+	BCC	LNO_BASE
+LNO_PATH
+	DEX
+	LDA	LOBBY_BUF,X
+	INX
+	CMP	#'/'
+	BEQ	LNO_PATH_COPY
+	LDA	#'/'
+	STA	LOBBY_BUF,X
+	INX
+LNO_PATH_COPY
+	LDY	#0
+LNO_SUFFIX
+	LDA	LOBBY_QUERY,Y
+	BEQ	LNO_APPKEY
+	STA	LOBBY_BUF,X
+	INX
+	INY
+	BNE	LNO_SUFFIX
+LNO_APPKEY
+	LDA	#CFG_MAZEWAR_APP_ID
+	JSR	LOBBY_APPEND_DECIMAL
+	LDY	#0
+LNO_PAGE_Q
+	LDA	LOBBY_PAGE_QUERY,Y
+	BEQ	LNO_PAGE_NUM
+	STA	LOBBY_BUF,X
+	INX
+	INY
+	BNE	LNO_PAGE_Q
+LNO_PAGE_NUM
+	LDA	LOBBY_PAGE
+	CLC
+	ADC	#'0'
+	STA	LOBBY_BUF,X
+	LDA	#LOBBY_DEVICE
+	STA	DDEVIC
+	LDA	#LOBBY_UNIT
+	STA	DUNIT
+	LDA	#LOBBY_OPEN_CMD
+	STA	DCOMND
+	LDA	#$80
+	STA	DSTATS
+	LDA	# <LOBBY_BUF
+	STA	DBUFLO
+	LDA	# >LOBBY_BUF
+	STA	DBUFHI
+	LDA	#2
+	STA	DTIMLO
+	LDA	#0
+	STA	DBYTLO
+	LDA	#1
+	STA	DBYTHI
+	LDA	#4		;HTTP GET, no translation
+	STA	DAUX1
+	LDA	#0
+	STA	DAUX2
+	JSR	SIOV
+	LDA	DSTATS
+	CMP	#1
+	BEQ	LNO_OK
+	SEC
+	RTS
+LNO_OK	CLC
+	RTS
+
+; Append unsigned A as decimal to LOBBY_BUF,X. Values are bounded to 1..255.
+LOBBY_APPEND_DECIMAL
+	STA	LOBBY_NUM
+	LDY	#0
+LAD_HUNDRED
+	LDA	LOBBY_NUM
+	CMP	#100
+	BCC	LAD_HDONE
+	SEC
+	SBC	#100
+	STA	LOBBY_NUM
+	INY
+	BNE	LAD_HUNDRED
+LAD_HDONE
+	CPY	#0
+	BEQ	LAD_TENS
+	TYA
+	CLC
+	ADC	#'0'
+	STA	LOBBY_BUF,X
+	INX
+LAD_TENS
+	LDY	#0
+LAD_TEN_LOOP
+	LDA	LOBBY_NUM
+	CMP	#10
+	BCC	LAD_TDONE
+	SEC
+	SBC	#10
+	STA	LOBBY_NUM
+	INY
+	BNE	LAD_TEN_LOOP
+LAD_TDONE
+	CPY	#0
+	BNE	LAD_TWRITE
+	CPX	#0		;hundreds digit is never at index zero, test prior byte
+	BEQ	LAD_ONES
+	LDA	LOBBY_BUF-1,X
+	CMP	#'0'
+	BCC	LAD_ONES
+	CMP	#'9'+1
+	BCS	LAD_ONES
+LAD_TWRITE
+	TYA
+	CLC
+	ADC	#'0'
+	STA	LOBBY_BUF,X
+	INX
+LAD_ONES
+	LDA	LOBBY_NUM
+	CLC
+	ADC	#'0'
+	STA	LOBBY_BUF,X
+	INX
+	RTS
+
+; A/X=requested little-endian length. Wait only within LOBBY_TIMER, then read
+; exactly that many bytes into the reusable record buffer.
+LOBBY_NET_READ
+	STA	LOBBY_REQ_LO
+	STX	LOBBY_REQ_HI
+LNR_WAIT
+	JSR	LOBBY_NET_STATUS
+	BCS	LNR_BAD
+	LDA	DVSTAT+1
+	CMP	LOBBY_REQ_HI
+	BCC	LNR_NOT_READY
+	BNE	LNR_READY
+	LDA	DVSTAT
+	CMP	LOBBY_REQ_LO
+	BCS	LNR_READY
+LNR_NOT_READY
+	LDA	DVSTAT+2
+	BEQ	LNR_BAD		;closed before a complete fixed-size read
+	LDA	RTCLOK
+	CMP	LOBBY_CLOCK
+	BEQ	LNR_WAIT
+	STA	LOBBY_CLOCK
+	DEC	LOBBY_TIMER
+	BNE	LNR_WAIT
+LNR_BAD	SEC
+	RTS
+LNR_READY
+	LDA	#LOBBY_DEVICE
+	STA	DDEVIC
+	LDA	#LOBBY_UNIT
+	STA	DUNIT
+	LDA	#LOBBY_READ_CMD
+	STA	DCOMND
+	LDA	#$40
+	STA	DSTATS
+	LDA	# <LOBBY_BUF
+	STA	DBUFLO
+	LDA	# >LOBBY_BUF
+	STA	DBUFHI
+	LDA	#2
+	STA	DTIMLO
+	LDA	LOBBY_REQ_LO
+	STA	DBYTLO
+	STA	DAUX1
+	LDA	LOBBY_REQ_HI
+	STA	DBYTHI
+	STA	DAUX2
+	JSR	SIOV
+	LDA	DSTATS
+	CMP	#1
+	BEQ	LNR_OK
+	SEC
+	RTS
+LNR_OK	CLC
+	RTS
+
+LOBBY_NET_STATUS
+	LDA	#LOBBY_DEVICE
+	STA	DDEVIC
+	LDA	#LOBBY_UNIT
+	STA	DUNIT
+	LDA	#LOBBY_STATUS_CMD
+	STA	DCOMND
+	LDA	#$40
+	STA	DSTATS
+	LDA	# <DVSTAT
+	STA	DBUFLO
+	LDA	# >DVSTAT
+	STA	DBUFHI
+	LDA	#1
+	STA	DTIMLO
+	LDA	#4
+	STA	DBYTLO
+	LDA	#0
+	STA	DBYTHI
+	STA	DAUX1
+	STA	DAUX2
+	JSR	SIOV
+	LDA	DSTATS
+	CMP	#1
+	BEQ	LNS_OK
+	SEC
+	RTS
+LNS_OK	CLC
+	RTS
+
+LOBBY_NET_CLOSE
+	LDA	LOBBY_OPEN
+	BEQ	LNC_X
+	LDA	#0
+	STA	LOBBY_OPEN
+	LDA	#LOBBY_DEVICE
+	STA	DDEVIC
+	LDA	#LOBBY_UNIT
+	STA	DUNIT
+	LDA	#LOBBY_CLOSE_CMD
+	STA	DCOMND
+	LDA	#0
+	STA	DSTATS
+	STA	DBYTLO
+	STA	DBYTHI
+	STA	DAUX1
+	STA	DAUX2
+	LDA	#1
+	STA	DTIMLO
+	JSR	SIOV
+LNC_X	RTS
+
+; Validate fixed format-1 offsets before a room can be displayed or saved.
+LOBBY_RECORD_VALIDATE
+	LDA	LOBBY_BUF
+	CMP	#CFG_MAZEWAR_APP_ID
+	BNE	LRV_BAD_EARLY
+	LDX	#0
+LRV_GAME
+	LDA	LOBBY_BUF+LOBBY_GAME_OFF,X
+	CMP	LOBBY_GAME_NAME,X
+	BNE	LRV_BAD_EARLY
+	INX
+	CPX	#9		;"Maze War" plus NUL
+	BCC	LRV_GAME
+LRV_GAME_PAD
+	LDA	LOBBY_BUF+LOBBY_GAME_OFF,X
+	BNE	LRV_BAD_EARLY
+	INX
+	CPX	#17
+	BCC	LRV_GAME_PAD
+	LDX	#0
+LRV_SERVER
+	LDA	LOBBY_BUF+LOBBY_SERVER_OFF,X
+	BEQ	LRV_SERVER_END
+	CMP	#$20
+	BCC	LRV_BAD_EARLY
+	CMP	#$7F
+	BCS	LRV_BAD_EARLY
+	INX
+	CPX	#33
+	BCC	LRV_SERVER
+	BCS	LRV_BAD_EARLY
+LRV_SERVER_END
+	CPX	#2
+	BCC	LRV_BAD_EARLY
+	STX	LOBBY_NAME_LEN
+LRV_SERVER_PAD
+	INX
+	CPX	#33
+	BCS	LRV_URL
+	LDA	LOBBY_BUF+LOBBY_SERVER_OFF,X
+	BEQ	LRV_SERVER_PAD
+	BNE	LRV_BAD_EARLY
+LRV_BAD_EARLY
+	JMP	LRV_BAD
+LRV_URL
+	LDX	#0
+LRV_URL_SCAN
+	LDA	LOBBY_BUF+LOBBY_URL_OFF,X
+	BEQ	LRV_URL_END
+	CMP	#$20
+	BCC	LRV_BAD_EARLY
+	CMP	#$7F
+	BCS	LRV_BAD_EARLY
+	STA	APPKEY_BUF+2,X
+	INX
+	CPX	#65
+	BCC	LRV_URL_SCAN
+	BCS	LRV_BAD_EARLY
+LRV_URL_END
+	CPX	#1
+	BCC	LRV_BAD
+	STX	APPKEY_COUNT
+	LDA	#0
+	STA	APPKEY_BUF+2,X
+LRV_URL_PAD
+	INX
+	CPX	#65
+	BCS	LRV_URL_CHECK
+	LDA	LOBBY_BUF+LOBBY_URL_OFF,X
+	BEQ	LRV_URL_PAD
+	BNE	LRV_BAD
+LRV_URL_CHECK
+	JSR	APPKEY_URL_APPLY
+	BCS	LRV_BAD
+	LDX	#0
+LRV_CLIENT
+	LDA	LOBBY_BUF+LOBBY_CLIENT_OFF,X
+	BEQ	LRV_CLIENT_END
+	CMP	#$20
+	BCC	LRV_BAD
+	CMP	#$7F
+	BCS	LRV_BAD
+	INX
+	CPX	#65
+	BCC	LRV_CLIENT
+	BCS	LRV_BAD
+LRV_CLIENT_END
+	CPX	#1
+	BCC	LRV_BAD
+	STX	LOBBY_NUM
+LRV_CLIENT_PAD
+	INX
+	CPX	#65
+	BCS	LRV_REGION
+	LDA	LOBBY_BUF+LOBBY_CLIENT_OFF,X
+	BEQ	LRV_CLIENT_PAD
+	BNE	LRV_BAD
+LRV_REGION
+	LDA	LOBBY_BUF+LOBBY_REGION_OFF+2
+	BNE	LRV_BAD
+	LDA	LOBBY_BUF+LOBBY_REGION_OFF
+	CMP	#$20
+	BCC	LRV_BAD
+	CMP	#$7F
+	BCS	LRV_BAD
+	LDA	LOBBY_BUF+LOBBY_REGION_OFF+1
+	CMP	#$20
+	BCC	LRV_BAD
+	CMP	#$7F
+	BCS	LRV_BAD
+	LDA	LOBBY_BUF+LOBBY_ONLINE_OFF
+	CMP	#1
+	BNE	LRV_BAD
+	LDA	LOBBY_BUF+LOBBY_MAXPLAY_OFF
+	BEQ	LRV_BAD
+	CMP	#10		;menu renders one decimal occupancy digit
+	BCS	LRV_BAD
+	CMP	LOBBY_BUF+LOBBY_PLAYERS_OFF
+	BCC	LRV_BAD
+	CLC
+	RTS
+LRV_BAD	SEC
+	RTS
+
+LOBBY_RECORD_DRAW
+	LDY	LOBBY_COUNT
+	LDA	PORTVAL_LO
+	STA	LOBBY_PORT_LO,Y
+	LDA	PORTVAL_HI
+	STA	LOBBY_PORT_HI,Y
+	LDA	LB_ROW_LO,Y
+	STA	SCRPTR
+	LDA	LB_ROW_HI,Y
+	STA	SCRPTR+1
+	LDY	#39
+	LDA	#0
+LRD_CLEAR
+	STA	(SCRPTR),Y
+	DEY
+	BPL	LRD_CLEAR
+	LDX	#0
+LRD_NAME
+	CPX	LOBBY_NAME_LEN
+	BCS	LRD_SCORE
+	LDA	LOBBY_BUF+LOBBY_SERVER_OFF,X
+	JSR	HOST_SCR
+	STA	LOBBY_NUM
+	TXA
+	TAY
+	INY
+	LDA	LOBBY_NUM
+	STA	(SCRPTR),Y
+	INX
+	CPX	#32
+	BCC	LRD_NAME
+LRD_SCORE
+	LDA	LOBBY_BUF+LOBBY_PLAYERS_OFF
+	CLC
+	ADC	#'0'
+	JSR	HOST_SCR
+	LDY	#35
+	STA	(SCRPTR),Y
+	LDA	#'/'
+	JSR	HOST_SCR
+	INY
+	STA	(SCRPTR),Y
+	LDA	LOBBY_BUF+LOBBY_MAXPLAY_OFF
+	CLC
+	ADC	#'0'
+	JSR	HOST_SCR
+	INY
+	STA	(SCRPTR),Y
+	RTS
+
+LOBBY_DRAW_WAIT
+	JSR	LOBBY_DRAW_BASE
+	LDA	# <LB_LOADING
+	LDX	# >LB_LOADING
+	JMP	LOBBY_DRAW_STATUS
+LOBBY_DRAW_ERROR
+	JSR	LOBBY_DRAW_BASE
+	LDA	# <LB_ERROR
+	LDX	# >LB_ERROR
+	JMP	LOBBY_DRAW_STATUS
+LOBBY_DRAW_DONE
+	LDA	LOBBY_COUNT
+	BNE	LDD_ROOMS
+	LDA	# <LB_EMPTY
+	LDX	# >LB_EMPTY
+	JMP	LOBBY_DRAW_STATUS
+LDD_ROOMS
+	JSR	LOBBY_SELECT_DRAW
+	LDA	# <LB_READY
+	LDX	# >LB_READY
+LOBBY_DRAW_STATUS
+	STA	HOST_MPTR
+	STX	HOST_MPTR+1
+	LDA	# <[HOSTSCR+120]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+120]
+	STA	SCRPTR+1
+	LDY	#39
+	LDA	#0
+LDS_CLEAR
+	STA	(SCRPTR),Y
+	DEY
+	BPL	LDS_CLEAR
+	JMP	UI_PUT
+
+LOBBY_DRAW_BASE
+	JSR	HOST_CLR
+	LDA	# <TITLE_HEAD
+	STA	HOST_MPTR
+	LDA	# >TITLE_HEAD
+	STA	HOST_MPTR+1
+	LDA	# <HOSTSCR
+	STA	SCRPTR
+	LDA	# >HOSTSCR
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	JSR	NAME_FIELD
+	LDA	# <[HOSTSCR+40]
+	STA	INROW
+	LDA	# >[HOSTSCR+40]
+	STA	INROW+1
+	JSR	TXT_DRAW
+	LDA	# <LB_CONTROLS1
+	STA	HOST_MPTR
+	LDA	# >LB_CONTROLS1
+	STA	HOST_MPTR+1
+	LDA	# <[HOSTSCR+760]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+760]
+	STA	SCRPTR+1
+	JSR	UI_PUT
+	LDA	# <LB_CONTROLS2
+	STA	HOST_MPTR
+	LDA	# >LB_CONTROLS2
+	STA	HOST_MPTR+1
+	LDA	# <[HOSTSCR+800]
+	STA	SCRPTR
+	LDA	# >[HOSTSCR+800]
+	STA	SCRPTR+1
+	JMP	UI_PUT
+
+LOBBY_SELECT_DRAW
+	LDA	#1
+	BNE	LSD_TOGGLE
+LOBBY_SELECT_UNDRAW
+	LDA	#0
+LSD_TOGGLE
+	STA	LOBBY_NUM
+	LDY	LOBBY_SELECT
+	LDA	LB_ROW_LO,Y
+	STA	SCRPTR
+	LDA	LB_ROW_HI,Y
+	STA	SCRPTR+1
+	LDY	#39
+LSD_LOOP
+	LDA	(SCRPTR),Y
+	AND	#$7F
+	LDX	LOBBY_NUM
+	BEQ	LSD_STORE
+	ORA	#$80
+LSD_STORE
+	STA	(SCRPTR),Y
+	DEY
+	BPL	LSD_LOOP
+	RTS
+
+LOBBY_SELECT_APPLY
+	LDY	LOBBY_SELECT
+	LDA	LOBBY_PORT_LO,Y
+	STA	PORTVAL_LO
+	STA	NET_PORT_ARG_X
+	LDA	LOBBY_PORT_HI,Y
+	STA	PORTVAL_HI
+	STA	NET_PORT_ARG_A
+	JSR	UI_CONNECTION_DEFAULTS
+	; UI_CONNECTION_DEFAULTS restored the default port, so restore selection.
+	LDY	LOBBY_SELECT
+	LDA	LOBBY_PORT_LO,Y
+	STA	PORTVAL_LO
+	STA	NET_PORT_ARG_X
+	LDA	LOBBY_PORT_HI,Y
+	STA	PORTVAL_HI
+	STA	NET_PORT_ARG_A
+	JSR	LOBBY_PORT_TO_TEXT
+	JSR	APPKEY_ROOM_WRITE
+	BCC	LSA_OK
+	LDA	# <MSG_ROOM_NOTSAVED
+	LDX	# >MSG_ROOM_NOTSAVED
+	JSR	LOBBY_DRAW_STATUS
+	LDA	#60
+	STA	LOBBY_TIMER
+	LDA	RTCLOK
+	STA	LOBBY_CLOCK
+LSA_WAIT
+	LDA	RTCLOK
+	CMP	LOBBY_CLOCK
+	BEQ	LSA_WAIT
+	STA	LOBBY_CLOCK
+	DEC	LOBBY_TIMER
+	BNE	LSA_WAIT
+LSA_OK	CLC
+	RTS
+
+; Convert the selected 16-bit port to decimal without division. At most five
+; digits are emitted; repeated subtraction is bounded by 6+10+10+10+10.
+LOBBY_PORT_TO_TEXT
+	LDX	#0
+	LDA	#0
+	STA	PORTBUF
+	STA	LOBBY_NUM
+LPT_10000
+	LDA	PORTVAL_HI
+	CMP	# >10000
+	BCC	LPT_1000
+	BNE	LPT_10000_SUB
+	LDA	PORTVAL_LO
+	CMP	# <10000
+	BCC	LPT_1000
+LPT_10000_SUB
+	SEC
+	LDA	PORTVAL_LO
+	SBC	# <10000
+	STA	PORTVAL_LO
+	LDA	PORTVAL_HI
+	SBC	# >10000
+	STA	PORTVAL_HI
+	INC	LOBBY_NUM
+	JMP	LPT_10000
+LPT_1000
+	JSR	LOBBY_PORT_DIGIT_START
+	LDA	# <1000
+	STA	LOBBY_REQ_LO
+	LDA	# >1000
+	STA	LOBBY_REQ_HI
+	JSR	LOBBY_PORT_DIGIT
+	LDA	# <100
+	STA	LOBBY_REQ_LO
+	LDA	# >100
+	STA	LOBBY_REQ_HI
+	JSR	LOBBY_PORT_DIGIT
+	LDA	#10
+	STA	LOBBY_REQ_LO
+	LDA	#0
+	STA	LOBBY_REQ_HI
+	JSR	LOBBY_PORT_DIGIT
+	LDA	PORTVAL_LO
+	CLC
+	ADC	#'0'
+	STA	PORTBUF,X
+	INX
+	LDA	#0
+	STA	PORTBUF,X
+	RTS
+LOBBY_PORT_DIGIT_START
+	LDA	# <10000
+	STA	LOBBY_REQ_LO
+	LDA	# >10000
+	STA	LOBBY_REQ_HI
+	; LOBBY_NUM was accumulated by the first subtraction pass.
+	JMP	LPD_EMIT
+LOBBY_PORT_DIGIT
+	LDA	#0
+	STA	LOBBY_NUM
+LPD_SUB
+	LDA	PORTVAL_HI
+	CMP	LOBBY_REQ_HI
+	BCC	LPD_EMIT
+	BNE	LPD_DO
+	LDA	PORTVAL_LO
+	CMP	LOBBY_REQ_LO
+	BCC	LPD_EMIT
+LPD_DO
+	SEC
+	LDA	PORTVAL_LO
+	SBC	LOBBY_REQ_LO
+	STA	PORTVAL_LO
+	LDA	PORTVAL_HI
+	SBC	LOBBY_REQ_HI
+	STA	PORTVAL_HI
+	INC	LOBBY_NUM
+	JMP	LPD_SUB
+LPD_EMIT
+	LDA	LOBBY_NUM
+	BNE	LPD_WRITE
+	CPX	#0
+	BEQ	LPD_X
+LPD_WRITE
+	CLC
+	ADC	#'0'
+	STA	PORTBUF,X
+	INX
+LPD_X	RTS
+
+; Persist the exact validated selected URL. Failure leaves HOSTBUF/PORTBUF and
+; the current join intact; only the next boot loses this selection.
+APPKEY_ROOM_WRITE
+	LDA	#0
+	STA	APPKEY_SCOPE
+	LDA	#MAZEWAR_APPKEY_ROOM_KEY
+	LDX	#1
+	JSR	APPKEY_OPEN
+	BCS	ARW_FAIL
+	LDX	#0
+	LDA	#0
+ARW_ZERO
+	STA	APPKEY_BUF,X
+	INX
+	CPX	#APPKEY_MAX
+	BCC	ARW_ZERO
+	LDX	#0
+ARW_PREFIX
+	LDA	APPKEY_TCP_PREFIX,X
+	STA	APPKEY_BUF,X
+	INX
+	CPX	#6
+	BCC	ARW_PREFIX
+	LDY	#0
+ARW_HOST
+	LDA	CFG_HOST,Y
+	BEQ	ARW_COLON
+	STA	APPKEY_BUF,X
+	INX
+	INY
+	BNE	ARW_HOST
+ARW_COLON
+	LDA	#':'
+	STA	APPKEY_BUF,X
+	INX
+	LDY	#0
+ARW_PORT
+	LDA	PORTBUF,Y
+	BEQ	ARW_SEND
+	STA	APPKEY_BUF,X
+	INX
+	INY
+	BNE	ARW_PORT
+ARW_SEND
+	STX	APPKEY_COUNT
+	LDA	#APPKEY_WRITE_CMD
+	STA	DCOMND
+	LDA	#$80
+	STA	DSTATS
+	LDA	# <APPKEY_BUF
+	STA	DBUFLO
+	LDA	# >APPKEY_BUF
+	STA	DBUFHI
+	LDA	#2
+	STA	DTIMLO
+	LDA	#APPKEY_MAX
+	STA	DBYTLO
+	LDA	#0
+	STA	DBYTHI
+	LDA	APPKEY_COUNT
+	STA	DAUX1
+	LDA	#0
+	STA	DAUX2
+	JSR	SIOV
+	LDA	DSTATS
+	CMP	#1
+	BNE	ARW_FAIL
+	JSR	APPKEY_CLOSE
+	CLC
+	RTS
+ARW_FAIL
+	JSR	APPKEY_CLOSE
+	SEC
+	RTS
+
+; A voluntary OPTION leave returns to the menu on the next reset instead of
+; autojoining either saved endpoint. Names are deliberately not touched.
+; APPKEY_BUF is safe here because NET_ENDC has stopped NetStream first.
+APPKEY_ROOM_CLEAR
+	LDA	#0
+	STA	APPKEY_SCOPE
+	LDA	#MAZEWAR_APPKEY_ROOM_KEY
+	JSR	APPKEY_CLEAR_KEY
+	LDA	#1
+	STA	APPKEY_SCOPE
+	LDA	#CFG_MAZEWAR_APP_ID
+	JSR	APPKEY_CLEAR_KEY
+	RTS
+
+; The official Lobby puts its selected game's launch URL at a key matching
+; that game's App ID. This is deliberately consumed only after validation,
+; leaving malformed handoffs untouched while preventing a valid launch from
+; autojoining again on a later reset.
+APPKEY_LOBBY_HANDOFF_CLEAR
+	LDA	#1
+	STA	APPKEY_SCOPE
+	LDA	#CFG_MAZEWAR_APP_ID
+	JMP	APPKEY_CLEAR_KEY
+
+; A=key in the selected scope. FujiNet treats DAUX=0 as an empty AppKey
+; value; zeroing the transfer buffer ensures no stale bytes accompany it.
+APPKEY_CLEAR_KEY
+	LDX	#1
+	JSR	APPKEY_OPEN
+	BCS	ACK_X
+	LDX	#0
+	LDA	#0
+ACK_ZERO
+	STA	APPKEY_BUF,X
+	INX
+	CPX	#APPKEY_MAX
+	BCC	ACK_ZERO
+	LDA	#APPKEY_WRITE_CMD
+	STA	DCOMND
+	LDA	#$80
+	STA	DSTATS
+	LDA	# <APPKEY_BUF
+	STA	DBUFLO
+	LDA	# >APPKEY_BUF
+	STA	DBUFHI
+	LDA	#2
+	STA	DTIMLO
+	LDA	#APPKEY_MAX
+	STA	DBYTLO
+	LDA	#0
+	STA	DBYTHI
+	STA	DAUX1
+	STA	DAUX2
+	JSR	SIOV
+ACK_X
+	JSR	APPKEY_CLOSE
+	RTS
+
+LB_ROW_LO	.BYTE	<[HOSTSCR+200],<[HOSTSCR+240],<[HOSTSCR+280],<[HOSTSCR+320]
+LB_ROW_HI	.BYTE	>[HOSTSCR+200],>[HOSTSCR+240],>[HOSTSCR+280],>[HOSTSCR+320]
+LOBBY_GAME_NAME .BYTE	$4D,$61,$7A,$65,$20,$57,$61,$72,$00
+; HTTP devicespec components are raw ASCII. Quoted MADS strings elsewhere in
+; this source are screen codes and therefore must not be used here.
+LOBBY_QUERY	.BYTE	$76,$69,$65,$77,$3F,$62,$69,$6E,$3D,$31,$26
+	.BYTE	$70,$6C,$61,$74,$66,$6F,$72,$6D,$3D,$61,$74,$61,$72,$69
+	.BYTE	$26,$61,$70,$70,$6B,$65,$79,$3D,0
+LOBBY_PAGE_QUERY .BYTE	$26,$70,$61,$67,$65,$73,$69,$7A,$65,$3D,$34
+	.BYTE	$26,$70,$61,$67,$65,$3D,0
+LB_LOADING	.BYTE	"LOADING QA ROOMS...",$FF
+LB_ERROR	.BYTE	"LOBBY ERROR - R TO RETRY",$FF
+LB_EMPTY	.BYTE	"NO VALID ROOMS - R TO RETRY",$FF
+LB_READY	.BYTE	"SELECT A ROOM",$FF
+LB_CONTROLS1	.BYTE	"UP/DOWN: ROOM  LEFT/RIGHT: PAGE",$FF
+LB_CONTROLS2	.BYTE	"RETURN/FIRE: JOIN  OPTION: DIRECT",$FF
+MSG_ROOM_NOTSAVED .BYTE	"ROOM SELECTED - APPKEY NOT SAVED",$FF
+;
+NET_HIGH_CODE_END
+	ORG	CORE_DISPATCH_CONT
 NET_RX_40DONE
 	JSR	NET_SNAP_APPLY
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_SNAP_IDX
 	RTS
-NET_RX_COL42
-	; collecting shot bytes
-	LDY	NET_SHOT_IDX
-	LDA	NET_RX_TMP
-	STA	NET_SHOT_PKT,Y
-	INY
-	STY	NET_SHOT_IDX
-	CPY	#6
-	BCS	NET_RX_42DONE
-	RTS
 NET_RX_42DONE
 	JSR	NET_SHOT_QUEUE
+	JSR	NET_PRED_CONFIRM
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_SHOT_IDX
-	RTS
-NET_RX_COL50
-	; collecting brick-full bytes
-	LDY	NET_BRICK_IDX
-	LDA	NET_RX_TMP
-	STA	NET_BRICK_BUF,Y
-	INY
-	STY	NET_BRICK_IDX
-	CPY	#51
-	BCS	NET_RX_50DONE
 	RTS
 NET_RX_50DONE
 	; NMIEN is write-only on ANTIC; do not read/restore from hardware register.
 	; Force known net-only setting after map apply.
 	LDA	#0
 	STA	NMIEN
+	JSR	NET_BRICK_FULL_VALIDATE
+	BCS	NET_RX_50BAD
 	JSR	NET_BRICK_FULL_APPLY
-	LDA	#$40	;first authoritative full sync received: enable DLI+VBI ($40 to disable, $C0 to enable)
-	STA	NMIEN
+	LDA	NET_ROUND_MAP	;periodic repair cannot authorize a new round
+	BEQ	NET_RX_50BAD
 	LDA	#1
 	STA	NET_BRICK_DONE
+NET_RX_50BAD
+	LDA	#$40	;first authoritative full sync received: enable VBI, keep DLI off
+	STA	NMIEN
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_BRICK_IDX
 	RTS
-NET_RX_COL51
-	; collecting brick-delta bytes
-	LDY	NET_SNAP_IDX
-	LDA	NET_RX_TMP
-	STA	NET_SNAP_BUF,Y
-	INY
-	STY	NET_SNAP_IDX
-	CPY	#4
-	BCS	NET_RX_51DONE
+NET_RX_43DONE
+	LDA	NET_ROUND_PHASE	;session names cannot rewrite frozen results
+	BNE	NR43_SKIP
+	JSR	NET_NAME_APPLY
+NR43_SKIP
+	LDA	#0
+	STA	NET_RX_STATE
+	STA	NET_NAME_IDX
 	RTS
+;
+; 0x44 SEATS: bit n = slot n is held by a connected client. The snapshot's
+; role mask only says which slots the AI drives, so without this an empty
+; seat and a quiet human read the same and the HUD listed four players.
+NET_RX_44DONE
+	LDA	NET_ROUND_PHASE	;keep final occupancy frozen during results
+	BNE	NR44_X
+	LDA	NET_SEAT_PKT+2
+	AND	#$0F
+	CMP	NET_SEAT_MASK
+	BEQ	NR44_X
+	STA	NET_SEAT_MASK
+	LDA	#1
+	STA	NET_SCORE_PEND
+NR44_X
+	LDA	#0
+	STA	NET_RX_STATE
+	RTS
+;
+; store the name for slot pid and ask the VBI to repaint the HUD labels.
+NET_NAME_APPLY
+	LDA	NET_NAME_PKT+2	;pid
+	CMP	#4
+	BCS	NNA_X
+	ASL			;pid*8 -> table offset
+	ASL
+	ASL
+	TAY
+	LDX	#0
+NNA_CP
+	LDA	NET_NAME_PKT+3,X
+	STA	NET_NAMES,Y
+	INY
+	INX
+	CPX	#NAME_LEN
+	BCC	NNA_CP
+	LDA	#1
+	STA	NET_SCORE_PEND
+NNA_X	RTS
+;
 NET_RX_51DONE
+	LDA	NET_BRICK_DONE
+	BEQ	NET_RX_51CLR
 	JSR	NET_BRICK_DELTA_APPLY
+NET_RX_51CLR
 	LDA	#0
 	STA	NET_RX_STATE
 	STA	NET_SNAP_IDX
-	RTS
-NET_RX_COL52
-	; collecting respawn bytes
-	LDY	NET_RESP_IDX
-	LDA	NET_RX_TMP
-	STA	NET_RESP_PKT,Y
-	INY
-	STY	NET_RESP_IDX
-	CPY	#6
-	BCS	NET_RX_52DONE
 	RTS
 NET_RX_52DONE
 	JSR	NET_RESP_APPLY
@@ -1217,71 +4588,215 @@ NET_RX_52DONE
 	STA	NET_RX_STATE
 	STA	NET_RESP_IDX
 	RTS
-NET_RX_DROP
-	; framing lost: drop partial packet and resync at next recognizable type byte.
+NET_RX_53DONE
+	JSR	NET_REL_APPLY
 	LDA	#0
 	STA	NET_RX_STATE
-	STA	NET_SNAP_IDX
-	STA	NET_SHOT_IDX
-	STA	NET_RESP_IDX
-	STA	NET_BRICK_IDX
 	RTS
-NET_RX_WAIT	LDA	NET_RX_TMP
-	; idle parser: wait for type marker, then switch to fixed-length collector.
-	; after first full map, ignore additional $50 packets.
-	CMP	#$40
-	BEQ	NET_RX_WSNAP
-	CMP	#$42
-	BEQ	NET_RX_WSHOT
+;
+; 0x53 RELIABLE_EVENT: [type, seq, rev_lo, rev_hi, inner-event...].
+; Apply only the next revision. Future or duplicate revisions re-ACK the
+; highest applied revision so the server can fast-retransmit the gap.
+NET_REL_APPLY
+	LDA	NET_REL_REV_LO
+	CLC
+	ADC	#1
+	STA	NET_RX_TMP0
+	LDA	NET_REL_REV_HI
+	ADC	#0
+	STA	NET_RX_TMP1
+	LDA	NET_REL_PKT+2
+	CMP	NET_RX_TMP0
+	BNE	NREL_ACK
+	LDA	NET_REL_PKT+3
+	CMP	NET_RX_TMP1
+	BNE	NREL_ACK
+	JSR	NET_REL_INNER
+	BCS	NREL_ACK
+	LDA	NET_REL_PKT+2
+	STA	NET_REL_REV_LO
+	LDA	NET_REL_PKT+3
+	STA	NET_REL_REV_HI
+NREL_ACK
+	LDA	#1
+	STA	NET_REL_ACK_PEND
+	RTS
+;
+NET_REL_INNER
+	LDA	NET_REL_PKT+4
+	CMP	#$43
+	BEQ	NREL_NAME
 	CMP	#$50
-	BEQ	NET_RX_WFULL50
+	BNE	NREL_C51
+	JMP	NREL_FULL
+NREL_C51
 	CMP	#$51
-	BEQ	NET_RX_WBRD51
+	BEQ	NREL_BRK
 	CMP	#$52
-	BNE	NET_RX_EXIT
-	LDA	#$52
-	STA	NET_RESP_PKT
-	LDA	#1
-	STA	NET_RESP_IDX
-	LDA	#5
-	STA	NET_RX_STATE
+	BNE	NREL_C54
+	JMP	NREL_RESP
+NREL_C54
+	CMP	#$54
+	BNE	NREL_C55
+	JMP	NREL_MATCH
+NREL_C55
+	CMP	#$55
+	BNE	NREL_UNKNOWN
+	JMP	NREL_START
+NREL_UNKNOWN
+	SEC
 	RTS
-NET_RX_WBRD51
-	LDA	#$51
-	STA	NET_SNAP_BUF
-	LDA	#1
-	STA	NET_SNAP_IDX
-	LDA	#4
-	STA	NET_RX_STATE
+NREL_NAME
+	LDA	NET_FRAME_LEN
+	CMP	#4+NAME_PKT_LEN+2
+	BEQ	NREL_NAME_LENOK
+	JMP	NREL_BAD
+NREL_NAME_LENOK
+	LDA	NET_REL_PKT+6	;inner NAME pid
+	CMP	#4
+	BCC	NREL_NAME_PIDOK
+	JMP	NREL_BAD
+NREL_NAME_PIDOK
+	LDA	NET_ROUND_PHASE
+	BEQ	NREL_NAME_PLAY
+	JMP	NREL_OK		;do not rewrite a frozen result row
+NREL_NAME_PLAY
+	LDX	#0
+NREL_NCP
+	LDA	NET_REL_PKT+4,X
+	STA	NET_NAME_PKT,X
+	INX
+	CPX	#NAME_PKT_LEN
+	BCC	NREL_NCP
+	JSR	NET_NAME_APPLY
+	CLC
 	RTS
-NET_RX_WFULL50
+NREL_BRK
+	LDA	NET_FRAME_LEN
+	CMP	#11
+	BEQ	NREL_BRK_LENOK
+	JMP	NREL_BAD
+NREL_BRK_LENOK
+	LDA	NET_REL_PKT+8
+	CMP	NET_ROUND_ID
+	BEQ	NREL_BRK_EPOCH
+	JMP	NREL_OK		;valid old event: consume revision, suppress effect
+NREL_BRK_EPOCH
+	LDA	NET_ROUND_READY
+	BEQ	NREL_OK
+	LDA	NET_REL_PKT+6	;inner brick x
+	CMP	#20
+	BCC	NREL_BRK_XOK
+	JMP	NREL_BAD
+NREL_BRK_XOK
+	LDA	NET_REL_PKT+7	;inner brick y
+	CMP	#19
+	BCC	NREL_BRK_YOK
+	JMP	NREL_BAD
+NREL_BRK_YOK
+	LDX	#0
+NREL_BCP
+	LDA	NET_REL_PKT+4,X
+	STA	NET_SNAP_BUF,X
+	INX
+	CPX	#5
+	BCC	NREL_BCP
 	LDA	NET_BRICK_DONE
-	BNE	NET_RX_EXIT
-	LDA	#$50
-	STA	NET_BRICK_BUF
-	LDA	#1
-	STA	NET_BRICK_IDX
-	LDA	#3
-	STA	NET_RX_STATE
+	BEQ	NREL_OK
+	JSR	NET_BRICK_DELTA_APPLY
+NREL_OK
+	CLC
 	RTS
-NET_RX_WSHOT
-	LDA	#$42
-	STA	NET_SHOT_PKT
-	LDA	#1
-	STA	NET_SHOT_IDX
-	LDA	#2
-	STA	NET_RX_STATE
+NREL_RESP
+	LDA	NET_FRAME_LEN
+	CMP	#13
+	BEQ	NREL_RESP_LENOK
+	JMP	NREL_BAD
+NREL_RESP_LENOK
+	LDA	NET_REL_PKT+10
+	CMP	NET_ROUND_ID
+	BNE	NREL_OK
+	LDA	NET_ROUND_READY
+	BEQ	NREL_OK
+	LDA	NET_REL_PKT+6	;inner respawn pid
+	CMP	#4
+	BCC	NREL_RESP_PIDOK
+	JMP	NREL_BAD
+NREL_RESP_PIDOK
+	LDA	NET_REL_PKT+9	;inner respawn flags
+	CMP	#1
+	BEQ	NREL_RESP_OK
+	CMP	#3
+	BEQ	NREL_RESP_FLAGSOK
+	JMP	NREL_BAD
+NREL_RESP_FLAGSOK
+	LDA	NET_REL_PKT+7	;final x must be interior
+	BNE	NREL_RESP_XNZ
+	JMP	NREL_BAD
+NREL_RESP_XNZ
+	CMP	#19
+	BCC	NREL_RESP_XOK
+	JMP	NREL_BAD
+NREL_RESP_XOK
+	LDA	NET_REL_PKT+8	;final y must be interior
+	BNE	NREL_RESP_YNZ
+	JMP	NREL_BAD
+NREL_RESP_YNZ
+	CMP	#18
+	BCC	NREL_RESP_YOK
+	JMP	NREL_BAD
+NREL_RESP_YOK
+NREL_RESP_OK
+	LDX	#0
+NREL_RCP
+	LDA	NET_REL_PKT+4,X
+	STA	NET_RESP_PKT,X
+	INX
+	CPX	#7
+	BCC	NREL_RCP
+	JSR	NET_RESP_APPLY
+	CLC
 	RTS
-NET_RX_WSNAP
-	LDA	#$40
-	STA	NET_SNAP_BUF
-	LDA	#1
-	STA	NET_SNAP_IDX
-	LDA	#1
-	STA	NET_RX_STATE
-NET_RX_EXIT	RTS
-
-; --- NET snapshot apply (type 0x40, 19 bytes) ---
+NREL_FULL
+	JMP	UI_REL_FULL
+NREL_MATCH
+	JMP	UI_REL_MATCH
+NREL_START
+	JMP	UI_REL_START
+NREL_BAD
+	SEC
+	RTS
+; The net runtime block is all .DS, so on a cold boot it holds whatever the RAM
+; powered up with. Most of it is written before use, but NET_ACTIVE and
+; NET_GAME_SHOW are read by the poll loop during the host prompt -- before net
+; init ever runs -- so a non-zero power-up byte could start polling and switch
+; the display to the game screen: garbled graphics, the prompt invisible, yet
+; still accepting keys. Adding state over time moved these variables onto
+; different power-up RAM, which is why it appeared suddenly rather than at the
+; start. Stops at the first initialised byte so the strings survive.
+NET_STATE_CLEAR
+	LDA	# <NET_TICK
+	STA	POINTER
+	LDA	# >NET_TICK
+	STA	POINTER+1
+NSTC_LP
+	LDA	POINTER+1
+	CMP	# >NET_INIT_ARGS
+	BCC	NSTC_ZERO
+	LDA	POINTER
+	CMP	# <NET_INIT_ARGS
+	BCS	NSTC_X
+NSTC_ZERO
+	LDA	#0
+	TAY
+	STA	(POINTER),Y
+	INC	POINTER
+	BNE	NSTC_LP
+	INC	POINTER+1
+	JMP	NSTC_LP
+NSTC_X	RTS
+;
+; --- NET snapshot apply (type 0x40, 20 bytes) ---
 NET_SNAP_APPLY
 	LDA	NET_SNAP_BUF+2	;flags must indicate valid snapshot
 	AND	#$01
@@ -1292,11 +4807,6 @@ NSNAP_OK
 	BCC	NSNAP_VOK
 	RTS
 NSNAP_VOK
-	; flags bit1..2 = recipient local pid (0..3)
-	LDA	NET_SNAP_BUF+2
-	LSR
-	AND	#$03
-	STA	NET_LOCAL_PID
 	; ignore stale/duplicate/out-of-order snapshots to prevent snap-back.
 	LDA	NET_RX_DBG
 	BNE	NSNAP_CHKSEQ
@@ -1319,35 +4829,63 @@ NSNAP_CHKSEQ
 NSNAP_DROP
 	JMP	NSNAP_EXIT
 NSNAP_ACC
+	LDA	#0	;authoritative state arrived: reset the stall watchdog
+	STA	NET_WAIT_LO
+	STA	NET_WAIT_HI
+	; Do not open a staged write until the round's map is ready. Returning with
+	; an odd NET_STAGE_SEQ would make every later VBI treat staging as torn.
+	LDA	NET_BOOT_HIDE
+	BEQ	NSNAP_STAGE
+	LDA	NET_BRICK_DONE
+	BNE	NSNAP_STAGE
+	JMP	NSNAP_EXIT
+NSNAP_STAGE
+	; latest-wins staged snapshot handoff:
+	; odd seq = mainline is writing staging
+	; even seq = latest full snapshot ready for VBI commit
+	LDA	NET_STAGE_SEQ
+	CLC
+	ADC	#1
+	STA	NET_STAGE_SEQ
+	LDA	#0
+	STA	NET_STAGE_REVEAL
 	; flags bit3..6 = authoritative zombie mask for slots 0..3
 	LDA	NET_SNAP_BUF+2
 	LSR
 	LSR
 	LSR
 	AND	#$0F
-	CMP	NET_ROLE_MASK
+	STA	NET_ROLE_NEW
+	EOR	NET_ROLE_MASK	;slots whose role changed this snapshot
 	BEQ	NSNAP_RMSK
+	STA	NET_ROLE_CHG
+	LDA	NET_ROLE_NEW
 	STA	NET_ROLE_MASK
 	LDA	#1
 	STA	NET_SCORE_PEND
+	JSR	NET_ROLE_RESET
 NSNAP_RMSK
 	LDA	NET_BOOT_HIDE
 	BEQ	NSNAP_POS0
-	LDA	#0
-	STA	NET_BOOT_HIDE
-	STA	NET_DEAD_MASK
-	STA	NET_ERASE_MASK
 	LDA	#1
-	LDX	#3
-NSNAP_FPP
-	STA	NET_P_PENDING,X
-	DEX
-	BPL	NSNAP_FPP
-	LDA	#$0F
-	STA	NET_GUARD_MASK
+	STA	NET_STAGE_REVEAL	;VBI reveals only after these coordinates commit
 NSNAP_POS0
-	; latch authoritative positions for all 4 actors.
-	; apply in VBI to avoid concurrent mainline/VBI draw races.
+	; stage authoritative positions for VBI-owned live commit.
+	; mainline RX never touches NET_PX_* / NET_P_PENDING directly.
+	LDA	#0
+	STA	NET_STAGE_ACK_VALID
+	LDA	NET_SNAP_BUF+2
+	AND	#$80
+	BEQ	NSNAP_NOACK
+	LDA	#1
+	STA	NET_STAGE_ACK_VALID
+	LDA	NET_SNAP_BUF+19
+	STA	NET_STAGE_ACK_SEQ
+NSNAP_NOACK
+	LDA	NET_SNAP_BUF+2
+	LSR
+	AND	#$03
+	STA	NET_STAGE_LOCAL_PID
 	LDX	#0
 NSNAP_POSLP
 	TXA
@@ -1356,46 +4894,80 @@ NSNAP_POSLP
 	ADC	#3
 	TAY
 	LDA	NET_SNAP_BUF,Y
-	CMP	#20
-	BCS	NSNAP_POSNX
-	BEQ	NSNAP_POSNX
-	CMP	#19
-	BEQ	NSNAP_POSNX
-	STA	NET_PX_X,X
+	STA	NET_STAGE_PX_X,X
 	INY
 	LDA	NET_SNAP_BUF,Y
-	CMP	#19
-	BCS	NSNAP_POSNX
-	BEQ	NSNAP_POSNX
-	CMP	#18
-	BEQ	NSNAP_POSNX
-	STA	NET_PX_Y,X
+	STA	NET_STAGE_PX_Y,X
+	LDA	NET_SNAP_BUF+11,X
+	STA	NET_STAGE_PJOY,X
+	LDA	#0
+	STA	NET_STAGE_PENDING,X
 	LDA	NET_DEAD_MASK
 	AND	PLRMSK,X
 	BNE	NSNAP_KEEPDEAD
-	CPX	NET_LOCAL_PID
+	CPX	NET_STAGE_LOCAL_PID
 	BNE	NSNAP_RCHK
-	; local slot is always server-authoritative: reconcile every snapshot.
-	LDA	#1
-	STA	NET_P_PENDING,X
-	JMP	NSNAP_PSETM
+	; local prediction only requests reconcile once drift is meaningful.
+	LDA	LOCX,X
+	SEC
+	SBC	NET_STAGE_PX_X,X
+	BCS	NSNAP_LDXP
+	EOR	#$FF
+	CLC
+	ADC	#1
+NSNAP_LDXP
+	STA	NET_RX_COUNT
+	LDA	LOCY,X
+	SEC
+	SBC	NET_STAGE_PX_Y,X
+	BCS	NSNAP_LDYP
+	EOR	#$FF
+	CLC
+	ADC	#1
+NSNAP_LDYP
+	CLC
+	ADC	NET_RX_COUNT
+;
+; Subtract the lead the client is ENTITLED to before calling this drift.
+;
+; The client predicts one cell per transmitted input (04-01 made that exactly
+; one), so with inputs still un-acked it is legitimately ahead of the position
+; this snapshot carries -- by about one cell each. Comparing the raw gap
+; against NET_RECON_P0 therefore flags a steadily walking player as drifting
+; the moment two or three deltas are in flight, and yanks them back. That is
+; the walk-back felt while crossing open maze: not divergence, just latency
+; being mistaken for it.
+;
+; The VBI path next door already requires NET_PEND_COUNT to be zero, and it is
+; the evidence for this: over a play session it fired zero times while this
+; path fired repeatedly. Same threshold, same positions -- the only difference
+; was that one of them accounted for outstanding input and the other did not.
+;
+; Over-subtracting only makes this path more patient. Genuine divergence is
+; still caught: the VBI path sees it once the queue drains, and the idle path
+; sees it at a standstill.
+	SEC
+	SBC	NET_PEND_COUNT
+	BCS	NSNAP_LEADOK
+	LDA	#0		;lead exceeds the gap: nothing to correct
+NSNAP_LEADOK
+	CMP	#NET_RECON_P0
+	BCC	NSNAP_PCLR
+	BNE	NSNAP_PSET
+	LDA	MOVEST,X
+	BNE	NSNAP_PCLR
+	JMP	NSNAP_PSET
 NSNAP_RCHK
 	LDA	LOCX,X
-	CMP	NET_PX_X,X
+	CMP	NET_STAGE_PX_X,X
 	BNE	NSNAP_PSET
 	LDA	LOCY,X
-	CMP	NET_PX_Y,X
+	CMP	NET_STAGE_PX_Y,X
 	BNE	NSNAP_PSET
 	JMP	NSNAP_PCLR
 NSNAP_PSET
 	LDA	#1
-	STA	NET_P_PENDING,X
-NSNAP_PSETM
-	TXA
-	TAY
-	LDA	NET_GUARD_MASK
-	ORA	PLRMSK,Y
-	STA	NET_GUARD_MASK
+	STA	NET_STAGE_PENDING,X
 NSNAP_PCLR
 	LDA	NET_DEAD_MASK
 	AND	PLRMSKINV,X
@@ -1409,37 +4981,46 @@ NSNAP_KEEPDEAD
 NSNAP_POSNX
 	INX
 	CPX	#4
-	BCC	NSNAP_POSLP
-NSNAP_Z1JOY
-	; latch server AI input for zombie slot 1.
-	; do not draw here: VBI handles movement/drawing to avoid races.
-	LDA	NET_SNAP_BUF+12
-	AND	#$0F
-	STA	NET_Z1_STICK
-	LDA	NET_SNAP_BUF+12
-	AND	#$10
-	BEQ	NSNAP_Z1TRH
-	LDA	#0	;pressed
-	BNE	NSNAP_Z1TRS
-NSNAP_Z1TRH
-	LDA	#1	;released
-NSNAP_Z1TRS
-	STA	NET_Z1_TRIG
+	BCS	NSNAP_POSDN
+	JMP	NSNAP_POSLP
+NSNAP_POSDN
+	LDA	NET_STAGE_SEQ
+	CLC
+	ADC	#1
+	STA	NET_STAGE_SEQ
 	LDA	#1
-	STA	NET_Z1_PENDING
+	STA	NET_ROUND_SNAP
+	JSR	NET_ROUND_CHECK_READY
+NSNAP_Z1JOY
 	LDX	#0
 NSNAP_SCORE
 	; server scores are binary 0..255; HUD renders modulo-10 glyphs.
+	; An empty seat has no score to show, and the label pass has already
+	; blanked its line, so leave it blank instead of painting a 0 back over it.
 	LDY	SCRINDX,X
+	LDA	NET_ROLE_MASK
+	AND	PLRMSK,X
+	BNE	NSNAP_SCRSHOW
+	JSR	NET_SEAT_HAS
+	BEQ	NSNAP_SCRBLK
+NSNAP_SCRSHOW
 	LDA	NET_SNAP_BUF+15,X
 	JSR	NET_SCORECHR
 	STA	SCORE,Y
+	JMP	NSNAP_SCRNX
+NSNAP_SCRBLK
+	LDA	#0
+	STA	SCORE,Y
+NSNAP_SCRNX
 	INX
 	CPX	#4
 	BCC	NSNAP_SCORE
 NSNAP_EXIT
 	RTS
 
+; Gameplay opens only after three independently recoverable pieces agree on
+; the current epoch: reliable ROUND_START, reliable BRICK_FULL, and a fresh
+; matching snapshot. Arrival order is deliberately irrelevant.
 ; validate full 0x40 snapshot structure before applying any fields.
 ; carry clear = valid, carry set = invalid.
 NET_SNAP_VALIDATE
@@ -1451,18 +5032,14 @@ NSV_POSLP
 	ADC	#3
 	TAY
 	LDA	NET_SNAP_BUF,Y
-	CMP	#20
-	BCS	NSV_BAD
-	BEQ	NSV_BAD
+	BEQ	NSV_BAD		;column 0 is border, never an actor cell
 	CMP	#19
-	BEQ	NSV_BAD
+	BCS	NSV_BAD		;19 and beyond is border or off-map
 	INY
 	LDA	NET_SNAP_BUF,Y
-	CMP	#19
-	BCS	NSV_BAD
-	BEQ	NSV_BAD
+	BEQ	NSV_BAD		;row 0 likewise
 	CMP	#18
-	BEQ	NSV_BAD
+	BCS	NSV_BAD
 	INX
 	CPX	#4
 	BCC	NSV_POSLP
@@ -1508,37 +5085,39 @@ NET_SCORELBL
 NSLBLP
 	LDA	NET_ROLE_MASK
 	AND	PLRMSK,X
-	BEQ	NSLBW
+	BNE	NSLBZ
+	JSR	NET_SEAT_HAS	;nobody in the seat: no label and no score at all
+	BNE	NSLBW
+	JSR	NET_LBL_BLANK
+	JMP	NSLBN
+NSLBZ
 	LDA	# <ZOMTXT
 	STA	POINTER
 	LDA	# >ZOMTXT
 	STA	POINTER+1
 	JMP	NSLBC
 NSLBW
+	JSR	NET_NAME_HAS	;a named human shows their name instead of WIZARD
+	BEQ	NSLBWL
+	JSR	NET_NAME_DRAW
+	JMP	NSLBN
+NSLBWL
 	LDA	# <PLRTXT
 	STA	POINTER
 	LDA	# >PLRTXT
 	STA	POINTER+1
 NSLBC
-	TXA
-	ASL
-	STA	COUNT
-	ASL
-	CLC
-	ADC	COUNT		;slot*6 source offset
-	CLC
-	ADC	POINTER
-	STA	POINTER
-	BCC	NSLB0
-	INC	POINTER+1
-NSLB0
 	LDA	LBLDSTLO,X
 	STA	SCRPTR
 	LDA	LBLDSTHI,X
 	STA	SCRPTR+1
+	LDA	NAMECOL,X
+	STA	HOLDIT		;fallback labels use the same blue text colour as names
 	LDY	#0
 NSLBCL
 	LDA	(POINTER),Y
+	JSR	NAME_SCR
+	ORA	HOLDIT
 	STA	(SCRPTR),Y
 	INY
 	CPY	#6
@@ -1555,21 +5134,744 @@ NSLBN
 	BCC	NSLBLP
 	RTS
 
+; X=slot -> A=0 (Z set) when nobody holds the slot, A<>0 when a client does.
+; Our own slot always counts: the first SEATS packet may not have arrived yet,
+; and we plainly occupy the seat the server is addressing us on.
+; Preserves X and Y.
+NET_SEAT_HAS
+	LDA	NET_SEAT_MASK
+	AND	PLRMSK,X
+	BNE	NSH_YES
+	TXA
+	CMP	NET_STAGE_LOCAL_PID
+	BNE	NSH_NO
+NSH_YES	LDA	#1
+	RTS
+NSH_NO	LDA	#0
+	RTS
+;
+; A slot with neither a client nor a zombie in it is not in the game, so it must
+; not stand on the board either. Hide it the way a respawn-pending actor is
+; hidden -- NET_DEAD_MASK plus one erase pass -- and remember which slots we hid
+; in NET_VACANT_MASK, so a seat filling again un-hides only those and never
+; disturbs an actor that is genuinely awaiting respawn.
+;
+; The vacant branch keys off NET_DEAD_MASK rather than NET_VACANT_MASK so it is
+; self-correcting: anything that clears the dead bit underneath us -- the
+; first-snapshot NET_BOOT_HIDE reveal, a stray respawn -- makes the next pass
+; re-hide and re-erase exactly once. Erasing on every pass instead would fight
+; the map repair, since a vacant actor's stale cell may now hold a brick.
+;
+; Runs every VBI, which owns these masks, ahead of the move loop that both
+; performs the erase and draws. Cheap: four slots, and an already-hidden slot
+; costs two loads and a branch.
+NET_VACANT_UPDATE
+	LDX	#0
+NVU_LP
+	JSR	NET_SEAT_HAS		;a client holds it
+	BNE	NVU_FILLED
+	LDA	NET_ROLE_MASK		;...or the AI drives it
+	AND	PLRMSK,X
+	BNE	NVU_FILLED
+	LDA	NET_VACANT_MASK
+	ORA	PLRMSK,X
+	STA	NET_VACANT_MASK
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,X
+	BNE	NVU_NX			;already hidden and already erased
+	LDA	NET_DEAD_MASK
+	ORA	PLRMSK,X
+	STA	NET_DEAD_MASK
+	LDA	NET_ERASE_MASK
+	ORA	PLRMSK,X
+	STA	NET_ERASE_MASK
+	JMP	NVU_NX
+NVU_FILLED
+	LDA	NET_VACANT_MASK		;only ever un-hide what we hid
+	AND	PLRMSK,X
+	BEQ	NVU_NX
+	LDA	NET_VACANT_MASK
+	AND	PLRMSKINV,X
+	STA	NET_VACANT_MASK
+	LDA	NET_DEAD_MASK
+	AND	PLRMSKINV,X
+	STA	NET_DEAD_MASK
+	LDA	NET_ERASE_MASK
+	AND	PLRMSKINV,X
+	STA	NET_ERASE_MASK
+	LDA	NET_REDRAW_MASK		;the vacant pass erased its PM image; a
+	ORA	PLRMSK,X		;snapshot at the same cell cannot reveal that,
+	STA	NET_REDRAW_MASK		;so force one still-frame draw on seat fill
+	LDA	#1			;let the reconcile place it where the server says
+	STA	NET_P_PENDING,X
+NVU_NX
+	INX
+	CPX	#4
+	BCC	NVU_LP
+	RTS
+;
+; X=slot -> clear its whole HUD line: the 11 label columns and the score digit
+; that follows them. Preserves X.
+NET_LBL_BLANK
+	LDA	LBLDSTLO,X
+	STA	SCRPTR
+	LDA	LBLDSTHI,X
+	STA	SCRPTR+1
+	LDY	#0
+	LDA	#0
+NLB_LP	STA	(SCRPTR),Y
+	INY
+	CPY	#11
+	BCC	NLB_LP
+	LDY	SCRINDX,X
+	LDA	#0
+	STA	SCORE,Y
+	RTS
+;
+; X=slot -> A=0 when the slot has no name, A<>0 when it does.
+; NUL and space both count as empty. Preserves X, clobbers A/Y/COUNT.
+NET_NAME_HAS
+	TXA
+	ASL
+	ASL
+	ASL
+	TAY			;slot*8
+NNH_LP
+	LDA	NET_NAMES,Y
+	BEQ	NNH_NX
+	CMP	#$20
+	BNE	NNH_YES
+NNH_NX
+	INY
+	TYA
+	AND	#NAME_LEN-1	;name blocks are 8-aligned
+	BNE	NNH_LP
+	LDA	#0
+	RTS
+NNH_YES	LDA	#1
+	RTS
+;
+; X=slot -> blank its stored name. Preserves X.
+NET_NAME_CLR
+	TXA
+	ASL
+	ASL
+	ASL
+	TAY			;slot*8
+NNC_LP
+	LDA	#$20
+	STA	NET_NAMES,Y
+	INY
+	TYA
+	AND	#NAME_LEN-1
+	BNE	NNC_LP
+	RTS
+;
+; X=slot -> draw its 8-char name into the HUD label field, padded to the 11
+; columns the field owns. Text is one readable blue band for every row; the PMG
+; missile swatch beside the row carries the per-slot shirt colour. Preserves X.
+NET_NAME_DRAW
+	TXA
+	PHA
+	LDA	LBLDSTLO,X
+	STA	SCRPTR
+	LDA	LBLDSTHI,X
+	STA	SCRPTR+1
+	LDA	NAMECOL,X
+	STA	HOLDIT		;colour band
+	TXA
+	ASL
+	ASL
+	ASL
+	STA	COUNT		;slot*8 source offset
+	LDY	#0
+NND_LP
+	TYA
+	CLC
+	ADC	COUNT
+	TAX
+	LDA	NET_NAMES,X
+	JSR	NAME_SCR	;ASCII -> screen code, filtered for the embedded font
+	ORA	HOLDIT
+	STA	(SCRPTR),Y
+	INY
+	CPY	#NAME_LEN
+	BCC	NND_LP
+	LDA	#0
+NND_SP
+	STA	(SCRPTR),Y
+	INY
+	CPY	#11
+	BCC	NND_SP
+	PLA
+	TAX
+	RTS
+;
+; C set when a live actor occupies the cell the repair is about to paint.
+; Column is the current screen byte offset halved; row is in X, which the
+; caller's walk depends on, so it is saved and restored.
+NBF_ACTOR_HERE
+	STX	NET_BF_ROW
+	LDA	NET_RX_YSAVE
+	LSR
+	STA	NET_BF_CELLX
+	LDX	#3
+NBFA_LP
+	LDA	NET_DEAD_MASK	;awaiting respawn: not on the board
+	AND	PLRMSK,X
+	BNE	NBFA_NX
+	LDA	RNDX,X
+	CMP	NET_BF_CELLX
+	BNE	NBFA_NX
+	LDA	RNDY,X
+	CMP	NET_BF_ROW
+	BNE	NBFA_NX
+	LDX	NET_BF_ROW
+	SEC
+	RTS
+NBFA_NX
+	DEX
+	BPL	NBFA_LP
+	LDX	NET_BF_ROW
+	CLC
+	RTS
+;
+NET_HEXDIG
+	CMP	#10
+	BCC	NHD_NUM
+	CLC
+	ADC	#'A'-10
+	BNE	NHD_CV
+NHD_NUM	CLC
+	ADC	#'0'
+NHD_CV	JSR	HOST_SCR
+	ORA	#$C0		;fourth row's colour band
+	RTS
+;
+; commit the latest fully staged snapshot from mainline RX into the live
+; target/joy arrays that VBI movement code consumes. Odd NET_STAGE_SEQ means
+; the parser is mid-write, so VBI skips until an even published snapshot exists.
+NET_STAGE_COMMIT
+	LDA	NET_STAGE_SEQ
+	STA	NET_RX_TMP
+	AND	#$01
+	BEQ	NSC_EVEN
+	JMP	NSC_X
+NSC_EVEN
+	LDA	NET_RX_TMP
+	CMP	NET_STAGE_APPLYSEQ
+	BNE	NSC_NEW
+	JMP	NSC_X
+NSC_NEW
+	LDA	NET_STAGE_LOCAL_PID
+	CMP	NET_LOCAL_PID
+	BEQ	NSC_PIDOK
+	STA	NET_LOCAL_PID
+	JSR	NET_LOCAL_PID_RESET
+NSC_PIDOK
+	LDX	#3
+NSC_LP
+	LDA	NET_STAGE_PX_X,X
+	STA	NET_PX_X,X
+	LDA	NET_STAGE_PX_Y,X
+	STA	NET_PX_Y,X
+	LDA	NET_STAGE_PJOY,X
+	STA	NET_PJOY,X
+	CPX	NET_LOCAL_PID	; remote simulation truth updates immediately;
+	BEQ	NSC_LOCAL	; RNDX/RNDY is the only part that follows.
+	LDA	NET_STAGE_PX_X,X
+	STA	LOCX,X
+	LDA	NET_STAGE_PX_Y,X
+	STA	LOCY,X
+NSC_LOCAL
+	LDA	NET_STAGE_PENDING,X
+	STA	NET_P_PENDING,X
+	BNE	NSC_PN
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+	JMP	NSC_NG
+NSC_PN
+	TXA
+	TAY
+	LDA	NET_GUARD_MASK
+	ORA	PLRMSK,Y
+	STA	NET_GUARD_MASK
+NSC_NG
+	DEX
+	BPL	NSC_LP
+	LDA	NET_STAGE_ACK_VALID
+	STA	NET_ACK_VALID
+	LDA	NET_STAGE_ACK_SEQ
+	STA	NET_ACK_SEQ
+	LDA	NET_RX_TMP
+	STA	NET_STAGE_APPLYSEQ
+	LDA	NET_STAGE_REVEAL
+	BEQ	NSC_NOREVEAL
+	LDA	#0
+	STA	NET_STAGE_REVEAL
+	STA	NET_BOOT_HIDE
+	STA	NET_DEAD_MASK
+	STA	NET_ERASE_MASK
+	LDA	#$0F		;reset erased PMG actors; redraw from this commit
+	STA	NET_REDRAW_MASK
+NSC_NOREVEAL
+	LDA	NET_LOCAL_PID
+	CMP	#4
+	BCS	NSC_X
+	LDA	NET_ACK_VALID
+	BEQ	NSC_X
+	JSR	NET_LOCAL_ACK_DISCARD
+	JSR	NET_LOCAL_RECONCILE
+NSC_X
+	RTS
+
+; reconcile only on meaningful drift (staged pending flag, i.e. >=
+; NET_RECON_P0 cells) or when the player is fully idle, so the normal
+; one-cell prediction lead never yanks the wizard backward mid-run at
+; snapshot rate.
+NET_LOCAL_RECONCILE
+	LDX	NET_LOCAL_PID
+	LDA	NET_P_PENDING,X
+	BEQ	NLRC_IDLE
+	LDA	#$01		;staged drift past NET_RECON_P0
+	JSR	NET_DIAG_BUMP
+	JMP	NLRC_GO
+NLRC_IDLE
+	LDA	MOVEST,X
+	BNE	NLRC_X
+	LDA	NET_PEND_COUNT
+	BNE	NLRC_X
+	LDA	NET_IDLE_FRAMES	;genuinely stopped, not just passing through
+	CMP	#NET_IDLE_SETTLE	;centre on the way to another direction
+	BCC	NLRC_X
+	LDA	LOCX,X
+	CMP	NET_PX_X,X
+	BNE	NLRC_CONV
+	LDA	LOCY,X
+	CMP	NET_PX_Y,X
+	BEQ	NLRC_X
+NLRC_CONV
+	LDA	#$02		;idle convergence
+	JSR	NET_DIAG_BUMP
+NLRC_GO
+	LDA	LOCX,X		;a gap small enough to walk belongs to the mainline
+	SEC			;glide; only a jump no walk can cover is repositioned
+	SBC	NET_PX_X,X
+	BCS	NLRC_DX
+	EOR	#$FF
+	CLC
+	ADC	#1
+NLRC_DX	STA	NET_GLIDE_TMP
+	LDA	LOCY,X
+	SEC
+	SBC	NET_PX_Y,X
+	BCS	NLRC_DY
+	EOR	#$FF
+	CLC
+	ADC	#1
+NLRC_DY	CLC
+	ADC	NET_GLIDE_TMP
+	CMP	#NET_GLIDE_MAX
+	BCS	NLRC_FAR
+	JSR	NET_RCHASE_ARM	;simulation takes it now; the picture walks in
+	RTS
+NLRC_FAR
+	JSR	NET_LOCAL_REPLAY_PENDING
+NLRC_X	RTS
+
+; SLOT LIFECYCLE RESETS
+; ---------------------
+; The server hands a slot to a zombie or a human at will. Anything the client
+; caches per slot describes the previous occupant once that happens, so it is
+; dropped here rather than left to decay: stale publish sequences would swallow
+; the new owner's first shot or respawn, and a stale channel-2 claim would let a
+; departed actor silence a live one.
+;
+; The respawn latches are deliberately left alone. A shot clear is re-sent as a
+; three-tick burst, so discarding a queued shot self-heals in a few frames; a
+; respawn is sent once, and dropping one would leave that actor hidden behind
+; NET_DEAD_MASK until the next death. Respawn payloads carry explicit x/y, so a
+; slightly stale one is harmless anyway.
+;
+; NET_ROLE_CHG holds the slots whose role flipped. Runs in mainline, alongside
+; the RX parser that owns these latches.
+NET_ROLE_RESET
+	LDX	#3
+NRR_LP
+	LDA	NET_ROLE_CHG
+	AND	PLRMSK,X
+	BEQ	NRR_NX
+	LDA	#0
+	STA	NET_SHOT_SEQ,X		;a shot queued by the old occupant would
+	STA	NET_SHOT_APPLYSEQ,X	;otherwise be drawn as the new one's
+	STA	NET_DESYNC_CNT,X	;divergence was the old actor's, not this one's
+	STA	NET_P_PENDING,X		;so is any queued reconcile
+	STA	NET_STAGE_PENDING,X
+	STA	MOVEST,X		;and any evaporate the old occupant was mid-way
+	LDA	#1			;expire any projectile drawn for the old occupant
+	STA	NET_SHOT_TTL,X		;on the next VBI before a new shot can be applied
+	LDA	ACTFLAG,X		;through, which would otherwise play out on
+	AND	#$FD			;whoever takes the seat
+	STA	ACTFLAG,X
+	JSR	NET_NAME_CLR		;and the previous occupant's display name
+	CPX	SND_CH2_PID		;release a sound claim held by the old actor
+	BNE	NRR_NX
+	LDA	#0			;do not leave its last tone latched with no owner
+	STA	AUDC2
+	LDA	#$FF
+	STA	SND_CH2_PID
+NRR_NX
+	DEX
+	BPL	NRR_LP
+	RTS
+;
+; Our own slot moved. Unacknowledged inputs, the predicted shot and the sound
+; claim are all keyed to the slot we just left. Runs from the VBI commit, which
+; already mutates the pending ring through NET_LOCAL_ACK_DISCARD.
+NET_LOCAL_PID_RESET
+	LDA	#0
+	STA	NET_RCHASE
+	STA	NET_PEND_HEAD
+	STA	NET_PEND_COUNT
+	STA	NET_PRED_TTL
+	STA	AUDC1			;seat reassignment changes both channel owners
+	STA	AUDC2
+	LDA	#$FF
+	STA	SND_CH2_PID
+	RTS
+;
+; CORRECTION DIAGNOSTICS
+; ---------------------
+; The snap-back could not be reproduced on the emulator rig: with loopback
+; latency the local and authoritative positions stay identical and the replay
+; path never runs, so the mechanism has to be measured where it actually
+; happens. These counters cost nothing during play; peek them after a session
+; using the addresses in build/maze-war.lab.
+;
+; A = trigger bit to record. Preserves X and Y.
+NET_DIAG_BUMP
+	STA	NET_DIAG_BIT	;callers keep the slot index in X, so the
+	STY	NET_DIAG_YSAV	;counter lookup walks Y instead
+	ORA	NET_DIAG_SRC
+	STA	NET_DIAG_SRC
+	LDA	NET_DIAG_BIT
+	LDY	#0
+NDB_IDX	LSR
+	BCS	NDB_HIT
+	INY
+	CPY	#4
+	BCC	NDB_IDX
+	BCS	NDB_TOT
+NDB_HIT	LDA	NET_DIAG_CNT,Y	;no INC abs,Y on 6502
+	CMP	#$FF
+	BEQ	NDB_TOT
+	CLC
+	ADC	#1
+	STA	NET_DIAG_CNT,Y
+NDB_TOT
+	LDA	NET_DIAG_SNAPS	;saturate rather than wrap, so a big number
+	CMP	#$FF		;still reads as "a lot"
+	BEQ	NDB_PEND
+	INC	NET_DIAG_SNAPS
+NDB_PEND
+	LDA	NET_PEND_COUNT	;how far behind the server we were
+	CMP	NET_DIAG_PENDMAX
+	BCC	NDB_X
+	STA	NET_DIAG_PENDMAX
+	LDY	NET_SNAPLOG_IDX	;wraps: the newest 16 events are what matter,
+	LDA	NET_DIAG_BIT	;which path fired
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	LOCX,X		;predicted cell, still un-repositioned
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	LOCY,X
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	NET_PX_X,X	;authoritative cell
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	NET_PX_Y,X
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	DIR,X		;facing the prediction was running
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	NET_RX_STICK	;and what the stick was asking for
+	STA	NET_SNAPLOG,Y
+	INY
+	LDA	NET_PEND_COUNT
+	STA	NET_SNAPLOG,Y
+	LDA	NET_SNAPLOG_IDX	;a snap is read out right after it is felt
+	CLC
+	ADC	#8
+	AND	#$7F
+	STA	NET_SNAPLOG_IDX
+NDB_X	LDY	NET_DIAG_YSAV
+	RTS
+;
+NET_LOCAL_ACK_DISCARD
+	LDA	NET_PEND_COUNT
+	BEQ	NLAD_X
+NLAD_LP
+	LDY	NET_PEND_HEAD
+	LDA	NET_ACK_SEQ
+	SEC
+	SBC	NET_PEND_SEQ,Y
+	CMP	#$80
+	BCS	NLAD_X
+	INC	NET_PEND_HEAD
+	LDA	NET_PEND_HEAD
+	AND	#$07
+	STA	NET_PEND_HEAD
+	DEC	NET_PEND_COUNT
+	BNE	NLAD_LP
+NLAD_X
+	RTS
+
+NET_LOCAL_REPLAY_PENDING
+	LDX	NET_LOCAL_PID
+	CPX	#4
+	BCS	NLRP_X
+	JSR	NET_AUTH_REPOS
+	LDA	NET_PJOY,X
+	JSR	NET_JOYDIRA
+	CMP	#$FF
+	BEQ	NLRP_FACE
+	STA	DIR,X
+NLRP_FACE
+	JSR	SETSTIL
+	LDY	NET_PEND_HEAD
+	LDA	NET_PEND_COUNT
+	BEQ	NLRP_X
+	STA	NET_REPLAY_LEFT
+	LDA	#0
+	STA	NET_REPLAY_MOVE
+NLRP_LP
+	LDA	NET_PEND_JOY,Y
+	JSR	NET_LOCAL_REPLAY_STEP
+	STA	NET_REPLAY_MOVE
+	INY
+	TYA
+	AND	#$07
+	TAY
+	DEC	NET_REPLAY_LEFT
+	BNE	NLRP_LP
+	LDA	NET_REPLAY_MOVE
+	BEQ	NLRP_X
+	JSR	INITMOVE_STEP
+NLRP_X
+	RTS
+
+; Refuse to move an actor onto a cell that is not playfield interior. Net init
+; zeroes NET_PX, so any reposition before the first authoritative snapshot would
+; otherwise park the actor on (0,0) and draw it over the top-left border block.
+; Guarding the source stops both the draw and the erase; the matching check in
+; ERASMAN stays as defence in depth for any other stale coordinate.
+NET_AUTH_REPOS
+	LDA	NET_PX_X,X
+	BEQ	NAR_X
+	CMP	#19
+	BCS	NAR_X
+	LDA	NET_PX_Y,X
+	BEQ	NAR_X
+	CMP	#18
+	BCC	NAR_OK
+NAR_X	RTS
+NAR_OK
+	TXA
+	TAY
+	LDA	NET_ERASE_MASK
+	ORA	PLRMSK,Y
+	STA	NET_ERASE_MASK
+	JSR	ERASMAN
+	LDA	NET_PX_X,X
+	STA	LOCX,X
+	STA	RNDX,X
+	LDA	NET_PX_Y,X
+	STA	LOCY,X
+	STA	RNDY,X
+	LDA	NET_GUARD_MASK
+	ORA	PLRMSK,Y
+	STA	NET_GUARD_MASK
+	LDA	NET_DEAD_MASK
+	AND	PLRMSKINV,Y
+	STA	NET_DEAD_MASK
+	LDA	NET_ERASE_MASK
+	AND	PLRMSKINV,Y
+	STA	NET_ERASE_MASK
+	JSR	NET_CALC_LOC
+	LDA	#0
+	STA	MOVEST,X
+	RTS
+
+NET_LOCAL_REPLAY_STEP
+	STA	NET_RX_TMP
+	JSR	NET_JOYDIRA
+	CMP	#$FF
+	BEQ	NLRS_IDLE
+	STA	DIR,X
+	LDA	NET_RX_TMP
+	AND	#$10
+	BNE	NLRS_FACE
+	JSR	NET_AHEAD_FREE
+	BNE	NLRS_FACE
+	LDA	#1
+	RTS
+NLRS_IDLE
+	LDA	NET_RX_TMP
+	AND	#$10
+	BEQ	NLRS_X
+NLRS_FACE
+	JSR	SETSTIL
+NLRS_X
+	LDA	#0
+	RTS
+
+; commit latest staged respawn packets in VBI context so mainline RX never
+; mutates live actor visibility/target state directly.
+NET_RESP_COMMIT
+	LDX	#0
+NRC_LP
+	LDA	NET_RESP_SEQ,X
+	AND	#$01
+	BNE	NRC_NX
+	LDA	NET_RESP_SEQ,X
+	CMP	NET_RESP_APPLYSEQ,X
+	BEQ	NRC_NX
+	STA	NET_RX_TMP
+	STX	HOLDIT
+	TXA
+	ASL
+	STA	COUNT
+	ASL
+	CLC
+	ADC	COUNT
+	TAY
+	LDX	#0
+NRC_CP
+	LDA	NET_RESP_BUF,Y
+	STA	NET_RESP_WRK,X
+	INY
+	INX
+	CPX	#6
+	BCC	NRC_CP
+	LDX	HOLDIT
+	LDA	NET_RX_TMP
+	STA	NET_RESP_APPLYSEQ,X
+	JSR	NET_RESP_APPLY_WRK
+	LDX	HOLDIT
+NRC_NX
+	INX
+	CPX	#4
+	BCC	NRC_LP
+	RTS
+
+NET_RESP_APPLY_WRK
+	LDA	NET_RESP_WRK+2
+	CMP	#4		;slot index indexes four-entry arrays
+	BCC	NRW_PIDOK
+	RTS
+NRW_PIDOK
+	TAX
+	LDA	NET_RESP_WRK+5
+	STA	NET_RESP_FLAGS	;VBI-owned: do not alias foreground RX scratch
+	AND	#$02
+	BEQ	NRW_PEND
+	LDA	NET_RESP_WRK+3	;same interior-only bounds as a snapshot
+	BEQ	NRW_BADPOS
+	CMP	#19
+	BCS	NRW_BADPOS
+	LDA	NET_RESP_WRK+4
+	BEQ	NRW_BADPOS
+	CMP	#18
+	BCS	NRW_BADPOS
+	LDA	NET_RESP_WRK+3
+	STA	NET_PX_X,X
+	LDA	NET_RESP_WRK+4
+	STA	NET_PX_Y,X
+	LDA	#1
+	STA	NET_P_PENDING,X
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+	JMP	NRW_POSOK
+NRW_BADPOS
+	RTS
+NRW_POSOK
+	TXA
+	TAY
+	LDA	ACTFLAG,X	;a respawn ends any evaporate still running, so a
+	AND	#$FD		;half-played one cannot follow the actor to its
+	STA	ACTFLAG,X	;new cell
+	LDA	#0
+	STA	MOVEST,X
+	LDA	NET_GUARD_MASK
+	ORA	PLRMSK,Y
+	STA	NET_GUARD_MASK
+	LDA	NET_DEAD_MASK
+	AND	PLRMSKINV,Y
+	STA	NET_DEAD_MASK
+	LDA	NET_ERASE_MASK
+	AND	PLRMSKINV,Y
+	STA	NET_ERASE_MASK
+	JSR	NET_AUTH_REPOS	;respawn/join is a real discontinuity, not drift:
+	JSR	SETSTIL		;put render and simulation on the spawn cell now.
+	CPX	NET_LOCAL_PID	;our own respawn lands as a wholesale jump;
+	BNE	NRAW_X		;keep it out of the drift metric
+	LDA	#30
+	STA	NET_DIAG_HOLD
+NRAW_X	RTS
+; Pending respawn: the server says this actor has been killed.
+;
+; Play the evaporate the original game plays. It was still here and still
+; wired into the effects chain, but only MNHTCHK reached it -- the client's own
+; hit detection -- so a death you were told about by the server just blinked out
+; while a death you detected yourself puffed into smoke. Same event, two
+; appearances, depending on who noticed. Now every death animates.
+;
+; Deliberately does NOT set NET_DEAD_MASK: the dead branch in the move loop
+; skips the effects chain entirely, so hiding the actor here would cancel the
+; animation before its first frame. ENDEVAP sets the hide when the smoke
+; clears, which is where the original put it too.
+NRW_PEND
+	LDA	NET_RESP_FLAGS
+	AND	#$01
+	BEQ	NRW_X
+	TXA
+	TAY
+	LDA	NET_DEAD_MASK	;already hidden: this death is done with
+	AND	PLRMSK,Y
+	BNE	NRW_X
+	LDA	ACTFLAG,X	;already evaporating -- our own hit detection got
+	AND	#$02		;here first, or this is an echoed RESPAWN
+	BNE	NRW_X
+	JSR	ERASMAN		;wizard off the board, then smoke in its place
+	LDA	ACTFLAG,X
+	ORA	#$02
+	STA	ACTFLAG,X
+	LDA	#9		;evaporate counter, as STALLEV sets it
+	STA	MOVEST,X
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+NRW_X	RTS
+
 ; queue latest authoritative shot packet per slot (0..3), apply in VBI
 NET_SHOT_QUEUE
 	LDA	NET_SHOT_PKT+2
 	CMP	#4
 	BCS	NSQ_X
+	TAX
 	; shot flags use only low 3 bits (active + direction); drop malformed flags.
 	LDA	NET_SHOT_PKT+5
 	AND	#$F8
 	BNE	NSQ_X
-	LDA	NET_SHOT_PKT+2
+	INC	NET_SHOT_SEQ,X
+	TXA
 	ASL
-	STA	NET_RX_TMP
+	STA	NET_RX_TMP0
 	ASL
 	CLC
-	ADC	NET_RX_TMP	;pid*6
+	ADC	NET_RX_TMP0	;pid*6
 	TAY
 	LDX	#0
 NSQ_CP
@@ -1579,11 +5881,10 @@ NSQ_CP
 	INY
 	CPX	#6
 	BCC	NSQ_CP
-	LDA	NET_SHOT_PKT+2
-	TAY
-	LDA	NET_SHOT_PEND
-	ORA	PLRMSK,Y
-	STA	NET_SHOT_PEND
+	LDX	NET_SHOT_PKT+2	;the apply path bounds this pid before using it as
+	CPX	#4		;an index; this publish path did not, so a wire byte
+	BCS	NSQ_X		;could INC up to 255 bytes past a 4-entry array --
+	INC	NET_SHOT_SEQ,X	;NET_PX_X and the rest of net state sit in range
 NSQ_X	RTS
 
 ; --- NET respawn apply (type 0x52, 6 bytes) ---
@@ -1593,75 +5894,267 @@ NET_RESP_APPLY
 	BCS	NRESP_X
 	TAX
 	LDA	NET_RESP_PKT+5	;flags
-	STA	NET_RX_TMP
+	STA	NET_RX_TMP0
 	AND	#$02	;final spawn?
 	BEQ	NRESP_PEND
-	; final spawn: latch position, request reconcile, and unhide actor.
+	; final spawn: validate before staging for VBI-owned commit.
 	LDA	NET_RESP_PKT+3	;x
 	CMP	#20
 	BCS	NRESP_X
 	BEQ	NRESP_X
 	CMP	#19
 	BEQ	NRESP_X
-	STA	NET_PX_X,X
 	LDA	NET_RESP_PKT+4	;y
 	CMP	#19
 	BCS	NRESP_X
 	BEQ	NRESP_X
 	CMP	#18
 	BEQ	NRESP_X
-	STA	NET_PX_Y,X
-	LDA	#1
-	STA	NET_P_PENDING,X
-	TXA
-	TAY
-	LDA	NET_GUARD_MASK
-	ORA	PLRMSK,Y
-	STA	NET_GUARD_MASK
-NRESP_CLR
-	TXA
-	TAY
-	LDA	NET_DEAD_MASK
-	AND	PLRMSKINV,Y
-	STA	NET_DEAD_MASK
-	LDA	NET_ERASE_MASK
-	AND	PLRMSKINV,Y
-	STA	NET_ERASE_MASK
-	RTS
+	JMP	NRESP_Q
 NRESP_PEND
 	; pending respawn: hide actor until final spawn packet arrives.
-	LDA	NET_RX_TMP
+	LDA	NET_RX_TMP0
 	AND	#$01	;pending respawn?
 	BEQ	NRESP_X
+NRESP_Q
+	INC	NET_RESP_SEQ,X
 	TXA
+	ASL
+	STA	NET_RX_TMP0
+	ASL
+	CLC
+	ADC	NET_RX_TMP0	;pid*6
 	TAY
-	LDA	NET_DEAD_MASK
-	ORA	PLRMSK,Y
-	STA	NET_DEAD_MASK
-	LDA	NET_ERASE_MASK
-	ORA	PLRMSK,Y
-	STA	NET_ERASE_MASK
+	LDX	#0
+NRESP_CP
+	LDA	NET_RESP_PKT,X
+	STA	NET_RESP_BUF,Y
+	INX
+	INY
+	CPX	#6
+	BCC	NRESP_CP
+	LDX	NET_RESP_PKT+2	;same unbounded index as the shot publish path
+	CPX	#4
+	BCS	NRESP_X
+	INC	NET_RESP_SEQ,X
 NRESP_X	RTS
+
+; mainline RX pointer helpers. These keep parser/apply work off gameplay/VBI
+; scratch by using dedicated net-state pointers plus self-modifying absolute,Y
+; accesses instead of POINTER/POINTR0/SCRPTR.
+NET_RX_LDA_PTR
+	LDA	NET_RX_PTR
+	STA	NRLP_I+1
+	LDA	NET_RX_PTR+1
+	STA	NRLP_I+2
+NRLP_I	LDA	$FFFF,Y
+	RTS
+
+NET_RX_STA_PTR
+	STA	NET_RX_TMP1
+	LDA	NET_RX_PTR
+	STA	NRSP_I+1
+	LDA	NET_RX_PTR+1
+	STA	NRSP_I+2
+	LDA	NET_RX_TMP1
+NRSP_I	STA	$FFFF,Y
+	RTS
+
+NET_RX_LDA_PTR0
+	LDA	NET_RX_PTR0
+	STA	NRLP0_I+1
+	LDA	NET_RX_PTR0+1
+	STA	NRLP0_I+2
+NRLP0_I	LDA	$FFFF,Y
+	RTS
+
+NET_RX_STA_PTR0
+	STA	NET_RX_TMP1
+	LDA	NET_RX_PTR0
+	STA	NRSP0_I+1
+	LDA	NET_RX_PTR0+1
+	STA	NRSP0_I+2
+	LDA	NET_RX_TMP1
+NRSP0_I	STA	$FFFF,Y
+	RTS
+
+NET_RX_STA_SCRPTR
+	STA	NET_RX_TMP1
+	LDA	NET_RX_SCRPTR
+	STA	NRSS_I+1
+	LDA	NET_RX_SCRPTR+1
+	STA	NRSS_I+2
+	LDA	NET_RX_TMP1
+NRSS_I	STA	$FFFF,Y
+	RTS
+
+; NET_RX_COUNT=x, NET_RX_HOLD=y -> NET_RX_PTR=&NET_MAP_CELLS[y*20+x]
+NET_RX_MAP_PTR
+	LDA	#0
+	STA	NET_RX_PTR
+	STA	NET_RX_PTR+1
+	LDY	NET_RX_HOLD
+	BEQ	NRMP_ROWX
+NRMP_ROW
+	LDA	NET_RX_PTR
+	CLC
+	ADC	#20
+	STA	NET_RX_PTR
+	BCC	NRMP_RN
+	INC	NET_RX_PTR+1
+NRMP_RN
+	DEY
+	BNE	NRMP_ROW
+NRMP_ROWX
+	LDA	NET_RX_PTR
+	CLC
+	ADC	NET_RX_COUNT
+	STA	NET_RX_PTR
+	BCC	NRMP_BASE
+	INC	NET_RX_PTR+1
+NRMP_BASE
+	LDA	NET_RX_PTR
+	CLC
+	ADC	# <NET_MAP_CELLS
+	STA	NET_RX_PTR
+	LDA	NET_RX_PTR+1
+	ADC	# >NET_MAP_CELLS
+	STA	NET_RX_PTR+1
+	RTS
+
+NET_RX_MAP_CLRXY
+	JSR	NET_RX_MAP_PTR
+	LDY	#0
+	LDA	#0
+	JSR	NET_RX_STA_PTR
+	RTS
+
+; NET_RX_COUNT=x, NET_RX_HOLD=y -> NET_RX_SCRPTR=&GAMESCR[y*40 + x*2]
+NET_RX_SCREEN_PTR
+	LDA	NET_RX_HOLD
+	STA	NET_RX_PTR
+	LDA	#0
+	STA	NET_RX_PTR+1
+	STA	NET_RX_SCRPTR
+	STA	NET_RX_SCRPTR+1
+	LDA	#$28
+	STA	NET_RX_TMP0
+	LDY	#6
+NRSP_MUL
+	LSR	NET_RX_TMP0
+	BCC	NRSP_MUL2
+	LDA	NET_RX_SCRPTR
+	CLC
+	ADC	NET_RX_PTR
+	STA	NET_RX_SCRPTR
+	LDA	NET_RX_SCRPTR+1
+	ADC	NET_RX_PTR+1
+	STA	NET_RX_SCRPTR+1
+NRSP_MUL2
+	ASL	NET_RX_PTR
+	ROL	NET_RX_PTR+1
+	DEY
+	BNE	NRSP_MUL
+	LDA	NET_RX_COUNT
+	ASL
+	ADC	NET_RX_SCRPTR
+	BCC	NRSP_BASE
+	INC	NET_RX_SCRPTR+1
+NRSP_BASE
+	CLC
+	ADC	# <GAMESCR
+	STA	NET_RX_SCRPTR
+	LDA	NET_RX_SCRPTR+1
+	ADC	# >GAMESCR
+	STA	NET_RX_SCRPTR+1
+	RTS
+
+; validate BRICK_FULL before any live map/screen commit.
+; carry clear = valid, carry set = invalid.
+NET_BRICK_FULL_VALIDATE
+	LDA	NET_BRICK_BUF+2
+	AND	#$01
+	BNE	NBFV_FOK
+	SEC
+	RTS
+NBFV_FOK
+	LDA	# <[NET_BRICK_BUF+3]
+	STA	NET_RX_PTR
+	LDA	# >[NET_BRICK_BUF+3]
+	STA	NET_RX_PTR+1
+	LDY	#0
+	JSR	NET_RX_LDA_PTR
+	STA	NET_RX_HOLD
+	LDA	#1
+	STA	NET_RX_COUNT
+	LDX	#0
+NBFV_ROW
+	LDA	#0
+	STA	NET_MAP_COL
+NBFV_COL
+	CPX	#0
+	BEQ	NBFV_REQ
+	CPX	#18
+	BEQ	NBFV_REQ
+	LDA	NET_MAP_COL
+	BEQ	NBFV_REQ
+	CMP	#19
+	BNE	NBFV_ADV
+NBFV_REQ
+	LDA	NET_RX_HOLD
+	AND	NET_RX_COUNT
+	BNE	NBFV_ADV
+	SEC
+	RTS
+NBFV_ADV
+	LDA	NET_RX_COUNT
+	ASL
+	STA	NET_RX_COUNT
+	BNE	NBFV_BITOK
+	LDY	#0
+	INC	NET_RX_PTR
+	BNE	NBFV_LDB
+	INC	NET_RX_PTR+1
+NBFV_LDB
+	JSR	NET_RX_LDA_PTR
+	STA	NET_RX_HOLD
+	LDA	#1
+	STA	NET_RX_COUNT
+NBFV_BITOK
+	INC	NET_MAP_COL
+	LDA	NET_MAP_COL
+	CMP	#20
+	BCC	NBFV_COL
+	INX
+	CPX	#19
+	BCC	NBFV_ROW
+	CLC
+	RTS
 
 ; --- NET brick full apply (type 0x50, 51 bytes) ---
 NET_BRICK_FULL_APPLY
+	LDA	#0
+	STA	NET_BF_WRITES	;cells rewritten by this pass
+	INC	NET_BF_CNT	;map repairs applied (wraps)
+	LDA	NET_BRICK_DONE	;0 = first sync (write everything),
+	STA	NET_BRICK_RESYNC	;1 = repair (touch only what changed)
 	LDA	# <[NET_BRICK_BUF+3]
-	STA	POINTER
+	STA	NET_RX_PTR
 	LDA	# >[NET_BRICK_BUF+3]
-	STA	POINTER+1
+	STA	NET_RX_PTR+1
 	LDY	#0
-	LDA	(POINTER),Y
-	STA	HOLDIT		;current packed brick bits byte
+	JSR	NET_RX_LDA_PTR
+	STA	NET_RX_HOLD		;current packed brick bits byte
 	LDA	#1
-	STA	COUNT		;current bit mask (1,2,4,...128)
+	STA	NET_RX_COUNT		;current bit mask (1,2,4,...128)
 	LDA	# <GAMESCR
-	STA	SCRPTR
+	STA	NET_RX_SCRPTR
 	LDA	# >GAMESCR
-	STA	SCRPTR+1
+	STA	NET_RX_SCRPTR+1
 	LDA	# <NET_MAP_CELLS
-	STA	POINTR0
+	STA	NET_RX_PTR0
 	LDA	# >NET_MAP_CELLS
-	STA	POINTR0+1
+	STA	NET_RX_PTR0+1
 	LDX	#0		;row 0..18
 NBF_ROW
 	LDY	#0		;byte offset in 40-byte row
@@ -1675,66 +6168,88 @@ NBF_COL
 	BEQ	NBF_WALL
 	CMP	#19
 	BEQ	NBF_WALL
-	LDA	HOLDIT
-	AND	COUNT
+	LDA	NET_RX_HOLD
+	AND	NET_RX_COUNT
 	BEQ	NBF_EMPTY
 	LDA	#1
-	STA	NET_RX_TMP
+	STA	NET_RX_TMP0
 	LDA	#$FE
 	JMP	NBF_PUT
 NBF_EMPTY
 	LDA	#0
-	STA	NET_RX_TMP
+	STA	NET_RX_TMP0
 	LDA	#0
 	JMP	NBF_PUT
 NBF_WALL
 	LDA	#1
-	STA	NET_RX_TMP
+	STA	NET_RX_TMP0
 	LDA	#$A0
 NBF_PUT
-	STA	(SCRPTR),Y
+	STA	NET_BRICK_GLYPH
+	STY	NET_RX_YSAVE
+	LDA	NET_BRICK_RESYNC
+	BEQ	NBF_WRITE
+	LDY	#0		;repair pass: a cell that already agrees is left
+	JSR	NET_RX_LDA_PTR0	;untouched, so shots drawn over the maze survive
+	CMP	NET_RX_TMP0
+	BEQ	NBF_SKIP
+NBF_WRITE
+	INC	NET_BF_WRITES
+	JSR	NBF_ACTOR_HERE	;C set: something is drawn on this cell
+	BCC	NBF_PAINT
+	INC	NET_RX_YSAVE	;screen belongs to the actor; still step the cell
+	JMP	NBF_MAPONLY
+NBF_PAINT
+	LDY	NET_RX_YSAVE
+	LDA	NET_BRICK_GLYPH
+	JSR	NET_RX_STA_SCRPTR
 	INY
-	STA	(SCRPTR),Y
+	JSR	NET_RX_STA_SCRPTR
+	STY	NET_RX_YSAVE
+NBF_MAPONLY
 	; store authoritative collision map cell (0 empty, 1 blocked).
-	TYA
-	PHA
 	LDY	#0
-	LDA	NET_RX_TMP
-	STA	(POINTR0),Y
-	INC	POINTR0
+	LDA	NET_RX_TMP0
+	JSR	NET_RX_STA_PTR0
+	JMP	NBF_MADV
+NBF_SKIP
+	INC	NET_RX_YSAVE	;still step over this cell's two screen bytes
+NBF_MADV
+	INC	NET_RX_PTR0
 	BNE	NBF_MPTR
-	INC	POINTR0+1
+	INC	NET_RX_PTR0+1
 NBF_MPTR
-	PLA
-	TAY
+	LDY	NET_RX_YSAVE
 	; next bit in packed brick stream (LSB-first across 48 payload bytes).
-	LDA	COUNT
+	LDA	NET_RX_COUNT
 	ASL
-	STA	COUNT
+	STA	NET_RX_COUNT
 	BNE	NBF_BITOK
-	STY	NET_RX_TMP
+	STY	NET_RX_YSAVE
 	LDY	#0
-	INC	POINTER
+	INC	NET_RX_PTR
 	BNE	NBF_LDB
-	INC	POINTER+1
+	INC	NET_RX_PTR+1
 NBF_LDB
-	LDA	(POINTER),Y
-	STA	HOLDIT
-	LDY	NET_RX_TMP
+	JSR	NET_RX_LDA_PTR
+	STA	NET_RX_HOLD
+	LDY	NET_RX_YSAVE
 	LDA	#1
-	STA	COUNT
+	STA	NET_RX_COUNT
 NBF_BITOK
 	INY
 	INC	NET_MAP_COL
 	LDA	NET_MAP_COL
 	CMP	#20
-	BCC	NBF_COL
-	LDA	SCRPTR
+	BCS	NBF_ROWEND	;cell loop grew past branch range
+	JMP	NBF_COL
+NBF_ROWEND
+	LDA	NET_RX_SCRPTR
 	CLC
 	ADC	#40
-	STA	SCRPTR
+	STA	NET_RX_SCRPTR
 	BCC	NBF_NXROW
-	INC	SCRPTR+1
+	INC	NET_RX_SCRPTR+1
 NBF_NXROW
 	INX
 	CPX	#19
@@ -1745,62 +6260,30 @@ NBF_DONE
 
 ; --- NET brick delta apply (type 0x51, 4 bytes) ---
 NET_BRICK_DELTA_APPLY
-	LDA	NET_SNAP_BUF+2	;x
-	CMP	#20
-	BCS	NBRK_X
+	LDA	NET_SNAP_BUF+2	;x: interior only, 1..18
 	BEQ	NBRK_X		;outer wall immutable
 	CMP	#19
-	BEQ	NBRK_X
-	STA	COUNT
-	LDA	NET_SNAP_BUF+3	;y
-	CMP	#19
 	BCS	NBRK_X
+	STA	NET_RX_COUNT
+	LDA	NET_SNAP_BUF+3	;y: interior only, 1..17
 	BEQ	NBRK_X		;outer wall immutable
 	CMP	#18
-	BEQ	NBRK_X
-	STA	HOLDIT
-	JSR	NET_MAP_CLRXY
-	LDA	HOLDIT
-	STA	POINTER
-	LDA	#0
-	STA	POINTER+1
-	STA	SCRPTR
-	STA	SCRPTR+1
-	LDA	#$28
-	STA	POINTR0
-	LDY	#6
-NBRK_MUL
-	LSR	POINTR0
-	BCC	NBRK_MUL2
-	LDA	SCRPTR
-	CLC
-	ADC	POINTER
-	STA	SCRPTR
-	LDA	SCRPTR+1
-	ADC	POINTER+1
-	STA	SCRPTR+1
-NBRK_MUL2
-	ASL	POINTER
-	ROL	POINTER+1
-	DEY
-	BNE	NBRK_MUL
-	LDA	COUNT
-	ASL
-	ADC	SCRPTR
-	BCC	NBRK_BASE
-	INC	SCRPTR+1
-NBRK_BASE
-	CLC
-	ADC	# <GAMESCR
-	STA	SCRPTR
-	LDA	SCRPTR+1
-	ADC	# >GAMESCR
-	STA	SCRPTR+1
+	BCS	NBRK_X
+	STA	NET_RX_HOLD
+	INC	NET_BD_CNT	;deltas applied; far more than the server sent
+	JSR	NET_RX_MAP_CLRXY	;would mean misparsed packets are creating them
+	LDA	NET_RX_COUNT	;the full-map ownership check takes a byte column
+	ASL			;in NET_RX_YSAVE and the row in X.
+	STA	NET_RX_YSAVE
+	LDX	NET_RX_HOLD
+	JSR	NBF_ACTOR_HERE
+	BCS	NBRK_X		;actor owns the display pair until it moves away
+	JSR	NET_RX_SCREEN_PTR
 	LDY	#1
 	LDA	#0
-	STA	(SCRPTR),Y
+	JSR	NET_RX_STA_SCRPTR
 	DEY
-	STA	(SCRPTR),Y
+	JSR	NET_RX_STA_SCRPTR
 NBRK_X	RTS
 
 ; --- NET shot apply (type 0x42, 6 bytes) ---
@@ -1808,15 +6291,32 @@ NET_SHOT_APPLY
 	LDA	NET_SHOT_WRK+2
 	CMP	#4	;authoritative shots for p0..p3
 	BCC	NSHOT_PIDOK
-	JMP	NSHOT_EXIT
+	LDA	#1
+	RTS
 NSHOT_PIDOK
 	TAX
 	LDA	NET_SHOT_WRK+5
 	BEQ	NSHOT_CLR
+	TXA
+	TAY
+	LDA	NET_DEAD_MASK
+	ORA	NET_ERASE_MASK
+	AND	PLRMSK,Y
+	BNE	NSHOT_CLR
 	; flags bit0=active, bits1..2=dir (0 right,1 down,2 left,3 up).
+	LDA	NET_SHOT_WRK+5
 	LSR
 	AND	#$03
 	STA	NET_RX_TMP
+	TXA
+	TAY
+	LDA	NET_SHOT_DRAWN
+	AND	PLRMSK,Y
+	BNE	NSHOT_PKTXY
+	JSR	NET_SHOT_VISIBLE_ORIGIN
+	BNE	NSHOT_PKTXY
+	JMP	NSHOT_DEFER
+NSHOT_PKTXY
 	LDA	NET_SHOT_WRK+3
 	CMP	#20
 	BCS	NSHOT_CLR
@@ -1845,23 +6345,19 @@ NSHOT_DCHK
 	BCS	NSHOT_CLR
 	JMP	NSHOT_SET
 NSHOT_CLR
-	LDA	ACTFLAG,X
-	BPL	NSHOT_EXIT
-	JSR	ERASHOT
-	LDA	ACTFLAG,X
-	AND	#$7F
-	STA	ACTFLAG,X
-	TXA
-	ASL
-	TAY
 	LDA	#0
-	STA	AUDC1,Y
-	STA	SOUND,X
+	STA	NET_SHOT_TTL,X
+	JSR	NET_SHOT_CLEAR_X
 	JMP	NSHOT_EXIT
 NSHOT_SET
+	LDA	#NET_SHOT_TTL_MAX
+	STA	NET_SHOT_TTL,X
 	JSR	NET_SHOT_PTR
-	LDA	ACTFLAG,X
-	BPL	NSHOT_DRAW
+	TXA
+	TAY
+	LDA	NET_SHOT_DRAWN
+	AND	PLRMSK,Y
+	BEQ	NSHOT_DRAW
 	LDA	SHOTLO,X
 	CMP	SCRPTR
 	BNE	NSHOT_REDRAW
@@ -1887,6 +6383,7 @@ NSHOT_DRAW
 	LDA	SHOTDIR,X
 	AND	#$01	;vertical shots occupy two screen rows; preserve that for ERASHOT
 	STA	SHOTMST,X
+	JSR	NET_SHOT_MARK_X
 	LDA	ACTFLAG,X
 	ORA	#$80
 	STA	ACTFLAG,X
@@ -1902,9 +6399,78 @@ NSHOT_OFSOK
 	LDA	# >SHOTSHP
 	ADC	#0
 	STA	POINTER+1
+	; SETMOVE writes four characters. Right and down carry their visible glyphs
+	; in bytes 2,3 of the entry and trail blanks forward, away from the shooter.
+	; Left and up carry them in bytes 0,1 and trail $00,$00 -- and the shot sits
+	; one cell back (LOC-2) or one row up (LOC-40), so those blanks land exactly
+	; on the shooter's own two cells and erase the wizard. Draw only the visible
+	; pair for those two directions.
+	CPY	#2
+	BCS	NSHOT_HALF
 	LDA	SHOTDIR,X
 	JSR	SETMOVE
+	JMP	NSHOT_EXIT
+NSHOT_HALF
+	LDY	#1
+NSHOT_HLP
+	LDA	(POINTER),Y
+	STA	(SCRPTR),Y
+	DEY
+	BPL	NSHOT_HLP
 NSHOT_EXIT
+	LDA	#1
+	RTS
+NSHOT_DEFER
+	LDA	#0
+	RTS
+
+; use committed authoritative-visible actor state for the first visible draw of
+; a slot's shot. If the actor is hidden, awaiting reconcile, or not yet facing
+; the authoritative fire direction, defer and let VBI retry after the matching
+; snapshot/respawn state is visible.
+NET_SHOT_VISIBLE_ORIGIN
+	LDA	NET_SHOT_WRK+2
+	CMP	NET_LOCAL_PID
+	BNE	NSVO_PEND
+	LDA	NET_P_PENDING,X
+	BNE	NSVO_DEF
+NSVO_PEND
+	LDA	NET_P_PENDING,X
+	BNE	NSVO_DEF
+	LDA	NET_PJOY,X
+	JSR	NET_JOYDIRA
+	CMP	#$FF
+	BNE	NSVO_FACE
+	LDA	DIR,X
+NSVO_FACE
+	CMP	NET_RX_TMP
+	BNE	NSVO_DEF
+	LDA	NET_PX_X,X
+	STA	NET_SHOT_WRK+3
+	LDA	NET_PX_Y,X
+	STA	NET_SHOT_WRK+4
+	LDY	NET_RX_TMP
+	CPY	#0
+	BNE	NSVO_CHKD
+	INC	NET_SHOT_WRK+3
+	JMP	NSVO_OK
+NSVO_CHKD
+	CPY	#1
+	BNE	NSVO_CHKL
+	INC	NET_SHOT_WRK+4
+	JMP	NSVO_OK
+NSVO_CHKL
+	CPY	#2
+	BNE	NSVO_CHKU
+	DEC	NET_SHOT_WRK+3
+	JMP	NSVO_OK
+NSVO_CHKU
+	DEC	NET_SHOT_WRK+4
+NSVO_OK
+	LDA	#1
+	RTS
+NSVO_DEF
+	LDA	#0
 	RTS
 
 ; compute SCRPTR from NET_SHOT_WRK[3]=x, [4]=y
@@ -1946,9 +6512,11 @@ NSP_BASE
 	STA	SCRPTR+1
 	RTS
 
-; compute LOCLO/LOCHI from LOCX/LOCY for actor X
+; compute LOCLO/LOCHI from RNDX/RNDY for actor X.  LOCLO/LOCHI addresses the
+; character cell the actor is drawn in, so it follows the render position and
+; not the simulation cell.
 NET_CALC_LOC
-	LDA	LOCY,X
+	LDA	RNDY,X
 	STA	POINTER	;Y
 	LDA	#0
 	STA	SCRPTR
@@ -1970,7 +6538,7 @@ NC_MUL2	ASL	POINTER
 	ROL	POINTER+1
 	DEY
 	BNE	NC_MUL
-	LDA	LOCX,X
+	LDA	RNDX,X
 	ASL
 	ADC	SCRPTR
 	BCC	NC_ADDBASE
@@ -2062,6 +6630,25 @@ NET_AHEAD_FREE
 	STA	NET_AHEAD_X
 	LDA	LOCY,X
 	STA	NET_AHEAD_Y
+	JMP	NAF_DIR
+;
+; The same test seeded from the drawn position instead of the simulation cell,
+; for the render chase.  The walk has to respect bricks even though nothing
+; collides with the render position, because ERASMAN blanks the two characters
+; it walks onto and the map is only repainted on a server delta -- so a chase
+; through a brick erased it from the screen while it went on stopping the
+; player, which is exactly what a walk-through-walls report looks like.
+NET_AHEAD_FREE_RND
+	STX	NET_AHEAD_ID
+	LDA	COUNT
+	PHA
+	LDA	HOLDIT
+	PHA
+	LDA	RNDX,X
+	STA	NET_AHEAD_X
+	LDA	RNDY,X
+	STA	NET_AHEAD_Y
+NAF_DIR
 	LDA	DIR,X
 	BEQ	NAF_XP
 	CMP	#1
@@ -2101,6 +6688,14 @@ NAF_OCCLP
 NAF_OLP
 	CPX	NET_AHEAD_ID
 	BEQ	NAF_ONX
+	TXA			;a slot awaiting respawn is not on the board.
+	TAY			;the server stopped counting it in collision, so
+	LDA	NET_DEAD_MASK	;predicting otherwise here would make us refuse a
+	AND	PLRMSK,Y	;move the server allows, drift, and then snap.
+	BNE	NAF_ONX
+	LDA	ACTFLAG,X	;same while it is evaporating: the server took it
+	AND	#$02		;off the board when it sent the hit, and the smoke
+	BNE	NAF_ONX		;is just the animation catching up
 	LDA	LOCX,X
 	CMP	NET_AHEAD_X
 	BNE	NAF_ONX
@@ -2161,6 +6756,34 @@ NGU_YHI	LDA	LOCY,X
 	STA	LOCY,X
 	LDA	#1
 	STA	NET_RX_TMP
+	LDA	RNDX,X		;the draw pointer below is built from the render
+	CMP	#1		;pair, so it needs the same clamp as the
+	BCS	NGU_RXHI	;simulation pair above
+	LDA	#1
+	STA	RNDX,X
+	LDA	#1
+	STA	NET_RX_TMP
+NGU_RXHI	LDA	RNDX,X
+	CMP	#19
+	BCC	NGU_RYLO
+	LDA	#18
+	STA	RNDX,X
+	LDA	#1
+	STA	NET_RX_TMP
+NGU_RYLO	LDA	RNDY,X
+	CMP	#1
+	BCS	NGU_RYHI
+	LDA	#1
+	STA	RNDY,X
+	LDA	#1
+	STA	NET_RX_TMP
+NGU_RYHI	LDA	RNDY,X
+	CMP	#18
+	BCC	NGU_PTR
+	LDA	#17
+	STA	RNDY,X
+	LDA	#1
+	STA	NET_RX_TMP
 NGU_PTR
 ;VERIFY LOC PTR INSIDE [GAMESCR, GAMESCR+758]
 	LDA	LOCHI,X
@@ -2188,16 +6811,20 @@ NGU_X	RTS
 ;
 ;HOSTNAME INPUT
 ;
-HOST_INPUT	LDX	#0
-	JSR	HOST_CLR
-HI_LEN	LDA	HOSTBUF,X
+; Text field editor shared by the host and name prompts.
+; INBUF -> buffer, INPROM -> prompt, INROW -> 40-byte screen row, INMAX = limit.
+; The caller clears the screen, so several fields can stay visible at once.
+TXT_INPUT
+	LDY	#0
+HI_LEN	LDA	(INBUF),Y
 	BEQ	HI_LEN_DONE
-	INX
-	CPX	#HOST_MAX
+	INY
+	CPY	INMAX
 	BCC	HI_LEN
-HI_LEN_DONE	STX	HOSTLEN
-	JSR	HOST_DRAW
-HI_LOOP	LDA	KEYIN
+HI_LEN_DONE	STY	HOSTLEN
+	JSR	TXT_DRAW
+HI_LOOP	JSR	TXT_CURSOR
+	LDA	KEYIN
 	CMP	#$FF
 	BEQ	HI_LOOP
 	TAY
@@ -2206,10 +6833,26 @@ HI_LOOP	LDA	KEYIN
 	LDA	(KEYCODES),Y
 	CMP	#$9B	;RETURN
 	BEQ	HI_DONE
+	CMP	#$1B	;ESC cancels setup without attempting a connection
+	BEQ	HI_CANCEL
 	CMP	#$7E	;BACKSPACE
 	BEQ	HI_BS
 	CMP	#$08
 	BEQ	HI_BS
+	; The port field is decimal-only. HOSTBUF retains the hostname filter below,
+	; so punctuation still cannot become part of the NS_INIT host string.
+	LDX	INBUF+1
+	CPX	# >PORTBUF
+	BNE	HI_ANY
+	LDX	INBUF
+	CPX	# <PORTBUF
+	BNE	HI_ANY
+	CMP	#'0'
+	BCC	HI_LOOP
+	CMP	#'9'+1
+	BCC	HI_ADD
+	BCS	HI_LOOP
+HI_ANY
 	CMP	#$20
 	BCC	HI_LOOP
 	CMP	#'0'
@@ -2228,48 +6871,132 @@ HI_CHKDOT	CMP	#'.'
 	BEQ	HI_ADD
 	CMP	#'-'
 	BNE	HI_LOOP
-HI_ADD	LDX	HOSTLEN
-	CPX	#HOST_MAX
+HI_ADD	LDY	HOSTLEN
+	CPY	INMAX
 	BCS	HI_LOOP
-	STA	HOSTBUF,X
-	INX
-	STX	HOSTLEN
+	STA	(INBUF),Y
+	INY
+	STY	HOSTLEN
 	LDA	#0
-	STA	HOSTBUF,X
-	JSR	HOST_DRAW
+	STA	(INBUF),Y
+	JSR	TXT_DRAW
 	JMP	HI_LOOP
-HI_BS	LDX	HOSTLEN
+HI_BS	LDY	HOSTLEN
 	BEQ	HI_LOOP
-	DEX
-	STX	HOSTLEN
+	DEY
+	STY	HOSTLEN
 	LDA	#0
-	STA	HOSTBUF,X
-	JSR	HOST_DRAW
+	STA	(INBUF),Y
+	JSR	TXT_DRAW
 	JMP	HI_LOOP
-HI_DONE	RTS
+HI_DONE	JSR	TXT_CUROFF	;do not leave a block on the field we are leaving
+	CLC
+	RTS
+HI_CANCEL
+	JSR	TXT_CUROFF
+	SEC
+	RTS
 ;
-HOST_DRAW	LDX	#39
+; Blink a block at the insertion point so the player can see where typing goes.
+; The host screen is ANTIC mode 2, where $80 is an inverse space.
+TXT_CURSOR
+	LDA	RTCLOK
+	AND	#$10		;~2 blinks a second
+	BEQ	TXT_CUROFF
+	LDA	#$80
+	LDY	INCURS
+	CPY	#40
+	BCS	TXC_X
+	STA	(INROW),Y
+TXC_X	RTS
+TXT_CUROFF
 	LDA	#$00
-HD_CLR	STA	HOSTSCR,X
-	DEX
+	LDY	INCURS
+	CPY	#40
+	BCS	TXO_X
+	STA	(INROW),Y
+TXO_X	RTS
+;
+TXT_DRAW	LDY	#39
+	LDA	#$00
+HD_CLR	STA	(INROW),Y
+	DEY
 	BPL	HD_CLR
 	LDY	#0
-HD_PR	LDA	HOSTPROMPT,Y
+HD_PR	LDA	(INPROM),Y
+	CMP	#$FF	;space is screen code $00, so $FF ends the string
 	BEQ	HD_PR_DONE
-	STA	HOSTSCR,Y
+	STA	(INROW),Y
 	INY
 	BNE	HD_PR
-HD_PR_DONE	LDX	#0
-HD_HST	LDA	HOSTBUF,X
+HD_PR_DONE	STY	HOST_COL	;screen column after the prompt
+	LDY	#0		;buffer index
+HD_HST	LDA	(INBUF),Y
 	BEQ	HD_HST_DONE
 	JSR	HOST_SCR
-	STA	HOSTSCR,Y
+	STY	HOST_SRC
+	LDY	HOST_COL
+	STA	(INROW),Y
+	LDY	HOST_SRC
+	INC	HOST_COL
 	INY
-	INX
-	CPY	#40
-	BCS	HD_HST_DONE
-	JMP	HD_HST
-HD_HST_DONE	RTS
+	LDA	HOST_COL
+	CMP	#40
+	BCC	HD_HST
+HD_HST_DONE
+	LDA	HOST_COL
+	STA	INCURS
+	RTS
+;
+; field selectors
+HOST_FIELD
+	LDA	# <HOSTBUF
+	STA	INBUF
+	LDA	# >HOSTBUF
+	STA	INBUF+1
+	LDA	# <HOSTPROMPT
+	STA	INPROM
+	LDA	# >HOSTPROMPT
+	STA	INPROM+1
+	LDA	# <HOSTSCR
+	STA	INROW
+	LDA	# >HOSTSCR
+	STA	INROW+1
+	LDA	#HOST_MAX
+	STA	INMAX
+	RTS
+PORT_FIELD
+	LDA	# <PORTBUF
+	STA	INBUF
+	LDA	# >PORTBUF
+	STA	INBUF+1
+	LDA	# <PORTPROMPT
+	STA	INPROM
+	LDA	# >PORTPROMPT
+	STA	INPROM+1
+	LDA	# <[HOSTSCR+40]	;row 1, directly below the host
+	STA	INROW
+	LDA	# >[HOSTSCR+40]
+	STA	INROW+1
+	LDA	#PORT_MAX
+	STA	INMAX
+	RTS
+NAME_FIELD
+	LDA	# <NAMEBUF
+	STA	INBUF
+	LDA	# >NAMEBUF
+	STA	INBUF+1
+	LDA	# <NAMEPROMPT
+	STA	INPROM
+	LDA	# >NAMEPROMPT
+	STA	INPROM+1
+	LDA	# <[HOSTSCR+160]	;row 4, clear of the status message on row 2
+	STA	INROW
+	LDA	# >[HOSTSCR+160]
+	STA	INROW+1
+	LDA	#NAME_LEN
+	STA	INMAX
+	RTS
 ;
 HOST_SCR	CMP	#'a'
 	BCC	HOST_SCUP
@@ -2292,20 +7019,111 @@ HOST_SCL0	SEC
 HOST_SCSP	LDA	#$00
 	RTS
 ;
-HOST_BOOT	LDA	#$40	;DISABLE DLI
-	STA	NMIEN
-	LDA	CHBASE
-	STA	HOST_CHSAV
-	LDA	#$E0	;ROM charset
-	STA	CHBASE
-	LDA	# <HOSTDISP	;HOST INPUT SCREEN
-	STA	DLIST
-	LDA	# >HOSTDISP
-	STA	DLIST+1
-	JSR	HOST_INPUT
-	LDA	HOST_CHSAV
-	STA	CHBASE
+; Same conversion, then filtered for the EMBEDDED font.
+;
+; Several screen codes are not characters there: $08-$0F are PL0CHR, the
+; per-player coalesce tiles SETFUZZ rewrites at runtime, and $1E, $1F and
+; $3B-$3F hold title artwork.  A name reaching one of those paints a piece of
+; the logo, or fights the wizard's own image, in the scoreboard.
+;
+; The filter belongs here and not in HOST_SCR.  The host prompt runs on the ROM
+; charset -- HOST_BOOT switches CHBASE to $E0 -- where every one of those codes
+; is a perfectly good glyph.  Filtering in the shared routine blanked the '.'
+; in a typed IP address on a screen that renders it fine.
+NAME_SCR
+	JSR	HOST_SCR
+	BEQ	NMSC_OK		;space
+	CMP	#$10
+	BCC	NMSC_SP		;$01-$0F: mask tables and coalesce tiles
+	CMP	#$1E
+	BCC	NMSC_OK		;digits, ':' ';' '<' '='
+	CMP	#$21
+	BCC	NMSC_SP		;'>' '?' '@'
+	CMP	#$3B
+	BCS	NMSC_SP		;'[\]^_' are title artwork
+NMSC_OK	RTS
+NMSC_SP	LDA	#$00
 	RTS
+;
+; Convert PORTBUF decimal text into the register byte order NS_INIT expects.
+; A holds the host-order high byte and X the low byte at the call site: for
+; 9000 ($2328), NS_INIT receives A=$23/X=$28 just as before this field.
+; Carry set means blank, zero, non-decimal, or above 65535.
+PORT_PARSE
+	LDA	#0
+	STA	PORTVAL_LO
+	STA	PORTVAL_HI
+	LDY	#0
+PP_LOOP	LDA	PORTBUF,Y
+	BEQ	PP_DONE
+	CMP	#'0'
+	BCC	PP_BAD
+	CMP	#'9'+1
+	BCS	PP_BAD
+	SEC
+	SBC	#'0'
+	TAX			;digit while value is multiplied by ten
+	; Save value*2.
+	LDA	PORTVAL_LO
+	ASL
+	STA	PORTTMP_LO
+	LDA	PORTVAL_HI
+	ROL
+	STA	PORTTMP_HI
+	BCS	PP_BAD
+	; Turn the original value into value*8, rejecting 16-bit overflow.
+	ASL	PORTVAL_LO
+	ROL	PORTVAL_HI
+	BCS	PP_BAD
+	ASL	PORTVAL_LO
+	ROL	PORTVAL_HI
+	BCS	PP_BAD
+	ASL	PORTVAL_LO
+	ROL	PORTVAL_HI
+	BCS	PP_BAD
+	; value*8 + value*2 + digit.
+	CLC
+	LDA	PORTVAL_LO
+	ADC	PORTTMP_LO
+	STA	PORTVAL_LO
+	LDA	PORTVAL_HI
+	ADC	PORTTMP_HI
+	BCS	PP_BAD
+	STA	PORTVAL_HI
+	TXA
+	CLC
+	ADC	PORTVAL_LO
+	STA	PORTVAL_LO
+	LDA	PORTVAL_HI
+	ADC	#0
+	BCS	PP_BAD
+	STA	PORTVAL_HI
+	INY
+	CPY	#PORT_MAX
+	BCC	PP_LOOP
+	LDA	PORTBUF,Y
+	BNE	PP_BAD
+PP_DONE	CPY	#0
+	BEQ	PP_BAD
+	LDA	PORTVAL_LO
+	ORA	PORTVAL_HI
+	BEQ	PP_BAD
+	LDA	PORTVAL_HI
+	STA	NET_PORT_ARG_A
+	LDA	PORTVAL_LO
+	STA	NET_PORT_ARG_X
+	CLC
+	RTS
+PP_BAD	SEC
+	RTS
+;
+HOST_BOOT	JMP	UI_HOST_BOOT
+;
+; The title calls this setup editor after switching to HOSTDISP and the ROM
+; charset. It returns carry set for ESC so the title can be restored without
+; a connection attempt.
+HOST_SETUP
+	JMP	UI_HOST_SETUP
 ;
 HOST_CLR	LDY	#0
 	LDA	#$00
@@ -2336,12 +7154,72 @@ HOST_CL3	STA	HOSTSCR+768,Y
 ;--------------------
 ;(Includes shot initialization)
 ;
-VBI	LDA	NET_SCORE_PEND
+VBI	JSR	NET_STAGE_COMMIT
+	LDA	NET_ROUND_PHASE
+	BEQ	VBI_PLAY
+	JSR	ROUND_PRESENT_TICK
+	JMP	XITVBV
+VBI_PLAY
+	LDA	ROUND_PRESENT_STATE
+	BEQ	VBI_PLAY_READY
+	JSR	ROUND_PRESENT_RESTORE
+VBI_PLAY_READY
+	JSR	NET_RESP_COMMIT
+	LDA	NET_GAME_SHOW
+	BNE	VBI_SHOW_OK
+	LDA	NET_BRICK_DONE
+	BEQ	VBI_SHOW_OK
+	LDA	NET_BOOT_HIDE
+	BNE	VBI_SHOW_OK
+	LDA	NET_ROUND_READY
+	BEQ	VBI_SHOW_OK
+	LDA	# >CHRSET	;results use the ROM font; restore the game font at reveal
+	STA	CHBASE
+	LDA	# <GAME
+	STA	DLIST
+	LDA	# >GAME
+	STA	DLIST+1
+	JSR	HUD_PM_INIT	;shirt-colour HUD swatches, after host/connect screens
+	LDA	#$03
+	STA	GRACTL	;players + initialized missiles
+	LDA	#1
+	STA	NET_GAME_SHOW
+	LDA	#0	;boot diagnostic over: border black
+	STA	COLOR4
+VBI_SHOW_OK
+	LDA	NET_SCORE_PEND
 	BEQ	VBI_SCR_OK
 	LDA	#0
 	STA	NET_SCORE_PEND
 	JSR	NET_SCORELBL
 VBI_SCR_OK
+	; Every frame, not just when the HUD is refreshed. Anything that clears a
+	; dead bit -- the first-snapshot NET_BOOT_HIDE reveal above all -- would
+	; otherwise leave a vacant slot's wizard on screen until the next SEATS or
+	; role change, which is the sprite that flashed up at boot. Running it here,
+	; ahead of the move loop, means the actor is hidden before it is ever drawn.
+	JSR	NET_VACANT_UPDATE
+	; A round reset deliberately hides/erases every actor before the new map and
+	; snapshot are ready. Reposition and redraw all occupied actors from that
+	; first committed snapshot even when a spawn equals its previous cell; a
+	; coordinate difference cannot tell that the PM image was erased.
+	LDX	#3
+VBI_RDR_LP
+	LDA	NET_REDRAW_MASK
+	AND	PLRMSK,X
+	BEQ	VBI_RDR_NX
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,X
+	BNE	VBI_RDR_CLR
+	JSR	NET_AUTH_REPOS
+	JSR	SETSTIL
+VBI_RDR_CLR
+	LDA	NET_REDRAW_MASK
+	AND	PLRMSKINV,X
+	STA	NET_REDRAW_MASK
+VBI_RDR_NX
+	DEX
+	BPL	VBI_RDR_LP
 	LDX	ACTIVE	;INIT LOOP COUNT
 CKMVLP	TXA
 	TAY
@@ -2358,9 +7236,33 @@ CKMV_NGU
 		; net-only: always run dead-mask handling path
 		TXA
 		TAY
+	; Evaporating: run the smoke and nothing else for this slot.
+	;
+	; The original reached EVAPRTE through the special-effects chain hanging
+	; off CHKSHOT, and the net client short-circuits CHKSHOT straight to
+	; DONXTMN -- all shots are server-authoritative now -- so that whole chain,
+	; EVAPRTE included, became unreachable. Driving it from here is what makes
+	; a death animate again.
+	;
+	; RTCLOK gate: COLESCE ran the effects every other frame, so keep that
+	; cadence. Nine steps at 30 Hz is about a third of a second, well inside
+	; the server's two-second respawn delay. ENDEVAP sets NET_DEAD_MASK when
+	; the smoke clears, which is the point the actor is really off the board.
+	LDA	ACTFLAG,X
+	AND	#$02
+	BEQ	CKMV_NEV
+	LDA	RTCLOK
+	AND	#$01
+	BNE	CKMV_EVSK
+	JSR	EVAPRTE
+CKMV_EVSK
+	JMP	DONXTMN
+CKMV_NEV
 	LDA	NET_DEAD_MASK
 	AND	PLRMSK,Y
 	BEQ	CKMVP0
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
 	LDA	NET_ERASE_MASK
 	AND	PLRMSK,Y
 	BEQ	CKMVSKP
@@ -2379,10 +7281,11 @@ CKMV_POK
 	BEQ	CKMV_AOK
 	JMP	CKMVCK
 CKMV_AOK
-	; server-authoritative reconcile for all slots:
-	; - if already aligned, clear pending.
-	; - if mid-step and only 1 cell off, defer one VBI to finish animation.
-	; - otherwise snap to authoritative location now.
+	; server-authoritative reconcile:
+	; - if aligned, clear pending.
+	; - remote slots follow targets through STRTMOV/REMOTE_FOLLOW.
+	; - local slot only reconciles once drift is meaningful, using the normal
+	;   move renderer when possible and hard-snap only as a guard rail.
 	LDA	LOCX,X
 	CMP	NET_PX_X,X
 	BNE	CKMV_LNE
@@ -2412,80 +7315,47 @@ CKMV_DXPOS
 CKMV_DYPOS
 	CLC
 	ADC	COUNT
-	CMP	#2
-	BCS	CKMVAP
-	LDA	MOVEST,X
-	BEQ	CKMV_MV0
-	JMP	CKMVCK
-CKMV_MV0
-	CPX	NET_LOCAL_PID
-	BEQ	CKMVAP
-	; non-local one-cell reconcile: animate through normal move renderer.
-	LDA	NET_PX_X,X
-	CMP	LOCX,X
-	BEQ	CKMV_RY
-	BCC	CKMV_RL
-	LDA	#0
-	JMP	CKMV_RSET
-CKMV_RL
-	LDA	#2
-	JMP	CKMV_RSET
-CKMV_RY
-	LDA	NET_PX_Y,X
-	CMP	LOCY,X
-	BCC	CKMV_RU
-	LDA	#1
-	JMP	CKMV_RSET
-CKMV_RU
-	LDA	#3
-CKMV_RSET
-	STA	DIR,X
-	JSR	NET_AHEAD_FREE
-	BNE	CKMVAP
-	; verify this DIR advances exactly to server target by one cell.
-	LDA	LOCX,X
-	STA	COUNT
-	LDA	LOCY,X
 	STA	HOLDIT
-	LDA	DIR,X
-	BEQ	CKMV_VXP
-	CMP	#1
-	BEQ	CKMV_VYP
-	CMP	#2
-	BEQ	CKMV_VXM
-	DEC	HOLDIT		;dir=3 up
-	JMP	CKMV_VCHK
-CKMV_VXP
-	INC	COUNT
-	JMP	CKMV_VCHK
-CKMV_VYP
-	INC	HOLDIT
-	JMP	CKMV_VCHK
-CKMV_VXM
-	DEC	COUNT
-CKMV_VCHK
-	LDA	COUNT
-	CMP	NET_PX_X,X
-	BNE	CKMVAP
+	CPX	NET_LOCAL_PID
+	BEQ	CKMV_LOC
+	LDA	MOVEST,X
+	BNE	CKMVCK
 	LDA	HOLDIT
-	CMP	NET_PX_Y,X
-	BNE	CKMVAP
-	JSR	INITMVE
-	JSR	MOVEIM
-	JMP	CHKSHOT
-CKMVAP	JSR	ERASMAN
-	LDA	NET_PX_X,X
-	STA	LOCX,X
-	LDA	NET_PX_Y,X
-	STA	LOCY,X
-	TXA
-	TAY
-	LDA	NET_GUARD_MASK
-	ORA	PLRMSK,Y
-	STA	NET_GUARD_MASK
-	JSR	NET_CALC_LOC
-	LDA	#0
-	STA	MOVEST,X
+	CMP	NET_HARDSNAP_TBL,X
+	BCS	CKMVAP
+	JMP	CKMVCK
+CKMV_LOC
+	TXA			;a respawn moves us wholesale, which is not drift
+	TAY			;and would swamp the metric
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,Y
+	BNE	CKMV_L2
+	LDA	NET_DIAG_HOLD	;...and neither is the settling right after one
+	BEQ	CKMV_L1
+	DEC	NET_DIAG_HOLD
+	JMP	CKMV_L2
+CKMV_L1
+	LDA	HOLDIT		;largest genuine local drift seen this session
+	CMP	NET_DIAG_MAXDRIFT
+	BCC	CKMV_L2
+	STA	NET_DIAG_MAXDRIFT
+CKMV_L2
+	LDA	HOLDIT
+	CMP	#NET_RECON_P0
+	BCC	CKMVCK
+	LDA	MOVEST,X
+	BNE	CKMVCK
+	LDA	NET_ACK_VALID
+	BEQ	CKMVCK
+	LDA	NET_PEND_COUNT
+	BNE	CKMVCK
+	LDA	#$04		;VBI drift threshold
+	JSR	NET_DIAG_BUMP
+	JSR	NET_RCHASE_ARM	;simulation takes it now; the picture walks in
+	JMP	CKMVCK
+CKMVAP	LDA	#$08		;remote hard snap
+	JSR	NET_DIAG_BUMP
+	JSR	NET_AUTH_REPOS
 	JSR	SETSTIL
 	LDA	#0
 	STA	NET_P_PENDING,X
@@ -2501,11 +7371,7 @@ CHKTIME	DEC	MOVCLOK,X	;TIME TO MOVE?
 	BEQ	SETIME	;YES, RESET TIME
 	LDA	ACTFLAG,X	;IF NO SOUND
 	BNE	CKTIMND	;MAKING THING IS
-	TXA		;GOING ON, TURN
-	ASL	;OFF THE SOUND
-	TAY		;(THIS FOR BETTER
-	LDA	#0	;SOUNDING WALK)
-	STA	AUDC1,Y
+	JSR	SND_OFF	;GOING ON, TURN OFF THE SOUND
 CKTIMND	JMP	CHKSHOT	;AND DO SHOTS
 ;
 ;RESET MOVE TIMER AND PARSE
@@ -2514,20 +7380,37 @@ CKTIMND	JMP	CHKSHOT	;AND DO SHOTS
 SETIME	LDA	MOVRATE,X	;RESET MOVE
 	STA	MOVCLOK,X	;TIMER
 	LDA	MOVEST,X	;NOT MOVING? TRY
-	BEQ	STRTMOV	;MOVING SOMETHING
+	BNE	SETIMEMV	;MOVING SOMETHING
+	; MOVRATE=1 makes SETIME run every VBI, so the old CHKTIME quiet-frame
+	; branch above is unreachable.  Explicitly silence an idle actor before it
+	; tries to start another cell; INITMOVE/MOVEIM will turn the shuffle back on
+	; in this same VBI when movement really begins.
+	JSR	SND_OFF
+	JMP	STRTMOV
+SETIMEMV
 	JSR	MOVEIM	;ELSE, UPDATE
 	JMP	CHKSHOT	;AND DO SHOTS
 ;
 ; --- STRTMOV net-only dispatch ---
 STRTMOV	CPX	NET_LOCAL_PID
-	BEQ	PLRMVE		;local slot uses local prediction for responsive control
-	JMP	CHKSHOT		;non-local slots are server-authoritative via reconcile only
+	BNE	STM_REMOTE	;non-local slots follow authoritative targets
+	LDA	NET_RCHASE	;a correction outstanding on our own slot is walked
+	BEQ	STM_DUE		;off by the picture; the simulation already took it
+	JMP	RENDER_CHASE
+STM_DUE	LDA	NET_MOVE_DUE	;MOVCLOK and NET_FRAME_DIV are the same rate but
+	BNE	STM_GO		;free-run in phase, so a cell could start on either
+	JMP	CHKSHOT		;side of the slot that describes it.  Wait for it.
+STM_GO	LDA	#0		;one grant, one cell: a second grant arriving mid
+	STA	NET_MOVE_DUE	;animation collapses rather than banking a step
+	JMP	PLRMVE
+STM_REMOTE
+	JMP	REMOTE_FOLLOW	;via normal move animation
 ;
 ;READ STICK AND SET DIRECTION IF
 ;IT HAS BEEN MOVED. ALSO, DO ZIGZAG
 ;
-PLRMVE	LDA	NET_RX_STICK	;use debounced sampled input
-	JSR	NET_SAN_STICKA
+PLRMVE	LDA	NET_TX_LAST_STICK	;predict on the input we transmitted, not
+	JSR	NET_SAN_STICKA		;a fresher sample the server will never see
 	CMP	#$0F
 	BNE	PLRDIR
 	JMP	CHKSHOT	;ELSE, DO SHOTS
@@ -2572,6 +7455,120 @@ CHKTRG_NF
 CHKTRG_BLK
 	JSR	SETSTIL	;NONE. POINT 'IM
 	JMP	CHKSHOT	;AND DO SHOTS
+;
+; LOCAL CORRECTION AS RENDER MOTION
+; --------------------------------
+; A correction on the local slot used to move gameplay state.  First it was
+; NET_AUTH_REPOS plus SETSTIL -- the actor jumped to the authoritative cell --
+; and then LOCAL_FOLLOW walked LOCX/LOCY one cell per move tick instead, which
+; looked better only because the simulation agreed to be wrong for several
+; ticks: collision, occupancy and shot origin all trailed the server so the
+; picture could catch up gently.
+;
+; Now that the drawn position is its own state, neither is necessary.
+; NET_RCHASE_ARM puts the authoritative cell into LOCX/LOCY at once, so every
+; gameplay decision is correct from that instant, and leaves RNDX/RNDY exactly
+; where it is.  What is left is purely a picture problem, and this walks the
+; picture in through the ordinary move animation.
+;
+; Entered from STRTMOV with X = local pid and NET_RCHASE set.
+RENDER_CHASE
+	LDA	ACTFLAG,X	;evaporating or coalescing: leave the actor alone
+	AND	#$03
+	BEQ	RC_ALIGN
+	JMP	CHKSHOT
+RC_ALIGN
+	LDA	RNDX,X		;caught up when the picture agrees with the cell
+	CMP	LOCX,X
+	BNE	RC_BUSY
+	LDA	RNDY,X
+	CMP	LOCY,X
+	BNE	RC_BUSY
+	LDA	#0		;hand control back to the player
+	STA	NET_RCHASE
+	STA	NET_P_PENDING,X
+	STA	NET_DESYNC_CNT,X
+	JMP	PLRMVE
+RC_BUSY
+	LDA	MOVEST,X	;one chase step at a time, like any other move
+	BEQ	RC_DIST
+	JMP	CHKSHOT
+RC_DIST
+	LDA	RNDX,X
+	SEC
+	SBC	LOCX,X
+	BCS	RC_DXP
+	EOR	#$FF
+	CLC
+	ADC	#1
+RC_DXP	STA	COUNT		;abs dx
+	LDA	RNDY,X
+	SEC
+	SBC	LOCY,X
+	BCS	RC_DYP
+	EOR	#$FF
+	CLC
+	ADC	#1
+RC_DYP	STA	HOLDIT		;abs dy
+	CLC
+	ADC	COUNT
+	CMP	#NET_GLIDE_MAX	;too far to be drift: walking that in would only
+	BCS	RC_SNAP		;draw a long slide, so take the picture straight
+	LDA	COUNT		;close X first, then Y
+	BEQ	RC_YAXIS
+	LDA	LOCX,X
+	CMP	RNDX,X
+	BCC	RC_LEFT
+	LDA	#0		;the cell lies to the right
+	BEQ	RC_GO
+RC_LEFT	LDA	#2		;...to the left
+	BNE	RC_GO
+RC_YAXIS
+	LDA	LOCY,X
+	CMP	RNDY,X
+	BCC	RC_UP
+	LDA	#1		;...below
+	BNE	RC_GO
+RC_UP	LDA	#3		;...above
+RC_GO	STA	DIR,X
+	JSR	NET_AHEAD_FREE_RND	;never walk the picture through a brick
+	BEQ	RC_STEP
+	JMP	RC_SNAP		;blocked: take the correction straight instead
+RC_STEP
+	LDA	#1		;the simulation is already there: this animation
+	STA	NET_RCHASE_STEP	;is allowed to move the picture only
+	JMP	INITMOVE
+;
+; The walk is not worth drawing: erase where the actor is shown, put the
+; picture on the simulation cell and repose it.
+RC_SNAP
+	JSR	NET_AUTH_REPOS	;LOCX/LOCY already hold this cell, so this just
+	JSR	SETSTIL		;brings the picture to it: erase, both positions,
+	LDA	#0		;screen pointer and pose, all through one path
+	STA	NET_RCHASE
+	STA	NET_P_PENDING,X
+	STA	NET_DESYNC_CNT,X
+	JMP	CHKSHOT
+;
+; Take the authoritative cell into the simulation now, and leave the drawn
+; position alone for RENDER_CHASE to walk in.  Deliberately no erase and no
+; redraw: the actor must stay exactly where it is on screen.
+NET_RCHASE_ARM
+	LDA	NET_PX_X,X	;the same interior bounds NET_AUTH_REPOS applies:
+	BEQ	NRA_X		;a corrupt or pre-snapshot coordinate must never
+	CMP	#19		;become simulation truth
+	BCS	NRA_X
+	LDA	NET_PX_Y,X
+	BEQ	NRA_X
+	CMP	#18
+	BCS	NRA_X
+	LDA	NET_PX_X,X
+	STA	LOCX,X
+	LDA	NET_PX_Y,X
+	STA	LOCY,X
+	LDA	#1
+	STA	NET_RCHASE
+NRA_X	RTS
 ;
 ; --- REMOTE_Z1_MOVE ---
 REMOTE_Z1_MOVE	LDA	NET_Z1_PENDING
@@ -2620,10 +7617,63 @@ RZ1_CHKSHOT
 	JMP	CHKSHOT
 
 ; --- REMOTE_FOLLOW ---
-; Move remote authoritative actors (slots 1..3) toward latest snapshot target
-; using original move routines for consistent rendering cadence.
+; Remote playback is render-only.  NET_STAGE_COMMIT already copied the latest
+; authoritative cell into LOCX/LOCY, so this routine moves RNDX/RNDY toward it
+; and marks each INITMOVE as a render chase step.  Collision, shots and slot
+; state therefore see server truth immediately, while the picture interpolates.
 REMOTE_FOLLOW
-	LDA	NET_PX_X,X
+	LDA	RNDX,X
+	CMP	LOCX,X
+	BNE	RF_NEEDS
+	LDA	RNDY,X
+	CMP	LOCY,X
+	BNE	RF_NEEDS
+	LDA	#0
+	STA	NET_P_PENDING,X
+	STA	NET_DESYNC_CNT,X
+	JMP	CHKSHOT
+RF_NEEDS
+	LDA	NET_PJOY,X
+	JSR	NET_JOYDIRA
+	CMP	#$FF
+	BEQ	RF_SYNCCHK
+	STA	DIR,X
+	JSR	NET_AHEAD_FREE_RND
+	BNE	RF_SYNCCHK
+	LDA	RNDX,X
+	STA	COUNT
+	LDA	RNDY,X
+	STA	HOLDIT
+	LDA	DIR,X
+	BEQ	RF_VXP
+	CMP	#1
+	BEQ	RF_VYP
+	CMP	#2
+	BEQ	RF_VXM
+	DEC	HOLDIT
+	JMP	RF_VCHK
+RF_VXP
+	INC	COUNT
+	JMP	RF_VCHK
+RF_VYP
+	INC	HOLDIT
+	JMP	RF_VCHK
+RF_VXM
+	DEC	COUNT
+RF_VCHK
+	LDA	COUNT
+	CMP	LOCX,X
+	BNE	RF_SYNCCHK
+	LDA	HOLDIT
+	CMP	LOCY,X
+	BNE	RF_SYNCCHK
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+	LDA	#1
+	STA	NET_RCHASE_STEP
+	JMP	INITMOVE
+RF_SYNCCHK
+	LDA	RNDX,X
 	SEC
 	SBC	LOCX,X
 	BCS	RF_DXPOS
@@ -2632,7 +7682,7 @@ REMOTE_FOLLOW
 	ADC	#1
 RF_DXPOS
 	STA	COUNT		;abs dx
-	LDA	NET_PX_Y,X
+	LDA	RNDY,X
 	SEC
 	SBC	LOCY,X
 	BCS	RF_DYPOS
@@ -2642,140 +7692,142 @@ RF_DXPOS
 RF_DYPOS
 	STA	HOLDIT		;abs dy
 	LDA	COUNT
-	ORA	HOLDIT
-	BNE	RF_TRY
-	LDA	#0
-	STA	NET_P_PENDING,X
-	JMP	CHKSHOT
-RF_TRY
-	LDA	COUNT
-	CMP	HOLDIT
-	BCS	RF_TRYX
-	JMP	RF_TRYY
-RF_TRYX
-	LDA	NET_PX_X,X
-	CMP	LOCX,X
-	BEQ	RF_TRYY
-	BCC	RF_DIRL
-	LDA	#0
-	BNE	RF_SETX
-RF_DIRL
-	LDA	#2
-RF_SETX
-	STA	DIR,X
-	JSR	NET_AHEAD_FREE
-	BNE	RF_TRYY
-	JMP	INITMOVE
-RF_TRYY
-	LDA	NET_PX_Y,X
-	CMP	LOCY,X
-	BEQ	RF_SYNCCHK
-	BCC	RF_DIRU
-	LDA	#1
-	BNE	RF_SETY
-RF_DIRU
-	LDA	#3
-RF_SETY
-	STA	DIR,X
-	JSR	NET_AHEAD_FREE
-	BNE	RF_SYNCCHK
-	JMP	INITMOVE
-RF_SYNCCHK
-	LDA	COUNT
 	CLC
 	ADC	HOLDIT
-	CMP	NET_HARDSNAP_TBL,X
-	BCC	RF_DONE
-	LDA	ACTFLAG,X
-	BNE	RF_DONE
-	LDA	MOVEST,X
-	BNE	RF_DONE
-	JSR	ERASMAN
-	LDA	NET_PX_X,X
-	STA	LOCX,X
-	LDA	NET_PX_Y,X
-	STA	LOCY,X
-	TXA
-	TAY
-	LDA	NET_GUARD_MASK
-	ORA	PLRMSK,Y
-	STA	NET_GUARD_MASK
-	JSR	NET_CALC_LOC
+	STA	NET_RF_DIST	;manhattan render gap; look-ahead clobbers NET_RX_TMP
+	CMP	#NET_RECON_P1	;walk every non-catastrophic gap; the 15-cell/s
+			;renderer can close a legal backlog against 10 Hz authority
+	BCS	RF_FAIL
+	LDA	LOCX,X
+	CMP	RNDX,X
+	BEQ	RF_1Y
+	BCC	RF_1L
 	LDA	#0
-	STA	MOVEST,X
+	JMP	RF_1SET
+RF_1L
+	LDA	#2
+	BNE	RF_1SET
+RF_1Y
+	LDA	LOCY,X
+	CMP	RNDY,X
+	BCC	RF_1U
+	LDA	#1
+	BNE	RF_1SET
+RF_1U
+	LDA	#3
+RF_1SET
+	STA	DIR,X
+	JSR	NET_AHEAD_FREE_RND
+	BNE	RF_FAIL
+	LDA	NET_RF_DIST	;the legal step is ordinary smooth recovery; retain
+	CMP	#2		;a separate diagnostic for batched multi-cell gaps
+	BCS	RF_STEPFAR
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
+	LDA	#1
+	STA	NET_RCHASE_STEP
+	JMP	INITMOVE
+RF_STEPFAR
+	LDA	#$10		;remote legal recovery was still two or more cells out
+	JSR	NET_DIAG_BUMP
+	LDA	#0		;a legal step is progress, not a failure; stream
+	STA	NET_DESYNC_CNT,X	;batching must not count down to a forced snap
+	LDA	#1
+	STA	NET_RCHASE_STEP
+	JMP	INITMOVE
+RF_FAIL
+	LDA	#$20		;remote recovery route blocked or catastrophic gap
+	JSR	NET_DIAG_BUMP
+	INC	NET_DESYNC_CNT,X
+	LDA	NET_RF_DIST
+	CMP	#NET_RECON_P1
+	BCS	RF_SNAP
+	LDA	NET_DESYNC_CNT,X
+	CMP	#NET_DESYNC_MAX
+	BCC	RF_DONE
+RF_SNAP
+	LDA	ACTFLAG,X	;only evaporating or coalescing genuinely precludes a
+	AND	#$03		;reposition.  Testing the whole byte also refused it
+	BNE	RF_DONE		;while the actor was shooting ($80) or under
+	LDA	MOVEST,X	;backlash, so a remote that diverged while firing --
+	BNE	RF_DONE		;or whose shoot flag stuck -- could never be
+			;recovered and stayed wrong for the rest of the
+			;game.  Every other site that means "leave this
+			;actor alone" masks $03; RENDER_CHASE does too.
+	LDA	#$08		;remote hard snap from render follower
+	JSR	NET_DIAG_BUMP
+	JSR	NET_AUTH_REPOS
 	JSR	SETSTIL
 	LDA	#0
 	STA	NET_P_PENDING,X
+	STA	NET_DESYNC_CNT,X
 RF_DONE
 	JMP	CHKSHOT
 
 ; apply queued authoritative shot packets in VBI context to avoid draw races.
-; queue stores "latest packet per slot", so intermediate packets may collapse.
+; mainline publishes per-slot packets with odd/even sequence bytes. VBI only
+; copies slots whose published sequence is even and newer than last applied.
 NET_SHOT_APPLY_PEND
-	LDA	NET_SHOT_PEND
+	LDX	#0
+NSAP_LP
+	LDA	NET_SHOT_SEQ,X
 	AND	#$01
-	BEQ	NSAP_P1
-	LDY	#0
-NSAP_CP0
+	BNE	NSAP_NX
+	LDA	NET_SHOT_SEQ,X
+	CMP	NET_SHOT_APPLYSEQ,X
+	BEQ	NSAP_NX
+	STA	NET_RX_TMP
+	STX	HOLDIT
+	TXA
+	ASL
+	STA	COUNT
+	ASL
+	CLC
+	ADC	COUNT
+	TAY
+	LDX	#0
+NSAP_CP
 	LDA	NET_SHOT_BUF,Y
-	STA	NET_SHOT_WRK,Y
+	STA	NET_SHOT_WRK,X
 	INY
-	CPY	#6
-	BCC	NSAP_CP0
+	INX
+	CPX	#6
+	BCC	NSAP_CP
+	LDX	HOLDIT
+	LDA	NET_SHOT_SEQ,X
+	PHA
 	JSR	NET_SHOT_APPLY
+	BEQ	NSAP_DEF
+	PLA
+	STA	NET_SHOT_APPLYSEQ,X
+	TXA
+	TAY
 	LDA	NET_SHOT_PEND
-	AND	#$FE
+	AND	PLRMSKINV,Y
 	STA	NET_SHOT_PEND
-NSAP_P1
+	JMP	NSAP_RESUME
+NSAP_DEF
+	PLA
+	TXA
+	TAY
 	LDA	NET_SHOT_PEND
-	AND	#$02
-	BEQ	NSAP_P2
-	LDY	#0
-NSAP_CP1
-	LDA	NET_SHOT_BUF+6,Y
-	STA	NET_SHOT_WRK,Y
-	INY
-	CPY	#6
-	BCC	NSAP_CP1
-	JSR	NET_SHOT_APPLY
-	LDA	NET_SHOT_PEND
-	AND	#$FD
+	ORA	PLRMSK,Y
 	STA	NET_SHOT_PEND
-NSAP_P2
-	LDA	NET_SHOT_PEND
-	AND	#$04
-	BEQ	NSAP_P3
-	LDY	#0
-NSAP_CP2
-	LDA	NET_SHOT_BUF+12,Y
-	STA	NET_SHOT_WRK,Y
-	INY
-	CPY	#6
-	BCC	NSAP_CP2
-	JSR	NET_SHOT_APPLY
-	LDA	NET_SHOT_PEND
-	AND	#$FB
-	STA	NET_SHOT_PEND
-NSAP_P3
-	LDA	NET_SHOT_PEND
-	AND	#$08
-	BEQ	NSAP_X
-	LDY	#0
-NSAP_CP3
-	LDA	NET_SHOT_BUF+18,Y
-	STA	NET_SHOT_WRK,Y
-	INY
-	CPY	#6
-	BCC	NSAP_CP3
-	JSR	NET_SHOT_APPLY
-	LDA	NET_SHOT_PEND
-	AND	#$F7
-	STA	NET_SHOT_PEND
+NSAP_RESUME
+	LDX	HOLDIT
+NSAP_NX
+	INX
+	CPX	#4
+	BCC	NSAP_LP
 NSAP_X	RTS
 ;
 ;BEGIN A MOVE CYCLE
 ;
-INITMOVE	JSR	INITMVE	;DO LOC ADDS AND
+INITMOVE	JSR	INITMOVE_STEP
+	JMP	CHKSHOT	;DO SHOTS
+
+INITMOVE_STEP
+	JSR	INITMVE	;DO LOC ADDS AND
 	LDY	NXTSCR,X	;START IT OFF.
 	INY		;ADD 1 TO NEXT
 	CPY	#23	;NEXT KILL VALUE
@@ -2783,7 +7835,8 @@ INITMOVE	JSR	INITMVE	;DO LOC ADDS AND
 	LDY	#22
 STNXSC	TYA
 	STA	NXTSCR,X
-	JMP	CHKSHOT	;DO SHOTS
+	JSR	MOVEIM	;net-only playback needs the first phase immediately
+	RTS
 ;
 ;FIRE OFF A SHOT IF WE CAN
 ;
@@ -2899,9 +7952,7 @@ SETSHOT	LDA	SHOTLO,X	;SET POINTERS
 	BCC	SHOTSND
 	INC	SHOTHI,X
 SHOTSND	INC	SOUND,X	;UPDATE SOUND
-	TXA
-	ASL
-	TAY
+	JSR	SND_SEL
 	LDA	SOUND,X
 	STA	AUDF1,Y
 	LDA	#$C6
@@ -3038,7 +8089,7 @@ SETNORM	DEY		;SET THE NORMAL
 	STA	(POINTR0),Y
 	CPY	HOLDIT
 	BNE	SETNORM
-	LDA	LOCY,X
+	LDA	RNDY,X
 	ASL
 	ASL
 	ASL
@@ -3057,9 +8108,8 @@ SETCOAT	DEY		;AND IN
 UDCPTRS	LDA	MOVCLOK,X	;IF PART 1
 	BEQ	CLSCSND	;COUNTR<>0, SUB
 	DEC	MOVCLOK,X	;1 FROM IT
-CLSCSND	TXA		;SET SOUND. (IN
-	ASL	;TWO ALTERNATING,
-	TAY		;INDEPENDENT
+CLSCSND	JSR	SND_SEL	;SET SOUND. (IN TWO
+	;		ALTERNATING, INDEPENDENT
 	LDA	MOVEST,X	;RANGES OF
 	AND	#$01	;FREQUENCY...
 	BEQ	CLSTYP2
@@ -3084,11 +8134,7 @@ CLS01	ROR
 	DEC	MOVEST,X	;COUNTDOWN CNTR2
 	BNE	BCKLASH	;<>0? EXIT.
 	JSR	SETSTIL	;COLS OVER, SET
-	TXA		;NORMAL AND
-	ASL	;TURN OFF SOUND
-	TAY
-	LDA	#0
-	STA	AUDC1,Y
+	JSR	SND_OFF	;NORMAL AND TURN OFF SOUND
 	LDA	ACTFLAG,X	;CLR COALESCE
 	AND	#$FE	;FLAG
 	STA	ACTFLAG,X
@@ -3109,9 +8155,7 @@ BCKLASH	LDA	ACTFLAG,X	;IF IT ISN'T
 DOBKLSH	LDA	SHOTMST,X	;IF BCKLASH
 	BPL	BKLSND	;OVER, ERASE IT
 	JMP	ERBKLSH	;AND LEAVE
-BKLSND	TXA		;SET BACKLASH
-	ASL	;SOUND
-	TAY
+BKLSND	JSR	SND_SEL	;SET BACKLASH SOUND
 	LDA	SHOTMST,X
 	EOR	#$03
 	ASL
@@ -3202,11 +8246,7 @@ UDBKLST	DEC	SHOTMST,X	;UPDATE STATUS
 	BEQ	NRGBLND
 	LDA	SHOTDIR,X	;NO DIRS LEFT
 	BNE	BKLEXIT
-NRGBLND	TXA		;TURN OFF SOUND,
-	ASL
-	TAY
-	LDA	#$00
-	STA	AUDC1,Y
+NRGBLND	JSR	SND_OFF	;TURN OFF SOUND,
 	LDA	ACTFLAG,X	;AND CLR ACTION
 	AND	#$0F	;BACKLASH FLAG
 	STA	ACTFLAG,X
@@ -3217,9 +8257,7 @@ BKLEXIT	JMP	DONXTMN	;EITHER WAY, EXIT
 WLXPLOD	LDA	ACTFLAG,X	;IF WALL IS NOT
 	AND	#$20	;EXPLODING, DO
 	BEQ	DONXTMN	;NEXT PLAYER/
-	TXA		;ZOMBIE, GET
-	ASL	;SOUND INDEX
-	TAY
+	JSR	SND_SEL	;ZOMBIE, GET SOUND CHANNEL
 	INC	SOUND,X
 	LDA	SOUND,X
 	STA	COLOR2	;AND UPDATE COLOR
@@ -3237,8 +8275,8 @@ WLXPLOD	LDA	ACTFLAG,X	;IF WALL IS NOT
 	ADC	#$20
 	STA	AUDC1,Y
 	BNE	DONXTMN	;AND EXIT
-STFBLEX	LDA	#0	;TURN OFF SOUND
-	STA	AUDC1,Y
+STFBLEX	JSR	SND_OFF	;TURN OFF SOUND
+	LDA	#0
 	TAY
 	LDA	SHOTLO,X	;ERASE THE WALL
 	STA	SCRPTR
@@ -3258,7 +8296,8 @@ STFBLEX	LDA	#0	;TURN OFF SOUND
 DONXTMN	DEX
 	BMI	EXIT
 	JMP	CKMVLP
-EXIT	JSR	NET_SHOT_APPLY_PEND
+EXIT	JSR	NET_SHOT_WATCH_TICK
+	JSR	NET_SHOT_APPLY_PEND
 	JMP	XITVBV
 ;
 ;
@@ -3411,15 +8450,28 @@ INITMVE	LDY	DIR,X	;ADD ON THE
 	LDA	LOCHI,X
 	ADC	PRVADHI,Y
 	STA	LOCHI,X
-	LDA	LOCX,X	;THE X-LOCATION,
+	LDA	RNDX,X	;THE RENDER X-LOCATION,
 	CLC
 	ADC	PRVXADD,Y
-	STA	LOCX,X
-	LDA	LOCY,X	;THE Y-LOCATION
+	STA	RNDX,X
+	LDA	RNDY,X	;THE RENDER Y-LOCATION
 	CLC
 	ADC	PRVYADD,Y
+	STA	RNDY,X
+	LDA	NET_RCHASE_STEP	;a render-chase step walks the picture toward a
+	BEQ	IMV_SIM		;cell the simulation already occupies, so it
+	LDA	#0		;must not step the simulation again
+	STA	NET_RCHASE_STEP
+	BEQ	IMV_MST
+IMV_SIM	LDA	LOCX,X	;the simulation enters the new cell whole, here,
+	CLC		;at the moment the server applies the same input.
+	ADC	DIRXADD,Y	;Only the render position is staggered across
+	STA	LOCX,X	;the four animation phases, which is why LOCX
+	LDA	LOCY,X	;used to commit at the start of a left/up move
+	CLC		;and the end of a right/down one.
+	ADC	DIRYADD,Y
 	STA	LOCY,X
-	TYA		;INIT MOVE STATUS
+IMV_MST	TYA		;INIT MOVE STATUS
 	AND	#$02
 	ASL
 	STA	MOVEST,X
@@ -3462,23 +8514,26 @@ SETPLR	LDA	LOCLO,X	;SET POINTER TO
 	STA	LOCLO,X	;LOCATIONS
 	BCC	UDTLOCS
 	INC	LOCHI,X
-UDTLOCS	LDA	LOCX,X	;X-LOCATION
-	CLC
+UDTLOCS	LDA	RNDX,X	;render catches up to the cell the simulation
+	CLC		;entered back at INITMVE
 	ADC	AFTXADD,Y
-	STA	LOCX,X
-	LDA	LOCY,X	;Y-LOCATION
+	STA	RNDX,X
+	LDA	RNDY,X
 	CLC
 	ADC	AFTYADD,Y
-	STA	LOCY,X
+	STA	RNDY,X
 MOVSND	LDA	ACTFLAG,X	;IF SOME OTHER
 	AND	#$B0	;SOUND IS ON
 	BNE	MOVMXIT	;RETURN
-	TXA		;SET SHUFFLE
-	ASL	;NOISE ON AN
-	TAY		;EVEN MOVE STATUS
 	LDA	MOVEST,X
 	AND	#$01
-	BEQ	MOVMXIT
+	BNE	MOVSNON
+	; At the original MOVRATE there were quiet CHKTIME frames between these
+	; alternating shuffle phases.  With one visual phase per VBI there are no
+	; such frames, so clear the tone here instead of leaving it latched.
+	JSR	SND_OFF
+	RTS
+MOVSNON	JSR	SND_SEL	;SET SHUFFLE NOISE CHANNEL
 	LDA	#$04
 	STA	AUDC1,Y
 	LDA	#$20
@@ -3517,6 +8572,14 @@ SETMOV2	INY		;SET NEXT 2 BYTES
 ;
 ;SET STATIONARY PLAYER/ZOMBIE
 ;
+; NOTE: refreshing the player-missile from here was tried and reverted. It
+; looked right -- SETSUIT is the only code that writes the PM image and HPOSP,
+; and MOVEIM is its only caller -- but SETSTIL has ten callers, several of them
+; mid-move or on actors that are meant to be hidden. Zeroing MOVEST reset move
+; animations (movement went sluggish), painting the PM put a sprite on hidden
+; actors at the placeholder cell (a second wizard in the top-left border), and
+; SETSUIT clobbers SCRPTR, which callers here may rely on. It also did not fix
+; the clipped head, so that cause is still unknown.
 SETSTIL	LDA	LOCLO,X	;SET POINTER
 	STA	SCRPTR	;TO SCREEN FOR
 	LDA	LOCHI,X	;SUBROUTINE
@@ -3545,7 +8608,7 @@ SETSUIT	LDA	MOVEST,X	;FIND WHAT SUIT
 	STA	POINTER
 	LDA	# >SUITS
 	STA	POINTER+1
-	LDA	LOCY,X	;CALC PM Y START
+	LDA	RNDY,X	;CALC PM Y START
 	ASL	;BASE=Y*8+32
 	ASL
 	ASL
@@ -3569,7 +8632,7 @@ READPIC	LDA	(POINTER),Y	;(DATA HAS
 	STA	(SCRPTR),Y	;0'S IN IT TO
 	DEY		;ERASE OLD IMAGE)
 	BPL	READPIC
-	LDA	LOCX,X	;SET HORIZ LOC
+	LDA	RNDX,X	;SET HORIZ LOC
 	ASL	;BASE=X*8+48
 	ASL
 	ASL
@@ -3608,11 +8671,13 @@ FNDSPOT	LDA	RANDOM	;GET A RANDOM X
 	CMP	#19	;IF NOT IN RANGE,
 	BCS	FNDSPOT	;TRY AGAIN
 	STA	LOCX,X
+	STA	RNDX,X
 	LDA	RANDOM	;GET A RANDOM Y
 	AND	#$1F	;MASK UPPER BITS
 	CMP	#18	;IF NOT IN RANGE
 	BCS	FNDSPOT	;TRY AGAIN
 	STA	LOCY,X
+	STA	RNDY,X
 	STA	POINTER	;GET Y*40
 	LDA	#0
 	STA	SCRPTR
@@ -3634,7 +8699,7 @@ FNDSPT2	ASL	POINTER
 	ROL	POINTER+1
 	DEY
 	BNE	MULTPLY
-	LDA	LOCX,X	;ADD X*2
+	LDA	RNDX,X	;ADD X*2
 	ASL
 	ADC	SCRPTR
 	BCC	ADDSCRN
@@ -3678,7 +8743,7 @@ CLRCLCH	STA	(POINTER),Y
 	INY
 	ADC	#4
 	STA	(SCRPTR),Y
-	LDA	LOCX,X	;PLR HORIZ POS
+	LDA	RNDX,X	;PLR HORIZ POS
 	ASL
 	ASL
 	ASL
@@ -3704,32 +8769,78 @@ ERASHOT	LDA	SHOTLO,X	;SET POINTER TO
 	STA	POINTR0	;THE SHOT LOC
 	LDA	SHOTHI,X
 	STA	POINTR0+1
-	LDA	#0	;ERASE 2 BYTES
-	TAY
-	STA	(POINTR0),Y
-	INY
-	STA	(POINTR0),Y
+	JSR	ERASHOT_PAIR	;an actor may have entered this old shot cell
 	LDA	SHOTMST,X	;MOVE STAT=0?
 	BEQ	ERSHXIT	;YES. DONE
-	LDA	SHOTDIR,X	;ADD A LINE
-	AND	#$01	;IF UP/DOWN
-	BEQ	ERSHOT2
-	LDY	#$27
-	LDA	#0
-ERSHOT2	INY		;ERASE 2 BYTES
-	STA	(POINTR0),Y
-	INY
-	STA	(POINTR0),Y
-ERSHXIT	TXA		;TURN OFF SOUND
-	ASL
-	TAY
-	LDA	#0
-	STA	AUDC1,Y
+	; The erase has to cover exactly what the draw covered. Right and down are
+	; drawn as four characters, trailing forward, so their second pair is
+	; cleared here too. Left and up are drawn on the shot cell alone -- their
+	; trailing pair would fall back onto the shooter, one cell behind or one row
+	; beneath -- so clearing a second pair for them blanks the wizard. That is
+	; the head vanishing on an up shot, and why it took until the shot had
+	; travelled and was retired for it to show.
+	LDA	SHOTDIR,X
+	CMP	#2
+	BCS	ERSHXIT	;left/up: the shot cell is all there is
+	AND	#$01	;down spans the row beneath, right the pair beside it
+	BEQ	ERSHOT_RIGHT
+	LDA	POINTR0	;down: next row
+	CLC
+	ADC	#$28
+	STA	POINTR0
+	LDA	POINTR0+1
+	ADC	#0
+	STA	POINTR0+1
+	JSR	ERASHOT_PAIR
+	JMP	ERSHXIT
+ERSHOT_RIGHT
+	LDA	POINTR0	;right: next cell
+	CLC
+	ADC	#2
+	STA	POINTR0
+	LDA	POINTR0+1
+	ADC	#0
+	STA	POINTR0+1
+	JSR	ERASHOT_PAIR
+ERSHXIT	JSR	SND_OFF	;TURN OFF SOUND
 	RTS
 ;
 ;ERASE PLAYER/ZOMBIE
 ;
-ERASMAN	LDA	LOCLO,X	;SET A POINTER
+; Only x 1..18, y 1..17 are legal actor cells; row 0, row 18 and columns 0 and
+; 19 are the border. An actor parked outside that has never been drawn there:
+; NET_AUTH_REPOS copies NET_PX into LOC, and net init zeroes NET_PX, so any
+; reposition before the first authoritative snapshot leaves an actor on (0,0).
+; Blanking two characters there ate the top-left border block, and the map paint
+; had already run, so nothing put it back. The player-missile erase below is
+; unconditional -- it is bounded to the actor's own PM page and always safe.
+; Erase an actor: its characters, then its whole player-missile page.
+;
+; Y IS PRESERVED. It used to come back as 0, from the page-clear loop below,
+; and two callers reload the slot's mask bit through Y *after* the call:
+; CKMV_NGU clears NET_ERASE_MASK and NET_AUTH_REPOS clears NET_DEAD_MASK and
+; NET_ERASE_MASK. Both were therefore always clearing bit 0, whatever slot had
+; actually been erased.
+;
+; That is one bug with two faces. Slots 1..3 never got their erase bit cleared,
+; so once a slot was hidden it was re-erased every single frame -- and an
+; unoccupied slot sits at its placeholder cell (1, slot+1) forever, so a live
+; player standing on (1,2), (1,3) or (1,4) had its characters blanked every
+; frame and rendered as a sliver. And slot 0's erase request was destroyed by
+; any other slot's erase earlier in the same pass -- the pass runs 3 down to 0 --
+; so when slot 0 died with any other slot hidden, which with fewer than four
+; participants is always, its erase never ran and the corpse stayed put.
+ERASMAN	TYA
+	PHA
+	LDA	RNDX,X
+	BEQ	ERMNXIT
+	CMP	#19
+	BCS	ERMNXIT
+	LDA	RNDY,X
+	BEQ	ERMNXIT
+	CMP	#18
+	BCS	ERMNXIT
+	LDA	LOCLO,X	;SET A POINTER
 	STA	POINTR0	;TO THE SCREEN
 	LDA	LOCHI,X	;CHR IMAGE
 	STA	POINTR0+1
@@ -3760,6 +8871,8 @@ ERMNXIT	TXA		;ERASE PLAYER'S
 ERSUTLP	STA	(POINTR0),Y
 	DEY
 	BNE	ERSUTLP
+	PLA
+	TAY
 	RTS
 ;
 ;COLLISION DETECTION
@@ -3909,7 +9022,7 @@ EVAPRTE	LDA	ACTFLAG,X	;SEE IF HE IS
 	BNE	DOEVAP	;IF NOT, RETURN
 	RTS
 ;
-DOEVAP	LDA	LOCY,X	;ELSE, SET PNTR
+DOEVAP	LDA	RNDY,X	;ELSE, SET PNTR
 	ASL	;INTO PLAYER X
 	ASL
 	ASL
@@ -3919,9 +9032,7 @@ DOEVAP	LDA	LOCY,X	;ELSE, SET PNTR
 	CLC
 	ADC	# >PL0
 	STA	SCRPTR+1
-	TXA		;SET SOUND INDEX
-	ASL
-	TAY
+	JSR	SND_SEL	;SET SOUND CHANNEL
 	DEC	MOVEST,X	;UPDATE COUNTER
 	BMI	ENDEVAP	;IF AT END
 	LDA	#10	;ELSE, SET SOUND
@@ -3946,8 +9057,8 @@ READSMK	LDA	(POINTER),Y
 	BPL	READSMK
 	RTS		;AND RETURN
 ;
-ENDEVAP	LDA	#0	;EVAP DONE, TURN
-	STA	AUDC1,Y	;OFF SOUND
+ENDEVAP	JSR	SND_OFF	;EVAP DONE, TURN OFF SOUND
+	LDA	#0
 	LDY	#7	;ERASE CLOUD
 CLRSMOK	STA	(SCRPTR),Y
 	DEY
@@ -4001,22 +9112,45 @@ ADOFSLP	LDA	SCRPTR	;OFFSET AS MANY
 	BNE	ADOFSLP
 	RTS
 ;
-;*****************
-;** DLI ROUTINE **
-;*****************
+;HUD PLAYER-COLOUR MARKERS
+;-------------------------
+; Four missile PMGs make small shirt-colour squares beside the bottom HUD rows.
+; Missiles 0..3 share the colours of players 0..3 while GPRIOR keeps fifth-
+; player mode clear, so this provides per-slot colour identity without a DLI.
 ;
-DLI	PHA
-	LDA	#PLR0COL	;SET COLORS FOR
-	STA	COLPF0	;BOTTOM OF SCREEN
-	LDA	#PLR1COL	;TO THOSE OF
-	STA	COLPF1	;PLAYER/ZOMBIE
-	LDA	#PLR2COL	;SUIT COLORS
-	STA	COLPF2
-	LDA	#PLR3COL
-	STA	COLPF3
-	PLA
-	RTI
-;
+HUD_PM_INIT
+	LDA	#HUD_MISSILE_X
+	STA	HPOSM0
+	STA	HPOSM0+1
+	STA	HPOSM0+2
+	STA	HPOSM0+3
+	LDA	#$55		;double-width all four missiles for visible squares
+	STA	SIZEM
+	LDA	#0
+	LDY	#0
+HPM_CLR
+	STA	PMAREA+$300,Y
+	INY
+	BNE	HPM_CLR
+	LDX	#0
+HPM_ROW
+	LDY	HUD_MISSILE_Y,X
+	LDA	HUD_MISSILE_BITS,X
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INX
+	CPX	#4
+	BCC	HPM_ROW
+	RTS
 ;
 ;**********************
 ;** PROGRAM DATABASE **
@@ -4037,6 +9171,12 @@ DIRADLO	.BYTE	2,40,-2,-40
 AFTRADD	.BYTE	2,40	;0,0
 PRVADHI	=	DIRADHI
 PRVADLO	.BYTE	0,0,-2,-40
+;
+;WHOLE-CELL STEP PER DIRECTION, FOR THE SIMULATION POSITION.
+;EQUAL TO PRVxADD+AFTxADD, WHICH THE RENDER POSITION APPLIES IN
+;TWO HALVES AT OPPOSITE ENDS OF THE MOVE ANIMATION.
+DIRXADD	.BYTE	1,0,-1,0
+DIRYADD	.BYTE	0,1,0,-1
 ;
 ;JOYSTICK TO INTERNAL DIR CONVERSION
 ;
@@ -4069,8 +9209,11 @@ NET_HARDSNAP_TBL	.BYTE	NET_HARD_P0,NET_RECON_P1,NET_RECON_P1,NET_RECON_P1
 ;SCREEN INDEX TO SCORES
 ;
 SCRINDX	.BYTE	4,24,44,64
+NAMECOL	.BYTE	$40,$40,$40,$40	;blue HUD text; PM missiles carry shirt colours
 LBLDSTLO	.BYTE	<[BOTSCRN+4],<[BOTSCRN+24],<[BOTSCRN+44],<[BOTSCRN+64]
 LBLDSTHI	.BYTE	>[BOTSCRN+4],>[BOTSCRN+24],>[BOTSCRN+44],>[BOTSCRN+64]
+HUD_MISSILE_Y	.BYTE	HUD_MISSILE_Y0,HUD_MISSILE_Y0+8,HUD_MISSILE_Y0+16,HUD_MISSILE_Y0+24
+HUD_MISSILE_BITS	.BYTE	$03,$0C,$30,$C0
 ;
 ;SHAPE TABLES
 ;------------
@@ -4112,67 +9255,29 @@ EXPLSHP	.BYTE	$00,$9B,$9C,$9C	;R&D0
 	.BYTE	$9B,$00,$9D,$9D	;R&D1
 	.BYTE	$00,$9B,$9C,$9C	;L&U1
 ;
-;TITLE SCREEN
-;------------
-;
 ;DISPLAY LIST
 ;
-TITLDISP	.BYTE	$70,$70,$70,$70,$70,$42
-	.WORD	TITLES
-	.BYTE	2,2,$70,6,$70,$70,5,$70
-	.BYTE	$70,6,$70,4,4,4,$70,6,6
-	.BYTE	$70,2,$41
-	.WORD	TITLDISP
+; ANTIC only increments the low 10 bits of the display list counter, so a list
+; that crosses a 1K boundary wraps to the start of its own 1K page and executes
+; garbage. Nothing otherwise pins these lists down -- they land wherever the
+; preceding code happens to end -- so any change to code size can push one
+; across a boundary and corrupt the display.
 ;
-;TITLE SCREEN DISPLAY DATA
+; The three lists are therefore kept together, ahead of the bulk data they used
+; to be scattered through, and the group starts on a page boundary. Under 256
+; bytes from a page boundary cannot cross a 1K boundary, whatever the code
+; before it does.
 ;
-TITLES	.BYTE	0,0,0,0,0,0,0,0,96
-	.BYTE	"abcdefg"
-	.BYTE	96
-	.BYTE	"abchi  jklcjmno"
-	.BYTE	"                "
-	.BYTE	"pqrsptuspqr"
-	.BYTE	"spvwxpyzsp"
-	.BYTE	123,124,115,0,0
-	.BYTE	0,0,0,0,0,0
-	.BYTE	"               "
-	.BYTE	"COMPUTING      "
-	.BYTE	"                "
-	.BYTE	$F0,$F2,$E5,$F3,$E5,$EE,$F4,$F3,$80,$80,$80
-	.BYTE	"                "
-	.BYTE	$9E,$9F,$A6,$A8,$AA,$B1,$B6,$B8,$80,$BB,$BC,$BD,$BE,$BF
-	.BYTE	"                "
-	.BYTE	"BY  MARK PRICE   "
-WLKLINE	.BYTE	"                    "
-	.BYTE	"                    "
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	253,253,253,253,253
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	254,254,254,254,254
-	.BYTE	$80,$80,$80,$80,$80,$F7,$E9,$FA,$E1,$F2,$E4,$F3
-	.BYTE	218,0
-PLAYERS	.BYTE	81
-	.BYTE	"          ZOMBIES: "
-ZOMBIES	.BYTE	80,0,0,0,0,0
-	.BYTE	"            "
-	.BYTE	"ZOMBIE SPEED:  "
-ZOMSPD	.BYTE	"5            "
-;
-;GAME DISPLAY DATA
-;-----------------
-;
+; This replaces a 1K alignment of the whole ~1KB data block, which was one
+; growth spurt away from disaster and duly took it: the block outgrew its page,
+; ALIGN pushed it to $7000, and it landed on top of HOSTSCR -- the screen
+; buffers are ORG'd there, so the display lists and the screen came to occupy
+; the same memory. Anchoring the block above the net state instead of letting it
+; drift up behind the code gives it about 7K of headroom and makes the position
+; a decision rather than an accident. tests/memory_layout_smoke.sh checks both
+; properties against the built binary.
+CORE_DATA_END
+	ORG	$8000
 ;HOST INPUT DISPLAY LIST (40x24 text)
 ;
 HOSTDISP	.BYTE	$70,$70,$70,$42
@@ -4182,7 +9287,7 @@ HOSTDISP	.BYTE	$70,$70,$70,$42
 	.BYTE	$41
 	.WORD	HOSTDISP
 ;
-;DISPLAY LIST
+;GAME DISPLAY LIST
 ;
 GAME	.BYTE	$70,$70,$70,$44
 	.WORD	GAMESCR
@@ -4192,6 +9297,203 @@ GAME	.BYTE	$70,$70,$70,$44
 	.BYTE	6,6,6,$41
 	.WORD	GAME
 ;
+; Reclaimed title/menu/result allocation. Nothing is emitted here in 08-01:
+; later phases can claim this contiguous range after they prove lifetime and
+; VBI ownership. Keep MAZEDAT at its established address so this removal cannot
+; change existing maze pointers or display timing.
+UI_DATA_START
+; Round transition handlers live in the reclaimed obsolete-title region. They
+; remain persistent while RX and the VBI run, so this is the lifetime-safe use
+; measured in 08-01 and keeps executable code clear of the $7000 display RAM.
+UI_REL_FULL
+	LDA	NET_FRAME_LEN
+	CMP	#REL_PKT_MAX
+	BEQ	UIRF_LENOK
+	JMP	NREL_BAD
+UIRF_LENOK
+	LDA	NET_REL_PKT+55
+	CMP	NET_ROUND_ID
+	BEQ	UIRF_EPOCH
+	JMP	NREL_OK
+UIRF_EPOCH
+	LDX	#0
+UIRF_CP
+	LDA	NET_REL_PKT+4,X
+	STA	NET_BRICK_BUF,X
+	INX
+	CPX	#52
+	BCC	UIRF_CP
+	LDA	#0
+	STA	NMIEN
+	JSR	NET_BRICK_FULL_VALIDATE
+	BCS	UIRF_BAD
+	JSR	NET_BRICK_FULL_APPLY
+	LDA	#1
+	STA	NET_BRICK_DONE
+	STA	NET_ROUND_MAP
+	JSR	NET_ROUND_CHECK_READY
+UIRF_BAD
+	LDA	#$40
+	STA	NMIEN
+	CLC
+	RTS
+
+UI_REL_MATCH
+	LDA	NET_FRAME_LEN
+	CMP	#49
+	BEQ	UIRM_LENOK
+	JMP	NREL_BAD
+UIRM_LENOK
+	LDA	NET_REL_PKT+5
+	CMP	NET_ROUND_ID
+	BEQ	UIRM_EPOCH
+	JMP	NREL_OK
+UIRM_EPOCH
+	LDA	NET_REL_PKT+6
+	CMP	#4
+	BCC	UIRM_PIDOK
+	JMP	NREL_BAD
+UIRM_PIDOK
+	STA	NET_ROUND_WINNER
+	LDA	NET_REL_PKT+9
+	BNE	UIRM_LIMITNZ
+	JMP	NREL_BAD
+UIRM_LIMITNZ
+	CMP	#11
+	BCC	UIRM_LIMITOK
+	JMP	NREL_BAD
+UIRM_LIMITOK
+	STA	NET_KILL_LIMIT
+	LDA	ROUND_PRESENT_STATE	;one accepted result owns the whole intermission
+	BNE	UIRM_DONE	;later duplicate revisions cannot restart its effects
+	LDA	NET_REL_PKT+7
+	AND	#$0F
+	STA	ROUND_ACTIVE_MASK
+	LDA	NET_ROUND_ID
+	STA	ROUND_FINAL_ID
+	LDA	NET_REL_PKT+8
+	AND	#$0F
+	STA	ROUND_FINAL_ROLE
+	STA	NET_ROLE_MASK
+	EOR	#$FF
+	AND	NET_REL_PKT+7
+	AND	#$0F
+	STA	NET_SEAT_MASK
+	LDA	NET_REL_PKT+14
+	AND	#$0F
+	STA	ROUND_ZOMBIE_HISTORY
+	LDX	#0
+UIRM_NAME
+	LDA	NET_REL_PKT+15,X
+	STA	NET_NAMES,X
+	INX
+	CPX	#4*NAME_LEN
+	BCC	UIRM_NAME
+	LDX	#0
+UIRM_SCORE
+	LDY	SCRINDX,X
+	LDA	NET_REL_PKT+10,X
+	STA	ROUND_FINAL_SCORE,X
+	JSR	NET_SCORECHR
+	STA	SCORE,Y
+	INX
+	CPX	#4
+	BCC	UIRM_SCORE
+	LDA	#1
+	STA	NET_ROUND_PHASE
+	STA	NET_SCORE_PEND
+	LDA	#0
+	STA	NET_ROUND_READY
+	STA	NET_MOVE_DUE
+	STA	NET_PEND_COUNT
+	STA	NET_PEND_HEAD
+	STA	NET_TRIG_LATCH
+	STA	NET_SHOT_PEND
+	STA	NET_PRED_TTL
+	LDA	#RP_BEGIN	;publish only after every frozen field is complete
+	STA	ROUND_PRESENT_STATE
+UIRM_DONE
+	CLC
+	RTS
+
+UI_REL_START
+	LDA	NET_FRAME_LEN
+	CMP	#9
+	BEQ	UIRS_LENOK
+	JMP	NREL_BAD
+UIRS_LENOK
+	LDA	NET_REL_PKT+6
+	BNE	UIRS_LIMITNZ
+	JMP	NREL_BAD
+UIRS_LIMITNZ
+	CMP	#11
+	BCC	UIRS_LIMITOK
+	JMP	NREL_BAD
+UIRS_LIMITOK
+	LDA	NET_REL_PKT+5
+	CMP	NET_ROUND_ID
+	BEQ	UIRS_SAME
+	SEC
+	SBC	NET_ROUND_ID
+	CMP	#$80
+	BCC	UIRS_NEW
+	JMP	NREL_OK
+UIRS_SAME
+	LDA	NET_ROUND_AUTH
+	BEQ	UIRS_NEW
+	JMP	NREL_OK
+UIRS_NEW
+	LDA	NET_REL_PKT+5
+	STA	NET_ROUND_ID
+	LDA	NET_REL_PKT+6
+	STA	NET_KILL_LIMIT
+	LDA	#0
+	STA	NET_ROUND_PHASE
+	STA	NET_ROUND_MAP
+	STA	NET_ROUND_SNAP
+	STA	NET_ROUND_READY
+	STA	NET_BRICK_DONE
+	STA	NET_RX_DBG
+	STA	NET_MOVE_DUE
+	STA	NET_PEND_COUNT
+	STA	NET_PEND_HEAD
+	STA	NET_TRIG_LATCH
+	STA	NET_SHOT_PEND
+	STA	NET_PRED_TTL
+	STA	NET_STAGE_REVEAL
+	STA	NET_REDRAW_MASK
+	LDA	#1
+	STA	NET_ROUND_AUTH
+	STA	NET_BOOT_HIDE
+	STA	NET_SCORE_PEND
+	LDA	#$0F
+	STA	NET_DEAD_MASK
+	STA	NET_ERASE_MASK
+	CLC
+	RTS
+
+NET_ROUND_CHECK_READY
+	LDA	NET_ROUND_AUTH
+	BEQ	UIRCR_X
+	LDA	NET_ROUND_MAP
+	BEQ	UIRCR_X
+	LDA	NET_ROUND_SNAP
+	BEQ	UIRCR_X
+	LDA	NET_ROUND_PHASE
+	BNE	UIRCR_X
+	LDA	#1
+	STA	NET_ROUND_READY
+UIRCR_X
+	RTS
+
+; Reclaimed title bytes now hold the compact result-screen vocabulary and the
+; four fixed score-row destinations. Quoted data is MADS screen code.
+RP_TITLE	.BYTE	"ROUND OVER",$FF
+RP_BEATS	.BYTE	" BEATS ZOMBIES",$FF
+RP_SOON	.BYTE	"NEXT ROUND",$FF
+
+UI_DATA_END
+	ORG	$81F0
 ;MAZE DATA
 ;
 MAZEDAT	.BYTE	$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0
@@ -4270,15 +9572,8 @@ MAZEDAT	.BYTE	$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0,$A0
 ;TEXT MESSAGES
 ;-------------
 ;
-PLRTXT	.BYTE	"WIZARDwizardWIZARD"
-	.BYTE	$F7,$E9,$FA,$E1,$F2,$E4
-ZOMTXT	.BYTE	"ZOMBIEzombieZOMBIE"
-	.BYTE	$FA,$EF,$ED,$E2,$E9,$E5
-WIZLBL	.BYTE	"WIZARDwizardWIZARD"
-	.BYTE	$F7,$E9,$FA,$E1,$F2,$E4
-ZOMLBL	.BYTE	"ZOMBIEzombieZOMBIE"
-	.BYTE	$FA,$EF,$ED,$E2,$E9,$E5
-ENDTXT	.BYTE	"WINS"
+PLRTXT	.BYTE	87,73,90,65,82,68	;ATASCII "WIZARD" for NAME_SCR
+ZOMTXT	.BYTE	90,79,77,66,73,69	;ATASCII "ZOMBIE" for NAME_SCR
 ;
 ;GAME SCREEN SPACE
 ;-----------------
@@ -4295,46 +9590,183 @@ SCORE	.DS	69
 NET_TICK	.DS	1	;frame divider for periodic DELTA TX
 NET_TX_STATE	.DS	1	;bytes remaining in NET_TX_BUF
 NET_TX_IDX	.DS	1	;next NET_TX_BUF index to send
+NET_TX_WR	.DS	1	;COBS encoder output cursor
+NET_TX_CI	.DS	1	;COBS encoder current code-byte cursor
+NET_TX_CODE	.DS	1	;COBS encoder code value
+NET_TX_RAWLEN	.DS	1	;payload plus CRC length during encode
 NET_SEQ	.DS	1	;client TX sequence counter
 NET_RX_STATE	.DS	1	;RX collector mode (0 idle, 1/2/3/4/5 by packet type)
 NET_ACTIVE	.DS	1	;netstream active flag
 NET_INITST	.DS	1	;NS_INIT status code
 NET_SAVPTR	.DS	2	;saved POINTER around NS_INIT fastcall setup
-NET_RX_TMP	.DS	1	;general RX scratch
-NET_TX_BUF	.DS	4	;outbound DELTA/hello packet bytes
+NET_RX_TMP	.DS	1	;VBI/gameplay scratch; foreground RX must not touch it
+NET_PARSE_BYTE	.DS	1	;mainline RX parser byte latch
+NET_RX_TMP0	.DS	1	;foreground RX scratch; VBI must never touch it
+NET_RX_TMP1	.DS	1	;mainline RX scratch
+NET_RX_COUNT	.DS	1	;mainline RX counter scratch
+NET_RX_HOLD	.DS	1	;mainline RX scratch
+NET_RX_YSAVE	.DS	1	;mainline RX Y save scratch
+NET_RX_PTR	.DS	2	;mainline RX pointer scratch
+NET_RX_PTR0	.DS	2	;mainline RX pointer scratch
+NET_RX_SCRPTR	.DS	2	;mainline RX screen pointer scratch
+NET_TX_RAW	.DS	NET_TX_RAW_MAX	;payload staging plus CRC-16 trailer
+NET_TX_BUF	.DS	NET_TX_BUF_MAX	;COBS output, including delimiter
 NET_RX_SEQ	.DS	1	;last accepted snapshot sequence
 NET_RX_STICK	.DS	1	;debounced local stick nibble
 NET_RX_TRIG	.DS	1	;debounced local trigger (0 pressed / 1 released)
 NET_RX_AVLO	.DS	1	;NS_AVAIL low byte
 NET_RX_AVHI	.DS	1	;NS_AVAIL high byte
+NET_NS_ERRS	.DS	1	;sticky NS_GetStatus bits ($80 framing/$40 overrun/$10 ring)
+NET_RX_JUNK	.DS	1	;bytes skipped while resyncing to a packet marker
+NET_BF_CNT	.DS	1	;map repairs applied
+NET_BF_WRITES	.DS	1	;cells the last repair rewrote
+NET_BD_CNT	.DS	1	;brick deltas applied
+NET_BF_ROW	.DS	1	;repair walk row, saved across the actor test
+NET_BF_CELLX	.DS	1	;repair walk column
+NET_CK_LO	.DS	1	;CRC-16 low accumulator / trailer check
+NET_CK_HI	.DS	1	;CRC-16 high accumulator / trailer check
+NET_CK_BAD	.DS	1	;frames rejected by CRC or framing
+NET_CK_LEN	.DS	1	;index of a decoded frame's CRC trailer
+NET_FRAME_IDX	.DS	1	;bytes buffered for the frame in flight
+NET_FRAME_OVF	.DS	1	;frame ran past NET_FRAME_MAX
+NET_FRAME_LEN	.DS	1	;decoded frame length
+NET_COBS_RD	.DS	1	;COBS decode read cursor
+NET_COBS_WR	.DS	1	;COBS decode write cursor
+NET_COBS_CODE	.DS	1	;current COBS group code
+NET_COBS_N	.DS	1	;bytes copied from the current group
+NET_FRAME_BUF	.DS	NET_FRAME_MAX	;COBS frame, decoded in place
+SND_CH2_PID	.DS	1	;remote slot currently owning shared sound channel 2
+NET_PRED_TTL	.DS	1	;frames until predicted local shot self-clears
+NET_PRED_X	.DS	1	;shot publish parameter: x
+NET_PRED_Y	.DS	1	;shot publish parameter: y
+NET_PRED_FLG	.DS	1	;shot publish parameter: flags (active | dir<<1)
+NET_WAIT_LO	.DS	1	;frames waited for the first authoritative sync (lo)
+NET_WAIT_HI	.DS	1	;frames waited for the first authoritative sync (hi)
+NET_INIT_TRY	.DS	1	;consecutive NS_INIT failures for the current host
+NET_FW_OPEN	.DS	1	;NS_INIT reached firmware; COMMAND/SIO close is required
+NET_LEAVING	.DS	1	;clean leave suppresses gameplay/name TX while RX stays live
+NET_LEAVE_SENT	.DS	1	;$56 frame was queued on this connection
+NET_LEAVE_SEQ	.DS	1	;sequence echoed by $57 LEAVE_ACK
+NET_LEAVE_ACKED	.DS	1	;matching server acknowledgement received
+NET_LEAVE_TIMER	.DS	1	;frames left before bounded forced close
+NET_LEAVE_CLK	.DS	1	;RTCLOK edge used to age the leave timer
+HOST_MSG	.DS	2	;pending host-screen status string ($0000 = none)
 NET_TX_CLKLAST	.DS	1	;last RTCLOK used for pacing
 NET_TX_LAST_STICK	.DS	1	;last transmitted stick nibble
 NET_TX_LAST_TRIG	.DS	1	;last transmitted trigger bit
+NET_TRIG_PREV	.DS	1	;previous debounced trigger sample
+NET_TRIG_LATCH	.DS	1	;fire seen since the last delta
 NET_RX_DBG	.DS	1	;set after first valid snapshot (enables seq checks)
 NET_IN_TMP	.DS	1	;input debounce scratch
 NET_BOOT_HIDE	.DS	1	;hide actors until first authoritative sync
 NET_LOCAL_PID	.DS	1	;pid assigned by server in snapshot flags
 NET_ROLE_MASK	.DS	1	;server role/zombie mask from snapshot flags
+NET_ROLE_NEW	.DS	1	;role mask decoded from the snapshot being applied
+NET_ROLE_CHG	.DS	1	;slots whose role changed, for NET_ROLE_RESET
+NET_DIAG_SNAPS	.DS	1	;corrections applied this connection (saturating)
+NET_DIAG_MAXDRIFT	.DS	1	;largest local drift seen, in cells
+NET_DIAG_PENDMAX	.DS	1	;largest unacked input backlog seen
+NET_DIAG_SRC	.DS	1	;which triggers fired: 1 staged 2 idle 4 vbi 8 remote
+NET_DIAG_HOLD	.DS	1	;frames to ignore drift for after our own respawn
+NET_DIAG_BIT	.DS	1	;NET_DIAG_BUMP scratch
+NET_DIAG_YSAV	.DS	1	;NET_DIAG_BUMP saved Y
+NET_DIAG_CNT	.DS	4	;per-path counts: staged, idle, vbi, remote
+NET_IDLE_FRAMES	.DS	1	;consecutive frames with the stick centred
+NET_GLIDE_TMP	.DS	1	;VBI-safe scratch for the glide distance test
+NET_RF_DIST	.DS	1	;REMOTE_FOLLOW saved gap; NET_AHEAD_FREE_RND clobbers RX tmp
+NET_RCHASE	.DS	1	;a correction is being walked off by the picture
+NET_RCHASE_STEP	.DS	1	;this INITMVE moves the render position only
+NET_MOVE_DUE	.DS	1	;permission to begin one predicted cell, granted
+			;by the transmit slot and consumed by STRTMOV
+NET_SNAPLOG_IDX	.DS	1	;write cursor into NET_SNAPLOG
+NET_SNAPLOG	.DS	128	;16 x 8: bit,locx,locy,px,py,dir,stick,pend
+NET_NAME_IDX	.DS	1	;name collector index
+NET_NAME_PEND	.DS	1	;our name is queued for transmission
+NET_NAME_TMR	.DS	1	;frames until the next name retry check
+NET_NAME_OFF	.DS	1	;slot*8 while checking the server's echo
+NET_NAME_CHK	.DS	1	;expected character while checking the echo
+HOST_COL	.DS	1	;TXT_DRAW screen column
+HOST_SRC	.DS	1	;TXT_DRAW buffer index
+NET_NAME_PKT	.DS	NAME_PKT_LEN+2	;name packet staging + CRC-16 trailer
+NET_NAMES	.DS	4*NAME_LEN	;per-slot display name, all spaces/0 = unnamed
+NET_REL_PKT	=	NET_FRAME_BUF	;reliable apply is synchronous; reuse decoded frame
+NET_REL_REV_LO	.DS	1	;highest applied reliable revision, low byte
+NET_REL_REV_HI	.DS	1	;highest applied reliable revision, high byte
+NET_REL_ACK_PEND	.DS	1	;send a $45 cumulative reliable ACK when idle
 NET_SCORE_PEND	.DS	1	;request HUD role-label refresh
+NET_SEAT_PKT	.DS	5	;seat-mask packet staging + CRC-16 trailer
+NET_SEAT_MASK	.DS	1	;slots a client actually holds, bit n = slot n
+NET_VACANT_MASK	.DS	1	;slots hidden by NET_VACANT_UPDATE, not by a respawn
+NET_GAME_SHOW	.DS	1	;0 until first full-map + snapshot commit is ready to display
+NET_WELCOME	.DS	1	;versioned session anchor accepted
+NET_ROUND_ID	.DS	1	;current modulo-256 authoritative epoch
+NET_ROUND_PHASE	.DS	1	;0 playing, 1 frozen results/intermission
+NET_ROUND_AUTH	.DS	1	;matching reliable ROUND_START received
+NET_ROUND_MAP	.DS	1	;matching reliable BRICK_FULL fully applied
+NET_ROUND_SNAP	.DS	1	;fresh matching snapshot fully staged
+NET_ROUND_READY	.DS	1	;AUTH + MAP + SNAP gate for gameplay input/display
+NET_ROUND_WINNER	.DS	1	;frozen MATCH_END winner slot
+NET_KILL_LIMIT	.DS	1	;authoritative kills needed for this round
+ROUND_PRESENT_STATE	.DS	1	;VBI-owned nonblocking round-end presentation
+ROUND_PRESENT_TIMER	.DS	1	;PAL/NTSC-aware winner dance timer / fade scratch
+ROUND_PRESENT_TIMER_HI	.DS	1	;high byte for the five-second NTSC dance
+ROUND_EFFECT_MASK	.DS	1	;losers whose vaporization is still running
+ROUND_ACTIVE_MASK	.DS	1	;MATCH_END occupancy, frozen across disconnects
+ROUND_FINAL_ROLE	.DS	1	;MATCH_END Zombie-role mask
+ROUND_ZOMBIE_HISTORY	.DS	1	;any Zombie participation in the completed round
+ROUND_FINAL_ID	.DS	1	;completed authoritative round epoch
+ROUND_FINAL_SCORE	.DS	4	;binary 00..10 result scores for two-digit display
 NET_SNAP_IDX	.DS	1	;snapshot / brick-delta collector index
-NET_SNAP_BUF	.DS	19	;snapshot staging buffer
+NET_SNAP_BUF	.DS	23	;snapshot staging buffer + CRC-16 trailer
 NET_SHOT_IDX	.DS	1	;shot collector index
-NET_SHOT_PKT	.DS	6	;single incoming shot packet staging
+NET_SHOT_PKT	.DS	9	;incoming shot packet staging + CRC-16 trailer
+NET_SHOT_SEQ	.DS	4	;per-slot odd/even publish sequence from mainline RX
+NET_SHOT_APPLYSEQ	.DS	4	;last fully applied shot publish sequence
 NET_RESP_IDX	.DS	1	;respawn collector index
-NET_RESP_PKT	.DS	6	;respawn staging buffer
+NET_RESP_PKT	.DS	9	;respawn staging buffer + CRC-16 trailer
+NET_RESP_BUF	.DS	24	;4 * 6-byte latest-respawn cache
+NET_RESP_SEQ	.DS	4	;per-slot odd/even publish sequence from mainline RX
+NET_RESP_APPLYSEQ	.DS	4	;last fully applied respawn publish sequence
+NET_RESP_WRK	.DS	6	;working copy passed to NET_RESP_APPLY_WRK
+NET_RESP_FLAGS	.DS	1	;VBI-owned flags; never aliases foreground RX scratch
 NET_BRICK_IDX	.DS	1	;brick-full collector index
-NET_BRICK_BUF	.DS	51	;brick-full staging buffer
+NET_BRICK_BUF	.DS	54	;brick-full staging buffer + CRC-16 trailer
 NET_BRICK_DONE	.DS	1	;set after first full-map sync
+NET_BRICK_RESYNC	.DS	1	;this BRICK_FULL is a repair, not the first sync
+NET_BRICK_GLYPH	.DS	1	;screen glyph staged for the cell being applied
 NET_SHOT_PEND	.DS	1	;bitmask: slot has queued shot update
 NET_SHOT_BUF	.DS	24	;4 * 6-byte latest-shot cache
 NET_SHOT_WRK	.DS	6	;working copy passed to NET_SHOT_APPLY
+NET_SHOT_DRAWN	.DS	1	;slots with a shot glyph currently owned by renderer
+NET_SHOT_TTL	.DS	4	;active-update watchdog; zero means no live shot
 NET_DEAD_MASK	.DS	1	;slots hidden while respawn pending
 NET_ERASE_MASK	.DS	1	;slots requiring erase pass
+NET_REDRAW_MASK	.DS	1	;slots requiring forced PM redraw after round barrier
 NET_GUARD_MASK	.DS	1	;slots requiring location-pointer guard pass
+NET_STAGE_SEQ	.DS	1	;odd while staging write is in progress, even when published
+NET_STAGE_APPLYSEQ	.DS	1	;last published stage sequence committed by VBI
+NET_STAGE_REVEAL	.DS	1	;published snapshot opens the round and forces redraw
+NET_STAGE_LOCAL_PID	.DS	1	;recipient pid staged with snapshot target set
+NET_STAGE_ACK_VALID	.DS	1	;staged snapshot ack present flag
+NET_STAGE_ACK_SEQ	.DS	1	;staged authoritative ack sequence
+NET_STAGE_PENDING	.DS	4	;staged reconcile/follow requests
+NET_STAGE_PX_X	.DS	4	;staged authoritative X tile targets
+NET_STAGE_PX_Y	.DS	4	;staged authoritative Y tile targets
+NET_STAGE_PJOY	.DS	4	;staged authoritative joy bytes for all slots
+NET_ACK_VALID	.DS	1	;live snapshot ack present flag
+NET_ACK_SEQ	.DS	1	;last committed authoritative ack sequence
 ; --- NET snapshot position latch (authoritative) ---
 NET_PX_X	.DS	4
 NET_PX_Y	.DS	4
 NET_P_PENDING	.DS	4
+NET_PJOY	.DS	4
+NET_DESYNC_CNT	.DS	4
+NET_PEND_HEAD	.DS	1	;oldest pending local input ring index
+NET_PEND_COUNT	.DS	1	;number of pending local inputs retained
+NET_REPLAY_LEFT	.DS	1	;remaining pending inputs to replay
+NET_REPLAY_MOVE	.DS	1	;final replayed local move intent for current commit
+NET_PEND_SEQ	.DS	8	;pending local delta sequence bytes
+NET_PEND_JOY	.DS	8	;pending local delta joy bytes
 ; --- NET remote zombie1 latch ---
 NET_Z1_STICK	.DS	1
 NET_Z1_TRIG	.DS	1
@@ -4353,9 +9785,34 @@ NET_INIT_ARGS	.BYTE	NET_BAUD_LO,NET_BAUD_HI,NET_FLAGS,<HOSTBUF,>HOSTBUF
 ;NETSTREAM ARG BUFFER
 ;
 NET_ARGS	.BYTE	NET_BAUD_LO,NET_BAUD_HI,NET_FLAGS,<HOSTBUF,>HOSTBUF
-HOSTPROMPT	.BYTE	"HOST: ",0
+MSG_CONNECT	.BYTE	"CONNECTING TO SERVER...",$FF
+MSG_NOSRV	.BYTE	"NO REPLY - CHECK HOST AND SERVER",$FF
+MSG_LOST	.BYTE	"SERVER STOPPED RESPONDING",$FF
+MSG_INITFAIL	.BYTE	"FUJINET DID NOT OPEN THE CONNECTION",$FF
+MSG_BADPORT	.BYTE	"PORT MUST BE 1-65535",$FF
+HOSTPROMPT	.BYTE	"HOST: ",$FF
+PORTPROMPT	.BYTE	"PORT: ",$FF
+NAMEPROMPT	.BYTE	"NAME: ",$FF
 HOSTBUF	.BYTE	0
 	.DS	HOST_MAX
+PORTBUF	.BYTE	$39,$30,$30,$30,0	;ASCII input bytes, not screen codes
+	.DS	PORT_MAX-4
+NAMEBUF	.BYTE	0
+	.DS	NAME_LEN
+; Mutable NS_INIT register bytes. PORT_PARSE writes host high/low here.
+NET_PORT_ARG_A	.BYTE	NET_PORT_LO
+NET_PORT_ARG_X	.BYTE	NET_PORT_HI
+PORTVAL_LO	.DS	1
+PORTVAL_HI	.DS	1
+PORTTMP_LO	.DS	1
+PORTTMP_HI	.DS	1
+APPKEY_COUNT	.DS	1	;validated default-mode payload length, 0..64
+APPKEY_AUTOJOIN	.DS	1	;one-shot boot routing flag, consumed before NS_INIT
+APPKEY_NAME_OK	.DS	1	;shared Lobby username accepted into NAMEBUF
+APPKEY_URL_OK	.DS	1	;selected room validated into HOSTBUF/PORTBUF
+APPKEY_KEY	.DS	1	;OPEN metadata key byte
+APPKEY_SCOPE	.DS	1	;0 Maze War ($3022/$03), 1 Lobby read-only ($0001/$01)
+NET_STATE_END
 ;
 	ORG	$02E0
 	.WORD	INIT
