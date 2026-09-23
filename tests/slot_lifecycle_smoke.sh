@@ -133,13 +133,22 @@ def fail(msg):
     raise SystemExit("FAIL: " + msg)
 
 
-# --- observer joins slot 0 and watches the rest of the match ---------------
+# A FujiNet retry can create a second TCP connection before the first reaches
+# HELLO. With three zombies slot 0 is the only human seat, so the retry must
+# replace the unfinished provisional connection instead of being assigned a
+# zombie seat. Let the server accept the first socket before opening the retry.
+provisional = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+provisional.connect(("127.0.0.1", port))
+time.sleep(0.15)
+
+# --- observer retries into slot 0 and watches the rest of the match --------
 obs = Client()
 send_frame(obs.sock, bytes([0x41, 1, 0, 0x0F]))
 obs.seq = 2
 obs.wait_ready()
 if obs.pid != 0:
-    fail(f"observer expected slot 0, got {obs.pid}")
+    fail(f"retry expected slot 0, got {obs.pid}")
+provisional.close()
 
 # Let the zombies run so slot 1 accumulates a non-neutral facing and moves.
 obs.keepalive(SETTLE_S)

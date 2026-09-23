@@ -356,17 +356,33 @@ static void log_client_event(const char *event, int slot,
 }
 
 /* Find a slot for a just-accepted TCP connection. Unlike the old UDP
-   find_or_add_client(), there is no "is this the same client sending again"
-   lookup here: a TCP accept() is unconditionally a new connection with its
-   own fd, so every call to this function is the "allocate a fresh slot"
-   case. Same two-pass preference as before -- a free non-zombie slot first,
-   any free slot otherwise -- so --zombies N still shrinks only once the free
-   slots genuinely run out. */
-static int alloc_client_slot(const struct client_slot *clients, int zombies) {
+   find_or_add_client(), there is no address lookup: a TCP accept() normally
+   owns a new descriptor. Prefer a free human seat; only use a zombie seat
+   after every human seat is genuinely occupied. */
+/* A FujiNet transport retry can arrive before the abandoned first TCP
+   connection has delivered (or been observed to have lost) its HELLO.  Prefer
+   a genuinely free human seat, but if every human seat is provisionally held,
+   allow the new connection to replace one of those incomplete handshakes.
+   This matters most for --zombies 3: slot zero is the sole human seat, and
+   falling through to a zombie seat would leave slot zero visibly empty. */
+static int alloc_client_slot(const struct client_slot *clients, int zombies,
+                             int *replace_pending) {
   uint8_t zombie_mask[MAX_PLAYERS];
+  if (replace_pending) {
+    *replace_pending = 0;
+  }
   compute_zombie_mask(clients, zombies, zombie_mask);
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use && !zombie_mask[i]) {
+      return i;
+    }
+  }
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (!zombie_mask[i] && clients[i].in_use &&
+        !clients[i].handshake_ok) {
+      if (replace_pending) {
+        *replace_pending = 1;
+      }
       return i;
     }
   }
@@ -2849,10 +2865,20 @@ static void accept_room_client(struct room *room, int debug, uint64_t now) {
     }
     return;
   }
-  int slot = alloc_client_slot(room->clients, room->config.zombies);
+  int replace_pending = 0;
+  int slot = alloc_client_slot(room->clients, room->config.zombies,
+                               &replace_pending);
   if (slot < 0 || tcp_configure(fd) < 0) {
     close(fd);
     return;
+  }
+  if (replace_pending) {
+    if (debug) {
+      printf("room=%d replacing unhandshaken slot %d for TCP retry\n",
+             room->config.port, slot);
+    }
+    reset_client_slot(&room->clients[slot]);
+    reset_slot_gameplay(room, slot, now);
   }
   init_client_slot(&room->clients[slot], fd, &src, src_len, now);
   log_client_event("connected", slot, &room->clients[slot].addr);
