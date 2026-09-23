@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: 2026-09-12 - Phase 08-05 leave/rejoin, safe vacant-seat spawn, and immediate Atari join-redraw passed real Atari/FujiNet and emulator testing. Phase 08-06 build configuration and title/direct-connect UI is active.
+stopped_at: 2026-09-12 - Phase 08-06 direct-connect UI and its remote-follow repair are accepted for movement smoothness. A separate intermittent stationary actor body-loss defect remains under Phase 4 render-state investigation.
 last_updated: "2026-09-12T00:00:00.000Z"
 progress:
   total_phases: 9
@@ -19,7 +19,9 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** Phase 08-06 build configuration and title/direct-connect UI.
+**Current focus:** Phase 08-06 build configuration and title/direct-connect UI;
+trace the remaining intermittent stationary actor body-loss defect as Phase 4
+render-state work.
 Phase 08-05 is accepted: the focused real Atari/FujiNet and emulator retest
 confirmed collision-safe vacant-seat respawns and immediate PM redraw when a
 player joins. Bounded timed remote-sample playback remains the first revisit
@@ -35,6 +37,34 @@ events now ride one ordered, cumulatively acknowledged stream. A forced full
 smoke suite should be rerun after future changes. 07-05 remains explicitly
 deferred. Older v1 position and investigation notes below are
 retained as historical context.
+
+### Stationary actor body-loss follow-up (2026-09-12)
+
+The latest real-hardware test accepts the `9cdcd5d` remote-follower repair:
+the reported movement lagginess is fixed. It does **not** accept the separate
+shirt-only display fault. An actor can be reduced to its player-missile shirt
+while stationary after stopping, respawning, stopping at a corner, or firing;
+the full character-cell body returns as soon as that actor moves again. There
+is no reliable sequence yet.
+
+This places the open defect in Phase 4's stationary render/erase ownership,
+not in the remote follower or player-missile shirt. Earlier `ERASMAN` Y/mask
+corruption and the VBI/foreground scratch collision were valid fixes, but the
+latest reproduction proves neither was sufficient. The next investigation must
+capture the affected `GAMESCR` cells and actor render/simulation state around
+`SETSTIL`, `SETMOVE`, `ERASMAN`, shot/brick drawing, and respawn redraw. In
+particular, measure whether an erase uses a simulation `LOC` pointer after the
+visible body has moved to `RND`, rather than treating that as the established
+cause.
+
+Follow-up test evidence, 2026-09-13: after the stale-shot and brick-delta
+display-ownership repair (`bdf4bbc`), four mixed real-Atari/FujiNet and
+emulator rounds without Zombies produced one shirt-only actor at a **new-round
+spawn**. The screenshot is
+`ref/screenshots/Screenshot from 2026-09-13 08-30-57_new-round-spawn.png`.
+This is now explicitly deferred: do not broaden the current repair without a
+reliable reproduction or a trace of the clearing write. Preserve it as a
+round-start/forced-redraw investigation for a later render pass.
 
 ## Current Position
 

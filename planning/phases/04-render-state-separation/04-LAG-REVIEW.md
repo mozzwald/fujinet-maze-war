@@ -50,6 +50,74 @@ needs further improvement before Phase 6, the next planned step is still the
 bounded timed remote-sample playback/protocol extension described below, not
 another snap-threshold tweak.
 
+## Phase 08-06 hardware regression revisit - 2026-09-12
+
+Later real-hardware testing again showed frequent remote snap-forward while an
+unrelated body-rendering fault was also present. The earlier Phase 4 fixes were
+still in the source: six-frame DELTA pacing, one animation phase per VBI, fixed
+rightward fallback, preserved recovery distance, reachable local replay, and
+fixed-deadline server ticks all passed their guards.
+
+The remaining follower policy had become internally inconsistent after the
+animation speedup. A legal gap of two cells incremented `NET_DESYNC_CNT`, so
+three successful catch-up steps forced a snap. A gap of three or more was sent
+to `RF_FAIL` and immediately snapped because `NET_RECOVER_P1` was also three.
+That policy was originally meant to stop an equal-speed renderer from trailing
+forever; the current renderer has about 15-cell/s capacity and can close a
+10-cell/s authoritative backlog. Hardware batching can produce two or three
+cells of gap without representing a discontinuity.
+
+`REMOTE_FOLLOW` now walks every collision-valid gap below the existing
+ten-cell catastrophic guard, and a successful step clears the failed-recovery
+counter. Three genuinely blocked recovery attempts still snap, as does a gap
+at or above the catastrophic guard. This changes the meaning of recovery from
+failure counting to progress tracking rather than merely increasing a numeric
+threshold.
+
+This remains a latest-target follower. It cannot preserve an intermediate
+corner discarded before a VBI. Keep bounded timed sample playback prominent
+for a future cloud-server test if added latency and jitter make that lost
+history visible again.
+
+## Stationary actor body-loss follow-up - 2026-09-12
+
+The follow-up physical test accepts the remote-follower repair above: the
+reported movement lagginess is fixed. It also proves that the separate
+shirt-only actor fault remains. A player can stop with only the player-missile
+shirt visible after an ordinary stop, a respawn, stopping at a corner, or a
+shot; starting to move redraws the complete character-cell body. No stable
+reproduction sequence is known.
+
+That observation separates this issue from remote-sample timing and from PM
+sprite loss. It is an intermittent stationary playfield/body write or erase
+problem. The prior `ERASMAN` Y/mask repair fixed a documented sliver fault, and
+the Phase 08-06 VBI/foreground scratch separation removed a real data race, but
+neither explains this remaining behavior. A prior `SETSTIL` trailing-cell
+cleanup experiment also had no measurable effect and was reverted; do not
+reintroduce it without new evidence.
+
+Next investigation: add a low-overhead, real-hardware-safe trace or watchpoint
+for the affected `GAMESCR` body cells and correlate it with `LOCX/LOCY`,
+`RNDX/RNDY`, `MOVEST`, and direction. Attribute each change to `SETSTIL`,
+`SETMOVE`, `ERASMAN`, `ERASHOT`, shot/brick application, or respawn redraw.
+`ERASMAN`'s simulation-cell pointer versus render-cell ownership is a specific
+hypothesis to measure during a stop transition, not an established cause. Do
+not hide the fault by redrawing every stationary actor in the VBI: that would
+obscure the writer and add unbudgeted VBI work.
+
+### Deferred new-round spawn observation - 2026-09-13
+
+After the stale-shot and brick-delta ownership repair in `bdf4bbc`, the user
+played four mixed real Atari/FujiNet and emulator rounds without Zombies. Only
+one shirt-only actor occurred, immediately after a new round began. The
+evidence is `ref/screenshots/Screenshot from 2026-09-13
+08-30-57_new-round-spawn.png`.
+
+This confirms a remaining round-start/forced-redraw path outside the two newly
+guarded playfield clears. It is intentionally deferred until a later render
+pass: retain the screenshot and the exact scenario, but do not add a broad
+redraw workaround without a repeatable capture of the writer.
+
 ## Confirmed client findings
 
 ### 1. Animation throughput is lower than input throughput

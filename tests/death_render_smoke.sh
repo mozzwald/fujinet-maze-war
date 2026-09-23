@@ -63,6 +63,16 @@ printf '%s' "$pend" | grep -qE "LDA${TAB}#9" ||
 printf '%s' "$pend" | grep -E "ORA${TAB}PLRMSK,Y" | grep -q . &&
     fail "a pending respawn sets a mask bit directly; that cancels the animation"
 
+# Foreground packet decode and the VBI may interrupt one another at any
+# instruction. Respawn flags once lived in NET_RX_TMP0, which foreground RX
+# also uses while calculating packet-buffer offsets and screen pointers.
+respawn_apply=$(sed -n '/^NET_RESP_APPLY_WRK/,/^; Pending respawn/p' "$SRC")
+printf '%s' "$respawn_apply" | grep -qE "STA${TAB}NET_RESP_FLAGS" ||
+    fail "VBI respawn apply no longer saves flags in its owned byte"
+if printf '%s' "$respawn_apply" | grep -qE "NET_RX_TMP0"; then
+    fail "VBI respawn apply aliases foreground RX scratch again"
+fi
+
 # The animation has to be driven from the net frame loop, because the original
 # path to it through CHKSHOT is short-circuited in this client.
 grep -qE "^CHKSHOT${TAB}JMP${TAB}DONXTMN" "$SRC" ||

@@ -100,7 +100,6 @@ NET_FRAME_DIV	=	6	;10 Hz at 60 FPS, matching the server tick.  The
 NET_RECON_P0	=	3	;local player reconcile threshold (manhattan cells)
 NET_IDLE_SETTLE	=	20	;frames of held-neutral before idle convergence
 NET_RECON_P1	=	10	;remote catastrophic hard-snap guard
-NET_RECOVER_P1	=	3	;remote bounded-recovery snap threshold
 NET_GLIDE_MAX	=	6	;local drift still worth walking off rather than snapping
 NET_FRAME_MAX	=	60	;longest frame we accept (BRICK_FULL encodes to 53)
 NET_DESYNC_MAX	=	3	;remote failed-recovery attempts before forced snap
@@ -2870,6 +2869,37 @@ TITLE_OPTION	.BYTE	"OPTION: SERVER SETUP",$FF
 ; $8400-$8BFF bound is checked by memory_layout_smoke.sh. It stays immutable;
 ; UI_CONFIG_DEFAULTS copies only host/port defaults to the mutable buffers.
 	icl	'build/maze-war-config-data.inc'
+; Erase the two-byte character pair at POINTR0 unless a live actor currently
+; owns that render cell. Projectiles are transient, while a stationary actor
+; redraws only when it next moves; clearing an old shot under that actor would
+; leave the PM shirt with no character-cell body. Preserves X and Y.
+ERASHOT_PAIR
+	TYA
+	PHA
+	LDY	#3
+ERSHP_LP
+	LDA	NET_DEAD_MASK
+	AND	PLRMSK,Y
+	BNE	ERSHP_NX
+	LDA	LOCLO,Y
+	CMP	POINTR0
+	BNE	ERSHP_NX
+	LDA	LOCHI,Y
+	CMP	POINTR0+1
+	BEQ	ERSHP_X	;the actor owns these two bytes
+ERSHP_NX
+	DEY
+	BPL	ERSHP_LP
+	LDY	#0
+	LDA	#0
+	STA	(POINTR0),Y
+	INY
+	STA	(POINTR0),Y
+ERSHP_X
+	PLA
+	TAY
+	RTS
+;
 NET_HIGH_CODE_END
 	ORG	CORE_DISPATCH_CONT
 NET_RX_40DONE
@@ -3700,10 +3730,10 @@ NBFA_LP
 	LDA	NET_DEAD_MASK	;awaiting respawn: not on the board
 	AND	PLRMSK,X
 	BNE	NBFA_NX
-	LDA	LOCX,X
+	LDA	RNDX,X
 	CMP	NET_BF_CELLX
 	BNE	NBFA_NX
-	LDA	LOCY,X
+	LDA	RNDY,X
 	CMP	NET_BF_ROW
 	BNE	NBFA_NX
 	LDX	NET_BF_ROW
@@ -4155,7 +4185,7 @@ NET_RESP_APPLY_WRK
 NRW_PIDOK
 	TAX
 	LDA	NET_RESP_WRK+5
-	STA	NET_RX_TMP0
+	STA	NET_RESP_FLAGS	;VBI-owned: do not alias foreground RX scratch
 	AND	#$02
 	BEQ	NRW_PEND
 	LDA	NET_RESP_WRK+3	;same interior-only bounds as a snapshot
@@ -4214,7 +4244,7 @@ NRAW_X	RTS
 ; animation before its first frame. ENDEVAP sets the hide when the smoke
 ; clears, which is where the original put it too.
 NRW_PEND
-	LDA	NET_RX_TMP0
+	LDA	NET_RESP_FLAGS
 	AND	#$01
 	BEQ	NRW_X
 	TXA
@@ -4652,6 +4682,12 @@ NET_BRICK_DELTA_APPLY
 	STA	NET_RX_HOLD
 	INC	NET_BD_CNT	;deltas applied; far more than the server sent
 	JSR	NET_RX_MAP_CLRXY	;would mean misparsed packets are creating them
+	LDA	NET_RX_COUNT	;the full-map ownership check takes a byte column
+	ASL			;in NET_RX_YSAVE and the row in X.
+	STA	NET_RX_YSAVE
+	LDX	NET_RX_HOLD
+	JSR	NBF_ACTOR_HERE
+	BCS	NBRK_X		;actor owns the display pair until it moves away
 	JSR	NET_RX_SCREEN_PTR
 	LDY	#1
 	LDA	#0
@@ -6102,7 +6138,8 @@ RF_DYPOS
 	CLC
 	ADC	HOLDIT
 	STA	NET_RF_DIST	;manhattan render gap; look-ahead clobbers NET_RX_TMP
-	CMP	#NET_RECOVER_P1	;walk off anything short of the snap threshold
+	CMP	#NET_RECON_P1	;walk every non-catastrophic gap; the 15-cell/s
+			;renderer can close a legal backlog against 10 Hz authority
 	BCS	RF_FAIL
 	LDA	LOCX,X
 	CMP	RNDX,X
@@ -6125,30 +6162,28 @@ RF_1SET
 	STA	DIR,X
 	JSR	NET_AHEAD_FREE_RND
 	BNE	RF_FAIL
-	LDA	NET_RF_DIST	;stepped successfully.  Only call it recovered when
-	CMP	#2		;we were within one cell; a larger gap that keeps
-	BCS	RF_STEPFAR	;coming back means the picture is trailing at the
-	LDA	#0		;remote actor's own speed, so keep the counter
-	STA	NET_DESYNC_CNT,X	;running and snap rather than follow forever.
+	LDA	NET_RF_DIST	;the legal step is ordinary smooth recovery; retain
+	CMP	#2		;a separate diagnostic for batched multi-cell gaps
+	BCS	RF_STEPFAR
+	LDA	#0
+	STA	NET_DESYNC_CNT,X
 	LDA	#1
 	STA	NET_RCHASE_STEP
 	JMP	INITMOVE
 RF_STEPFAR
-	LDA	#$10		;remote bounded recovery was still two cells out
+	LDA	#$10		;remote legal recovery was still two or more cells out
 	JSR	NET_DIAG_BUMP
-	INC	NET_DESYNC_CNT,X
-	LDA	NET_DESYNC_CNT,X
-	CMP	#NET_DESYNC_MAX
-	BCS	RF_SNAP
+	LDA	#0		;a legal step is progress, not a failure; stream
+	STA	NET_DESYNC_CNT,X	;batching must not count down to a forced snap
 	LDA	#1
 	STA	NET_RCHASE_STEP
 	JMP	INITMOVE
 RF_FAIL
-	LDA	#$20		;remote recovery route blocked or over threshold
+	LDA	#$20		;remote recovery route blocked or catastrophic gap
 	JSR	NET_DIAG_BUMP
 	INC	NET_DESYNC_CNT,X
 	LDA	NET_RF_DIST
-	CMP	#NET_RECOVER_P1
+	CMP	#NET_RECON_P1
 	BCS	RF_SNAP
 	LDA	NET_DESYNC_CNT,X
 	CMP	#NET_DESYNC_MAX
@@ -7177,11 +7212,7 @@ ERASHOT	LDA	SHOTLO,X	;SET POINTER TO
 	STA	POINTR0	;THE SHOT LOC
 	LDA	SHOTHI,X
 	STA	POINTR0+1
-	LDA	#0	;ERASE 2 BYTES
-	TAY
-	STA	(POINTR0),Y
-	INY
-	STA	(POINTR0),Y
+	JSR	ERASHOT_PAIR	;an actor may have entered this old shot cell
 	LDA	SHOTMST,X	;MOVE STAT=0?
 	BEQ	ERSHXIT	;YES. DONE
 	; The erase has to cover exactly what the draw covered. Right and down are
@@ -7195,13 +7226,25 @@ ERASHOT	LDA	SHOTLO,X	;SET POINTER TO
 	CMP	#2
 	BCS	ERSHXIT	;left/up: the shot cell is all there is
 	AND	#$01	;down spans the row beneath, right the pair beside it
-	BEQ	ERSHOT2
-	LDY	#$27
-	LDA	#0
-ERSHOT2	INY		;ERASE 2 BYTES
-	STA	(POINTR0),Y
-	INY
-	STA	(POINTR0),Y
+	BEQ	ERSHOT_RIGHT
+	LDA	POINTR0	;down: next row
+	CLC
+	ADC	#$28
+	STA	POINTR0
+	LDA	POINTR0+1
+	ADC	#0
+	STA	POINTR0+1
+	JSR	ERASHOT_PAIR
+	JMP	ERSHXIT
+ERSHOT_RIGHT
+	LDA	POINTR0	;right: next cell
+	CLC
+	ADC	#2
+	STA	POINTR0
+	LDA	POINTR0+1
+	ADC	#0
+	STA	POINTR0+1
+	JSR	ERASHOT_PAIR
 ERSHXIT	JSR	SND_OFF	;TURN OFF SOUND
 	RTS
 ;
@@ -7999,9 +8042,9 @@ NET_RX_STATE	.DS	1	;RX collector mode (0 idle, 1/2/3/4/5 by packet type)
 NET_ACTIVE	.DS	1	;netstream active flag
 NET_INITST	.DS	1	;NS_INIT status code
 NET_SAVPTR	.DS	2	;saved POINTER around NS_INIT fastcall setup
-NET_RX_TMP	.DS	1	;general RX scratch
+NET_RX_TMP	.DS	1	;VBI/gameplay scratch; foreground RX must not touch it
 NET_PARSE_BYTE	.DS	1	;mainline RX parser byte latch
-NET_RX_TMP0	.DS	1	;mainline/VBI net scratch
+NET_RX_TMP0	.DS	1	;foreground RX scratch; VBI must never touch it
 NET_RX_TMP1	.DS	1	;mainline RX scratch
 NET_RX_COUNT	.DS	1	;mainline RX counter scratch
 NET_RX_HOLD	.DS	1	;mainline RX scratch
@@ -8128,6 +8171,7 @@ NET_RESP_BUF	.DS	24	;4 * 6-byte latest-respawn cache
 NET_RESP_SEQ	.DS	4	;per-slot odd/even publish sequence from mainline RX
 NET_RESP_APPLYSEQ	.DS	4	;last fully applied respawn publish sequence
 NET_RESP_WRK	.DS	6	;working copy passed to NET_RESP_APPLY_WRK
+NET_RESP_FLAGS	.DS	1	;VBI-owned flags; never aliases foreground RX scratch
 NET_BRICK_IDX	.DS	1	;brick-full collector index
 NET_BRICK_BUF	.DS	54	;brick-full staging buffer + CRC-16 trailer
 NET_BRICK_DONE	.DS	1	;set after first full-map sync

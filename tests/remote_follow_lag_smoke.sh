@@ -31,6 +31,14 @@ if printf '%s' "$rf" | awk '
 '; then
   fail "REMOTE_FOLLOW reads NET_RX_TMP after NET_AHEAD_FREE_RND clobbers it"
 fi
+printf '%s' "$rf" | grep -Eq 'CMP[[:space:]]+#NET_RECON_P1' \
+  || fail "REMOTE_FOLLOW once again snaps at the small recovery threshold"
+stepfar=$(awk '$1=="RF_STEPFAR"{on=1} on{print} on&&/^RF_FAIL/{exit}' "$ATARI_SRC")
+printf '%s' "$stepfar" | grep -Eq 'STA[[:space:]]+NET_DESYNC_CNT,X' \
+  || fail "a successful remote recovery no longer clears failed recovery state"
+if printf '%s' "$stepfar" | grep -Eq 'INC[[:space:]]+NET_DESYNC_CNT,X'; then
+  fail "a successful remote recovery counts toward a forced snap"
+fi
 printf '%s' "$rf" | grep -Eq 'LDA[[:space:]]+#\$08' \
   || fail "RF_SNAP is no longer counted as a remote correction diagnostic"
 

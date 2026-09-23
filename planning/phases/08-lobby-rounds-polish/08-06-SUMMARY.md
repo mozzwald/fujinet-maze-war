@@ -4,6 +4,64 @@ Status: implementation complete on 2026-09-12; physical Atari/FujiNet
 acceptance is pending. CONF-01 and plan 08-06 remain open until that checkpoint
 passes.
 
+## Hardware regression follow-up
+
+The first hardware trial found occasional body-less actors, particularly after
+a respawn, plus remote movement that appeared to snap forward more often. A
+first repair attributed the body loss to stale vacant-seat erases running after
+a forced respawn redraw. It moved those erases ahead of redraw. The next real
+hardware test showed that both symptoms persisted, disproving that diagnosis;
+the added pre-redraw scan has been removed instead of retained as unexplained
+VBI work.
+
+The second review followed the earlier Phase 4 pointer-corruption evidence and
+found another foreground/VBI scratch collision. `NET_RESP_APPLY_WRK` runs from
+the VBI but saved its flags in `NET_RX_TMP0`. Foreground packet processing uses
+the same byte while calculating per-slot shot/respawn buffer offsets and while
+building a screen pointer for brick deltas. An NMI between a foreground store
+and reload could therefore make it publish into the wrong packet slot or blank
+an unrelated playfield cell. The PM shirt lives in separate player-missile RAM,
+so such a bad playfield write could leave a shirt-only actor. Respawn flags now
+live in the VBI-owned `NET_RESP_FLAGS` byte, and the ownership rule is guarded
+by `death_render_smoke.sh`.
+
+The movement review found that the Phase 4 cadence increase and its recovery
+policy no longer agreed. Rendering now has capacity for roughly 15 cells/s
+against 10 Hz authority, but `REMOTE_FOLLOW` still counted every successful
+multi-cell recovery toward a forced snap and immediately snapped any gap of
+three cells. Hardware stream batching can create that gap without corrupt
+state. Legal recovery now walks every gap below the existing ten-cell
+catastrophic guard and clears the failed-recovery count; only a blocked route
+counts toward the three-attempt guard. This retains collision checks and all
+four animation phases while removing the routine snap-forward path.
+
+The targeted render, lifecycle, movement, and memory-layout checks pass after
+the second repair.
+
+### Follow-up physical result
+
+The next real Atari/FujiNet test accepts the remote-follow portion: movement
+lagginess is fixed. The shirt-only actor remains, so the scratch collision was
+a valid safety fix but was not sufficient to explain the display defect. The
+body can disappear while an actor is stationary after a stop, a respawn, a
+corner stop, or firing, then returns as soon as that actor moves. The PM shirt
+continues to display and no reliable trigger is known.
+
+This regression was discovered during 08-06 testing but is now tracked as a
+Phase 4 stationary playfield/body ownership issue. The next repair should first
+trace the affected `GAMESCR` cells with actor `LOC`/`RND` state and attribute
+the clearing write among stationary drawing, movement erasure, shots/bricks,
+or respawn redraw. Do not add a continuous stationary redraw workaround before
+the source is identified.
+
+After `bdf4bbc` protected actor cells from stale shot cleanup and brick-delta
+clears, a four-round mixed real Atari/FujiNet and emulator test without Zombies
+showed one remaining shirt-only actor at a new-round spawn. See
+`ref/screenshots/Screenshot from 2026-09-13 08-30-57_new-round-spawn.png`.
+This is deferred to the Phase 4 trace work; it is not evidence to reopen the
+accepted movement repair or to change 08-06 behavior without a reproducible
+write sequence.
+
 ## Delivered behavior
 
 `make build/maze-war-net.xex` now accepts `HOST`, `ROOM_PORT_BASE`,

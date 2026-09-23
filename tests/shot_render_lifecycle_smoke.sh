@@ -37,6 +37,34 @@ mark=$(awk '$1=="NET_SHOT_MARK_X"{on=1} on{print} on&&/^[[:space:]]*RTS/{exit}' 
 printf '%s' "$mark" | grep -qE 'STA[[:space:]]+NET_SHOT_DRAWN' \
   || fail "shot draw helper does not publish renderer ownership"
 
+# A player can enter a projectile's former screen cell before its clear reaches
+# this client.  The clear must not blank that player's character-cell body;
+# the PM shirt is separate memory and would otherwise remain by itself.
+erase=$(awk '$1=="ERASHOT"{on=1} on{print} on&&/^ERSHXIT/{exit}' "$SRC")
+printf '%s' "$erase" | grep -qE 'JSR[[:space:]]+ERASHOT_PAIR' \
+  || fail "shot erase does not protect occupied character cells"
+pair=$(awk '$1=="ERASHOT_PAIR"{on=1} on{print} on&&/^[[:space:]]*RTS/{exit}' "$SRC")
+printf '%s' "$pair" | grep -qE 'LDA[[:space:]]+NET_DEAD_MASK' \
+  || fail "shot erase can protect hidden rather than live actors"
+printf '%s' "$pair" | grep -qE 'LDA[[:space:]]+LOCLO,Y' \
+  || fail "shot erase does not compare the actor render pointer"
+printf '%s' "$pair" | grep -qE 'CMP[[:space:]]+POINTR0' \
+  || fail "shot erase does not compare against its target cell"
+
+# Brick deltas clear their screen pair directly.  Preserve a current render
+# cell while still clearing NET_MAP_CELLS, so an actor body owns the display
+# until its normal erase exposes the now-empty map cell.
+brick=$(awk '$1=="NET_BRICK_DELTA_APPLY"{on=1} on{print} on&&/^NBRK_X/{exit}' "$SRC")
+printf '%s' "$brick" | grep -qE 'JSR[[:space:]]+NBF_ACTOR_HERE' \
+  || fail "brick delta does not check actor display ownership"
+printf '%s' "$brick" | grep -qE 'BCS[[:space:]]+NBRK_X' \
+  || fail "brick delta still paints through an actor image"
+brick_owner=$(awk '$1=="NBF_ACTOR_HERE"{on=1} on{print} on&&/^NBFA_NX/{exit}' "$SRC")
+printf '%s' "$brick_owner" | grep -qE 'LDA[[:space:]]+RNDX,X' \
+  || fail "brick delta does not protect an actor's render X cell"
+printf '%s' "$brick_owner" | grep -qE 'LDA[[:space:]]+RNDY,X' \
+  || fail "brick delta does not protect an actor's render Y cell"
+
 watch=$(awk '$1=="NET_SHOT_WATCH_TICK"{on=1} on{print} on&&/^[[:space:]]*RTS/{exit}' "$SRC")
 printf '%s' "$watch" | grep -qE 'DEC[[:space:]]+NET_SHOT_TTL,X' \
   || fail "watchdog does not age active shot refreshes"

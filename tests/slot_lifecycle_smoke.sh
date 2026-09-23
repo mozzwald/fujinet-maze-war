@@ -395,21 +395,20 @@ fi
 #
 # RF_SYNCCHK used to act only on an exact one-cell divergence; a gap of two --
 # one missed snapshot while that player was moving -- failed, counted up and
-# snapped. Remote wizards visibly jumped instead of walking. It now steps for
-# anything below the snap threshold, while still snapping if a two-cell gap
-# persists (trailing at the remote's own speed never closes).
+# snapped. Remote wizards visibly jumped instead of walking. The faster
+# renderer now walks every legal gap below the catastrophic guard and counts
+# only a blocked route as a failed recovery.
 sync=$(awk '/^RF_SYNCCHK/{on=1} on{print} on&&/^RF_FAIL/{exit}' clients/atari/maze-war.asm)
 if printf '%s' "$sync" | grep -qE 'CMP[[:space:]]+#1[[:space:]]*$'; then
     echo "FAIL: RF_SYNCCHK only walks an exact one-cell gap again, so a remote
 that falls two behind snaps instead of walking" >&2
     exit 1
 fi
-printf '%s' "$sync" | grep -qE 'CMP[[:space:]]+#NET_RECOVER_P1' || {
-    echo "FAIL: RF_SYNCCHK no longer bounds its walk by NET_RECOVER_P1" >&2
+printf '%s' "$sync" | grep -qE 'CMP[[:space:]]+#NET_RECON_P1' || {
+    echo "FAIL: RF_SYNCCHK no longer reserves hard snaps for catastrophic gaps" >&2
     exit 1
 }
 printf '%s' "$sync" | grep -qE '^RF_STEPFAR' || {
-    echo "FAIL: no persistent-trail guard; a remote could follow two cells
-behind indefinitely without ever being corrected" >&2
+    echo "FAIL: no multi-cell recovery path; batched snapshots would snap" >&2
     exit 1
 }

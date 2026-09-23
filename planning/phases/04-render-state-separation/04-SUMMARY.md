@@ -73,3 +73,22 @@ Treat this as a good Phase 4 checkpoint, not a full closeout. The remaining
 real-hardware jumps are much smaller and less frequent, but bounded timed
 remote-sample playback remains the next option if Phase 6 validation needs the
 last bit of smoothness.
+
+## Post-acceptance display follow-up - 2026-09-12
+
+The later `9cdcd5d` follower repair is accepted by real-hardware testing: the
+movement lagginess reported during Phase 08-06 is fixed. Bounded timed
+remote-sample playback remains a future cloud-server/WAN option, not a response
+to the display issue below.
+
+An independent Phase 4 render defect remains open. A player can occasionally
+be left with only the player-missile shirt while stopped, after respawn, after
+stopping at a corner, or after firing. The full character-cell body appears on
+the next movement frame. There is no known deterministic trigger. This points
+to loss of the stationary playfield body rather than a network-follow or PM
+shirt fault.
+
+Phase 08-06's foreground/VBI scratch separation was worth keeping, but the
+follow-up result proves it did not fully fix this symptom. Trace the body cells
+and the render/simulation coordinates through stationary draw, movement erase,
+shot/brick updates, and respawn before attempting another repair.
