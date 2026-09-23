@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: 2026-09-12 - Phase 08-03 is complete and hardware-accepted, including authoritative rounds, same-host reconnect, post-reset redraw, shot cleanup, and idle POKEY silence. Pause for the required model switch before 08-04; use gpt-5.6-sol with high reasoning.
+stopped_at: 2026-09-12 - Phase 08-04 implementation is built, fully smoke-tested, and pushed for the required mixed Atari/FujiNet hardware checkpoint. ROND-03 and 08-04 remain pending until the user accepts the presentation and restart behavior.
 last_updated: "2026-09-12T00:00:00.000Z"
 progress:
   total_phases: 9
@@ -19,7 +19,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** Phase 08-03 is complete. Pause for the required model switch, then implement 08-04's nonblocking Atari/SDL round-end presentation with `gpt-5.6-sol` at high reasoning. Bounded timed remote-sample playback remains the first revisit if future cloud-hosted WAN testing makes remote movement worse.
+**Current focus:** Phase 08-04's nonblocking Atari/SDL round-end presentation is at its hardware checkpoint. Verify loser vaporization, winner dance/vaporization, fade, frozen result text, clean authoritative restart, and unchanged network/display behavior before closing ROND-03. Bounded timed remote-sample playback remains the first revisit if future cloud-hosted WAN testing makes remote movement worse.
 
 ## Current branch: a8-net-fix (2026-09-12)
 
@@ -49,9 +49,9 @@ closing summary, followed by a pause for the user to switch. **08-01, 08-02,
 and 08-03 are hardware-accepted.** The 08-03
 authoritative round/reset contract, same-host recovery, post-reset sprite
 redraw, shot-lifecycle cleanup, and inherited idle POKEY tone repair all passed
-the user's mixed emulator and real Atari/FujiNet checkpoints. The next step is
-08-04 on gpt-5.6-sol with high reasoning; pause for the required model switch
-before implementation. The round synchronization contract now lives
+the user's mixed emulator and real Atari/FujiNet checkpoints. The 08-04
+implementation is complete and awaits that same mixed-hardware acceptance;
+08-05 remains conditional on the result. The round synchronization contract now lives
 in `08-PROTOCOL.md`; shared teardown moves earlier to 08-05.
 
 The source-grounded plan is in `planning/phases/08-lobby-rounds-polish/`.

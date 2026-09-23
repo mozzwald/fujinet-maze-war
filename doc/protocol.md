@@ -428,7 +428,10 @@ is clamped and freezes this payload once. Later combat in the same tick stops.
 Fallback names are slot-qualified `WIZARD n` or `ZOMBIE n`; unused result rows
 are blank. NAME and SEATS updates during intermission do not rewrite the frozen
 result. The server continues snapshots and clients continue neutral heartbeats
-through the intermission (default 5000 ms).
+through the intermission (default 15000 ms). The default allows the Atari's
+five-second winner dance and vaporize/fade effects to finish before keeping the
+completed result screen visible for at least eight seconds. Test and custom
+servers may shorten this with `--intermission-ms`.
 
 ### 0x55 ROUND_START (3-byte reliable inner payload)
 

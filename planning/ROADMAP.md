@@ -202,7 +202,7 @@ Plans:
 **Depends on**: Phase 6; Phase 7 plans 07-01 through 07-04
 **Reference**: `ref/mazewar_lobby_rounds_implementation_plan.md`
 **Research**: `phases/08-lobby-rounds-polish/08-RESEARCH.md`
-**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-03 is hardware-accepted and the next step is 08-04 on `gpt-5.6-sol` with high reasoning.
+**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-04 is implemented on `gpt-5.6-sol` with high reasoning and awaits hardware acceptance.
 **Round boundary contract**: [08-PROTOCOL.md](phases/08-lobby-rounds-polish/08-PROTOCOL.md)
 **Success Criteria**:
   1. One server process runs isolated four-seat rooms on distinct TCP ports.
@@ -295,4 +295,4 @@ Phase 6 hardening freezes the baseline; Phase 8 makes it Lobby-releasable.
 | 4. Render-State Separation | 5/5 effective; 04-06 retracted | Closed as good enough for now after 2026-09-11 user testing; revisit bounded timed remote-sample playback if a future cloud-hosted server makes WAN latency visible | 2026-09-11 |
 | 6. Mixed-Session Validation and Hardening | 1/1 | Complete; user mixed-session acceptance | 2026-09-11 |
 | 7. Realtime Transport Reliability | 4/4 executable | Complete as scoped and merged; 07-05 remains a deferred, not-recommended design note | 2026-09-10 |
-| 8. Lobby and Round Polish | 3/11 | 08-03 complete; pause for model switch before 08-04 presentation work | - |
+| 8. Lobby and Round Polish | 3/11 | 08-04 presentation implementation ready for mixed Atari/FujiNet hardware acceptance | - |

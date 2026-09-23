@@ -99,6 +99,8 @@ struct game_state {
   struct fx_state fx[FX_MAX];
   int fx_cursor;
   uint8_t zombie_mask;
+  uint8_t result_active_mask;
+  uint8_t zombie_history_mask;
   /* Slots a client actually holds. The zombie mask only names AI-driven
      slots, so without this an empty seat looks like a silent human. */
   uint8_t seat_mask;
@@ -294,6 +296,20 @@ static int name_is_set(const uint8_t *name) {
     }
   }
   return 0;
+}
+
+static void display_name(const struct game_state *g, int slot,
+                         char out[NAME_LEN + 1]) {
+  int i;
+  if (name_is_set(g->names[slot])) {
+    memcpy(out, g->names[slot], NAME_LEN);
+    out[NAME_LEN] = '\0';
+    for (i = NAME_LEN - 1; i >= 0 && out[i] == ' '; i--) out[i] = '\0';
+    return;
+  }
+  snprintf(out, NAME_LEN + 1,
+           (g->zombie_mask & (1u << slot)) ? "ZOMBIE %d" : "WIZARD %d",
+           slot + 1);
 }
 
 static int glyph_for_char(char ch, uint8_t out[7]) {
@@ -758,24 +774,41 @@ static void render_game(SDL_Surface *screen, const struct layout *l,
   }
 
   if (g->round_phase == ROUND_OVER && g->have_welcome) {
-    int box_w = l->board_w / 2;
-    int box_h = 34 * l->scale;
+    int box_w = (l->board_w * 3) / 4;
+    int box_h = 8 * l->line_h;
     int box_x = l->board_x + (l->board_w - box_w) / 2;
     int box_y = l->board_y + (l->board_h - box_h) / 2;
+    char winner[NAME_LEN + 1];
+    int result_row = 0;
     fill_rect(screen, box_x - 2 * l->scale, box_y - 2 * l->scale,
               box_w + 4 * l->scale, box_h + 4 * l->scale,
               theme->border_blue);
     fill_rect(screen, box_x, box_y, box_w, box_h, theme->black);
-    draw_text(screen, box_x + 6 * l->scale, box_y + 5 * l->scale,
+    draw_text(screen, box_x + 6 * l->scale, box_y + 2 * l->scale,
               "ROUND OVER", l->text_scale + 1, theme->text_gold);
-    snprintf(line, sizeof(line), "PLAYER %u WINS",
-             (unsigned)(g->winner_pid + 1));
-    draw_text(screen, box_x + 6 * l->scale, box_y + 17 * l->scale,
+    display_name(g, g->winner_pid, winner);
+    if (g->zombie_mask & (1u << g->winner_pid)) {
+      snprintf(line, sizeof(line), "%s WINS", winner);
+    } else if (g->zombie_history_mask) {
+      snprintf(line, sizeof(line), "%s BEATS ZOMBIES", winner);
+    } else {
+      snprintf(line, sizeof(line), "%s WINS", winner);
+    }
+    draw_text(screen, box_x + 6 * l->scale, box_y + 2 * l->line_h,
               line, l->text_scale, theme->white);
-    snprintf(line, sizeof(line), "FIRST TO %u - NEXT ROUND SOON",
-             (unsigned)g->kill_limit);
-    draw_text(screen, box_x + 6 * l->scale, box_y + 26 * l->scale,
-              line, l->text_scale - 1, theme->text_blue);
+    for (i = 0; i < MAX_PLAYERS; i++) {
+      char result_name[NAME_LEN + 1];
+      if (!(g->result_active_mask & (1u << i))) continue;
+      display_name(g, i, result_name);
+      snprintf(line, sizeof(line), "%u  %-8s  %02u", (unsigned)(i + 1),
+               result_name, (unsigned)g->players[i].score);
+      draw_text(screen, box_x + 6 * l->scale,
+                box_y + ((result_row + 3) * l->line_h), line,
+                l->text_scale, theme->player_colors[i]);
+      result_row++;
+    }
+    draw_text(screen, box_x + 6 * l->scale, box_y + (7 * l->line_h),
+              "NEXT ROUND", l->text_scale - 1, theme->text_blue);
   } else if (g->have_welcome && !game_ready(g)) {
     snprintf(line, sizeof(line), "SYNCING ROUND %u", (unsigned)g->round_id);
     draw_text(screen, l->board_x + 4 * l->scale,
@@ -1118,9 +1151,11 @@ static void handle_packet(struct game_state *g, const uint8_t *buf, ssize_t n,
     if (buf[1] == g->round_id) {
       g->round_phase = ROUND_OVER;
       g->winner_pid = buf[2];
+      g->result_active_mask = buf[3];
       g->seat_mask = (uint8_t)(buf[3] & (uint8_t)~buf[4]);
       g->zombie_mask = buf[4];
       g->kill_limit = buf[5];
+      g->zombie_history_mask = buf[10];
       for (int i = 0; i < MAX_PLAYERS; i++) g->players[i].score = buf[6 + i];
       memcpy(g->names, &buf[11], MAX_PLAYERS * NAME_LEN);
       memset(g->shots, 0, sizeof(g->shots));

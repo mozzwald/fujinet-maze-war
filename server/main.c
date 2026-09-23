@@ -39,7 +39,11 @@ enum {
 
 enum { MAX_PLAYERS = 4, MAX_ROOMS = 64 };
 /* Keep a silence timeout for a vanished SIO peer even when TCP stays open. */
-enum { CLIENT_TIMEOUT_MS = 15000, CLIENT_HANDSHAKE_MS = 3000 };
+enum {
+  CLIENT_TIMEOUT_MS = 15000,
+  CLIENT_HANDSHAKE_MS = 3000,
+  DEFAULT_INTERMISSION_MS = 15000
+};
 enum { INPUT_STALE_MS = 500 };
 /* Client inputs are queued and applied one per tick, in order, instead of the
    newest arrival overwriting whatever had not been read yet. Overwriting lost
@@ -2128,7 +2132,7 @@ static void usage(const char *argv0) {
           "  --zombies N       zombie count for every room (0-3, default 1).\n"
           "  --room-zombies L  comma-separated zombie count for each room.\n"
           "  --kill-limit N    kills needed to win a round (1-10, default 5).\n"
-          "  --intermission-ms results-screen duration (default 5000).\n"
+          "  --intermission-ms round-end sequence duration (default 15000).\n"
           "  --bind ADDR       bind a specific IPv4 address.\n",
           argv0, MAX_ROOMS);
 }
@@ -2385,7 +2389,7 @@ int main(int argc, char **argv) {
   int zombies = 1;
   int lag_ms = 0;
   int kill_limit = 5;
-  int intermission_ms = 5000;
+  int intermission_ms = DEFAULT_INTERMISSION_MS;
   const char *brick_path = "server/brick_layout.txt";
   const char *bind_addr = NULL;
   const char *room_zombies_arg = NULL;

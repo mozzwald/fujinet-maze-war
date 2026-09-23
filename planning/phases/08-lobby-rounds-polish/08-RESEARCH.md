@@ -52,7 +52,8 @@ room ID is added to gameplay packets.
   and display names for the result presentation.
 - Frozen snapshots continue throughout intermission. This keeps TCP alive and
   prevents Atari's approximately 13-second `NET_WAIT_TICK` watchdog from
-  firing during the initial 12-second intermission.
+  firing during the initial 15-second intermission; every accepted frozen
+  snapshot resets that watchdog.
 - Neutral client heartbeats keep the server's idle timer alive during
   intermission. Gameplay inputs cannot mutate actors, bricks, shots, or scores,
   and discarded prediction is not falsely acknowledged as applied movement.
@@ -190,7 +191,8 @@ base are build/deployment configuration.
 - Four seats per room.
 - `kill_limit` 1..10. Higher values wait for a multi-digit active HUD.
 - `max_zombies` 0..3.
-- Initial intermission 12 seconds.
+- Initial intermission 15 seconds: about five seconds of winner dance plus
+  vaporize/fade time, followed by at least eight seconds of completed results.
 - Initial no-human grace 60 seconds.
 - Room count is configuration, constrained only by ports/file descriptors and
   test coverage, not by packet format.
