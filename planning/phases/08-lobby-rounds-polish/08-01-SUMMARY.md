@@ -1,7 +1,7 @@
 # 08-01 — Atari presentation-space reclamation
 
-Status: hardware regression found and corrected locally; do not mark MEM-01
-complete or begin 08-02 until the replacement Atari/FujiNet test is accepted.
+Status: complete and accepted on real Atari/FujiNet against emulation on
+2026-09-11. MEM-01 is complete.
 
 ## Hardware regression and correction (2026-09-11)
 
@@ -88,3 +88,9 @@ accepted local-network feel/display behavior regressed.
 After your acceptance, next is **08-02 — `gpt-5.6-sol`, high reasoning** for
 the room-ownership and poll-loop isolation refactor. Pause for the user’s model
 switch before beginning it.
+
+## Acceptance result (2026-09-11)
+
+The replacement mixed real-hardware/emulation test passed. The upward PM trail
+regression is fixed and the broader gameplay/display checkpoint passed, so the
+08-01 memory reclamation is now the accepted Phase 8 baseline.

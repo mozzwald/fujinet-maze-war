@@ -4,11 +4,36 @@ This document matches current server behavior in `server/main.c`.
 
 ## Overview
 
-- Transport: TCP on port 9000; Atari `NET_FLAGS=$05`, 57600 baud
+- Transport: TCP; the compatibility default is one room on port 9000. Atari
+  uses `NET_FLAGS=$05`, 57600 baud.
 - Endianness: byte-wise, no multi-byte integers
 - Players: 4 slots (`pid` 0..3)
 - Playfield: 20 columns (`x=0..19`), 19 rows (`y=0..18`)
 - Sequence: 8-bit sequence numbers (`seq`)
+
+### Server rooms and ports
+
+One server process can host multiple isolated four-seat rooms. Each room owns
+its clients, player/shot state, brick map, input history, packet sequence,
+reliable-event revisions and queues, compatibility echoes, Zombie allocation,
+and all broadcast/tick timers. There is no room id in a gameplay payload: the
+TCP listener selects the room, so the existing Atari and Linux wire protocol is
+unchanged.
+
+The default command still starts one room on TCP port 9000. `--port PORT` is
+the one-room compatibility form. Multi-room hosting uses `--room-count N` and
+`--port-base PORT`; room zero listens on the base and each later room uses the
+next consecutive port. `--zombies N` applies one Zombie count to every room,
+while `--room-zombies 1,2,3` supplies one count per configured room. Counts are
+0 through 3. The server rejects an incomplete per-room list, a port range that
+exceeds 65535, `--port` with more than one room, and conflicting port or Zombie
+forms. If any listener cannot start, it closes every listener already opened
+and exits instead of serving only part of the configured room set.
+
+The Atari startup screen collects the hostname and decimal TCP port in separate
+fields. The port field defaults to 9000, accepts only digits, validates the
+range 1 through 65535, and supplies the selected port to `NS_INIT`. A colon is
+therefore not required in the hostname field.
 
 ## Packet Types
 

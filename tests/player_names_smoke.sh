@@ -161,7 +161,7 @@ grep -F 'memset(client->name, 0, NAME_LEN)' "$SERVER_SRC" >/dev/null || {
 
 # Names must be repeated so a lost NAME heals, and must go out one at a time.
 # Bursting them behind the 51-byte BRICK_FULL made the Atari drop the map.
-grep -F "broadcast_next_name(sock, clients, &seq, &name_rotate, debug)" "$SERVER_SRC" >/dev/null || {
+grep -F "broadcast_next_name(room, debug)" "$SERVER_SRC" >/dev/null || {
     echo "FAIL: names are not re-broadcast" >&2
     exit 1
 }
@@ -178,12 +178,12 @@ grep -E "NAME_ROTATE_MS" "$SERVER_SRC" >/dev/null || {
 }
 # The one call site must sit inside the NAME_ROTATE_MS timer block, not the
 # game tick. Anchor on the timer assignment that immediately precedes it.
-if ! grep -B2 -F "broadcast_next_name(sock, clients, &seq, &name_rotate, debug)" \
-     "$SERVER_SRC" | grep -F "last_name_rotate_ms = now_ms();" >/dev/null; then
+if ! grep -B2 -F "broadcast_next_name(room, debug)" \
+     "$SERVER_SRC" | grep -F "room->last_name_rotate_ms = now;" >/dev/null; then
     echo "FAIL: name rotation is not driven by its own timer" >&2
     exit 1
 fi
-if [ "$(grep -c "broadcast_next_name(sock" "$SERVER_SRC")" != "1" ]; then
+if [ "$(grep -c "broadcast_next_name(room, debug);" "$SERVER_SRC")" != "1" ]; then
     echo "FAIL: expected exactly one name rotation call site" >&2
     exit 1
 fi
@@ -257,7 +257,7 @@ if [ "${echoes:-0}" -lt 4 ]; then
 fi
 # echoes go out one per tick, ahead of the step, so a break and its echo never
 # share a tick
-grep -A8 -F "flush_brick_echo(sock, clients, &seq, debug);" "$SERVER_SRC" \
+grep -A8 -F "flush_brick_echo(room, debug);" "$SERVER_SRC" \
     | grep -F "step_players(" >/dev/null || {
     echo "FAIL: brick echo no longer flushes before the step" >&2
     exit 1

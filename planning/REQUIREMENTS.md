@@ -75,7 +75,7 @@
 
 ### Rounds, rooms, and FujiNet Lobby (Phase 8)
 
-- [ ] **MEM-01**: Atari removes the unreachable blocking game-over routine and unreachable old title assets, reuses their measured space for the new presentation/UI, and enforces code/data/display/zero-page headroom in the memory-layout test.
+- [x] **MEM-01**: Atari removes the unreachable blocking game-over routine and unreachable old title assets, reuses their measured space for the new presentation/UI, and enforces code/data/display/zero-page headroom in the memory-layout test.
 - [ ] **ROOM-01**: One server process runs independently configured four-seat rooms on distinct TCP ports with no gameplay, reliable-event, brick, score, timer, or client-state leakage.
 - [ ] **ROOM-02**: Each room enforces configured Zombie capacity and human priority without transferring scores or transient state between occupants.
 - [ ] **ROND-01**: The server alone selects the first player to reach a validated kill limit and broadcasts one idempotent frozen round result, keeping final occupant roles separate from historical Zombie participation.
@@ -125,7 +125,7 @@
 | VALD-01 | Phase 6 | Complete |
 | VALD-02 | Phase 6 | Complete |
 | VALD-03 | Phase 6 | Complete |
-| MEM-01 | Phase 8 | Pending |
+| MEM-01 | Phase 8 | Complete |
 | ROOM-01 | Phase 8 | Pending |
 | ROOM-02 | Phase 8 | Pending |
 | ROND-01 | Phase 8 | Pending |

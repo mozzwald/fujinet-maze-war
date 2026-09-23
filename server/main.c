@@ -30,7 +30,7 @@ enum {
   PKT_RELIABLE_EVENT = 0x53
 };
 
-enum { MAX_PLAYERS = 4 };
+enum { MAX_PLAYERS = 4, MAX_ROOMS = 64 };
 /* Keep a silence timeout for a vanished SIO peer even when TCP stays open. */
 enum { CLIENT_TIMEOUT_MS = 15000, CLIENT_HANDSHAKE_MS = 3000 };
 enum { INPUT_STALE_MS = 500 };
@@ -163,6 +163,56 @@ struct client_slot {
   uint8_t reliable_count;
 };
 
+struct room_config {
+  int port;
+  int zombies;
+  int tick_hz;
+  int lag_ms;
+  const char *brick_path;
+};
+
+struct brick_echo {
+  uint8_t x;
+  uint8_t y;
+  uint8_t left;
+};
+
+struct respawn_echo {
+  uint8_t pkt[6];
+  uint8_t left;
+};
+
+/* Everything that can differ between listeners lives here. Keeping this
+   allocation off the stack also gives later round/grace work one explicit
+   ownership boundary instead of another set of process globals. */
+struct room {
+  struct room_config config;
+  int listener_fd;
+  struct client_slot clients[MAX_PLAYERS];
+  struct player_state players[MAX_PLAYERS];
+  struct shot_state shots[MAX_PLAYERS];
+  uint8_t brick_bits[48];
+  uint8_t brick_reset_bits[48];
+  uint64_t last_input_ms[MAX_PLAYERS];
+  struct transport_counters global_transport;
+  struct brick_echo brick_echo[BRICK_ECHO_MAX];
+  struct respawn_echo respawn_echo[MAX_PLAYERS];
+  uint8_t occupied_mask;
+  uint8_t seq;
+  uint64_t tick_ms;
+  uint64_t next_tick;
+  uint64_t last_transport_summary_ms;
+  uint64_t last_brick_resync_ms;
+  uint64_t last_name_rotate_ms;
+  uint64_t last_seat_ms;
+  uint8_t last_seat_mask;
+  int name_rotate;
+  /* Reserved ownership for 08-03/08-05; no behavior is attached yet. */
+  uint8_t round_id;
+  uint8_t round_state;
+  uint64_t no_human_deadline_ms;
+};
+
 static volatile sig_atomic_t g_running = 1;
 
 static void compute_zombie_mask(const struct client_slot *clients, int zombies,
@@ -174,9 +224,7 @@ static void log_transport_summaries(const struct client_slot *clients,
 static int packet_has_bad_joy_for_slot(const uint8_t *pkt, size_t len,
                                        uint8_t slot);
 static void reset_client_slot(struct client_slot *client);
-static void reset_slot_gameplay(int slot, struct player_state *players,
-                                struct shot_state *shots,
-                                uint64_t *last_input_ms, uint64_t now);
+static void reset_slot_gameplay(struct room *room, int slot, uint64_t now);
 
 static void on_sigint(int sig) {
   (void)sig;
@@ -270,21 +318,18 @@ static void reset_client_slot(struct client_slot *client) {
    clean TCP close (recv() == 0), or a socket error. Logs, closes the fd
    (via reset_client_slot()), and hands the slot a clean actor so it falls
    back to AI control without any of the departed human's leftover state. */
-static void drop_client(struct client_slot *clients, int i, int debug,
-                        struct player_state *players, struct shot_state *shots,
-                        uint64_t *last_input_ms, uint64_t now) {
+static void drop_client(struct room *room, int i, int debug, uint64_t now) {
+  struct client_slot *clients = room->clients;
   log_client_event("disconnected", i, &clients[i].addr);
   if (debug) {
     log_transport_summary_if_nonzero(i, &clients[i].transport);
   }
   reset_client_slot(&clients[i]);
-  reset_slot_gameplay(i, players, shots, last_input_ms, now);
+  reset_slot_gameplay(room, i, now);
 }
 
-static void reap_timed_out_clients(struct client_slot *clients, uint64_t now,
-                                   int debug, struct player_state *players,
-                                   struct shot_state *shots,
-                                   uint64_t *last_input_ms) {
+static void reap_timed_out_clients(struct room *room, uint64_t now, int debug) {
+  struct client_slot *clients = room->clients;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use) {
       continue;
@@ -295,7 +340,7 @@ static void reap_timed_out_clients(struct client_slot *clients, uint64_t now,
          now - clients[i].connected_ms < CLIENT_HANDSHAKE_MS)) {
       continue;
     }
-    drop_client(clients, i, debug, players, shots, last_input_ms, now);
+    drop_client(room, i, debug, now);
   }
 }
 
@@ -448,44 +493,31 @@ static void broadcast_reliable_event(struct client_slot *clients,
                                      uint8_t *seq, uint64_t now, int debug);
 static void reliable_tick(struct client_slot *clients, uint64_t now, int debug);
 
-/* Pending brick-destruction echoes. Single-threaded server, one game, so a
-   file-scope queue keeps the three break sites from having to thread it. */
-static struct {
-  uint8_t x;
-  uint8_t y;
-  uint8_t left;
-} g_brick_echo[BRICK_ECHO_MAX];
-
 /* One pending echo per slot: a later RESPAWN for a slot supersedes an earlier
    one, so a final spawn cannot be trailed by a stale hide. */
-static struct {
-  uint8_t pkt[6];
-  uint8_t left;
-} g_respawn_echo[MAX_PLAYERS];
-
-static void queue_respawn_echo(const uint8_t *pkt) {
+static void queue_respawn_echo(struct room *room, const uint8_t *pkt) {
   uint8_t pid = pkt[2];
   if (pid >= MAX_PLAYERS) {
     return;
   }
-  memcpy(g_respawn_echo[pid].pkt, pkt, 6);
-  g_respawn_echo[pid].left = RESPAWN_ECHO_REPEATS;
+  memcpy(room->respawn_echo[pid].pkt, pkt, 6);
+  room->respawn_echo[pid].left = RESPAWN_ECHO_REPEATS;
 }
 
 /* At most one echo per tick, like the brick echo: a burst is what loses
    packets in the first place. The sequence byte is re-stamped so the repeat is
    a fresh frame rather than a duplicate of one the client may have dropped. */
-static void flush_respawn_echo(int sock, struct client_slot *clients,
-                               uint8_t *seq, int debug) {
+static void flush_respawn_echo(struct room *room, int debug) {
+  struct client_slot *clients = room->clients;
   for (int i = 0; i < MAX_PLAYERS; i++) {
-    if (g_respawn_echo[i].left == 0) {
+    if (room->respawn_echo[i].left == 0) {
       continue;
     }
-    g_respawn_echo[i].left--;
+    room->respawn_echo[i].left--;
     uint8_t pkt[6];
-    memcpy(pkt, g_respawn_echo[i].pkt, 6);
-    pkt[1] = (*seq)++;
-    broadcast_packet(sock, clients, pkt, sizeof(pkt));
+    memcpy(pkt, room->respawn_echo[i].pkt, 6);
+    pkt[1] = room->seq++;
+    broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
     if (debug) {
       printf("TX respawn echo pid=%u flags=%02X\n", (unsigned)pkt[2],
              (unsigned)pkt[5]);
@@ -494,41 +526,42 @@ static void flush_respawn_echo(int sock, struct client_slot *clients,
   }
 }
 
-static void queue_brick_echo(uint8_t x, uint8_t y) {
+static void queue_brick_echo(struct room *room, uint8_t x, uint8_t y) {
   int spare = -1;
   for (int i = 0; i < BRICK_ECHO_MAX; i++) {
-    if (g_brick_echo[i].left > 0 && g_brick_echo[i].x == x &&
-        g_brick_echo[i].y == y) {
-      g_brick_echo[i].left = BRICK_ECHO_REPEATS;
+    if (room->brick_echo[i].left > 0 && room->brick_echo[i].x == x &&
+        room->brick_echo[i].y == y) {
+      room->brick_echo[i].left = BRICK_ECHO_REPEATS;
       return;
     }
-    if (spare < 0 && g_brick_echo[i].left == 0) {
+    if (spare < 0 && room->brick_echo[i].left == 0) {
       spare = i;
     }
   }
   if (spare < 0) {
     spare = 0; /* full: the oldest loses its echo, the resync still covers it */
   }
-  g_brick_echo[spare].x = x;
-  g_brick_echo[spare].y = y;
-  g_brick_echo[spare].left = BRICK_ECHO_REPEATS;
+  room->brick_echo[spare].x = x;
+  room->brick_echo[spare].y = y;
+  room->brick_echo[spare].left = BRICK_ECHO_REPEATS;
 }
 
 /* At most one echo per tick: several at once is the burst that loses packets. */
-static void flush_brick_echo(int sock, struct client_slot *clients,
-                             uint8_t *seq, int debug) {
+static void flush_brick_echo(struct room *room, int debug) {
+  struct client_slot *clients = room->clients;
   for (int i = 0; i < BRICK_ECHO_MAX; i++) {
-    if (g_brick_echo[i].left == 0) {
+    if (room->brick_echo[i].left == 0) {
       continue;
     }
-    g_brick_echo[i].left--;
+    room->brick_echo[i].left--;
     uint8_t pkt[4];
-    build_brick_delta((*seq)++, g_brick_echo[i].x, g_brick_echo[i].y, pkt,
+    build_brick_delta(room->seq++, room->brick_echo[i].x,
+                      room->brick_echo[i].y, pkt,
                       sizeof(pkt));
-    broadcast_packet(sock, clients, pkt, sizeof(pkt));
+    broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
     if (debug) {
-      printf("TX brick_delta echo x=%u y=%u\n", g_brick_echo[i].x,
-             g_brick_echo[i].y);
+      printf("TX brick_delta echo x=%u y=%u\n", room->brick_echo[i].x,
+             room->brick_echo[i].y);
     }
     return;
   }
@@ -689,14 +722,6 @@ static int packet_has_bad_joy_for_slot(const uint8_t *pkt, size_t len,
   return 0;
 }
 
-/* Slots that actually have someone in them: a connected client or a zombie.
-   File scope for the same reason the brick echo queue is -- single-threaded,
-   one game -- and because slot_on_board() is consulted from collision, fire
-   evaluation and shot stepping, which would otherwise all have to thread it
-   through. Refreshed once per tick at the top of step_players(). Starts full so
-   nothing before the first tick behaves differently than it used to. */
-static uint8_t g_occupied_mask = 0x0F;
-
 /* True when slot i is a thing you can walk into or shoot.
 
    Two ways to be off the board. A player awaiting respawn: its coordinates
@@ -708,20 +733,20 @@ static uint8_t g_occupied_mask = 0x0F;
    the client walked through while the server refused the move; the drift then
    crossed the reconcile threshold about three cells later and yanked the player
    back. That is the "snap back walking through nothing" report. */
-static int slot_on_board(const struct player_state *players, int i) {
-  if (!(g_occupied_mask & (1u << i))) {
+static int slot_on_board(const struct room *room, int i) {
+  if (!(room->occupied_mask & (1u << i))) {
     return 0;
   }
-  return players[i].respawn_at_ms == 0;
+  return room->players[i].respawn_at_ms == 0;
 }
 
-static int is_player_at(const struct player_state *players, int x, int y,
-                         int ignore_idx) {
+static int is_player_at(const struct room *room, int x, int y, int ignore_idx) {
+  const struct player_state *players = room->players;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (i == ignore_idx) {
       continue;
     }
-    if (!slot_on_board(players, i)) {
+    if (!slot_on_board(room, i)) {
       continue;
     }
     if (players[i].x == (uint8_t)x && players[i].y == (uint8_t)y) {
@@ -731,12 +756,13 @@ static int is_player_at(const struct player_state *players, int x, int y,
   return 0;
 }
 
-static void pick_spawn(const uint8_t *bricks, const struct player_state *players,
-                       uint8_t *out_x, uint8_t *out_y) {
+static void pick_spawn(const struct room *room, uint8_t *out_x,
+                       uint8_t *out_y) {
+  const uint8_t *bricks = room->brick_bits;
   for (int tries = 0; tries < 200; tries++) {
     int x = rand() % 20;
     int y = rand() % 19;
-    if (!is_brick(bricks, x, y) && !is_player_at(players, x, y, -1)) {
+    if (!is_brick(bricks, x, y) && !is_player_at(room, x, y, -1)) {
       *out_x = (uint8_t)x;
       *out_y = (uint8_t)y;
       return;
@@ -744,7 +770,7 @@ static void pick_spawn(const uint8_t *bricks, const struct player_state *players
   }
   for (int y = 0; y < 19; y++) {
     for (int x = 0; x < 20; x++) {
-      if (!is_brick(bricks, x, y) && !is_player_at(players, x, y, -1)) {
+      if (!is_brick(bricks, x, y) && !is_player_at(room, x, y, -1)) {
         *out_x = (uint8_t)x;
         *out_y = (uint8_t)y;
         return;
@@ -766,9 +792,9 @@ static void pick_spawn(const uint8_t *bricks, const struct player_state *players
    handoff would also make every other client see an unexplained jump.
    respawn_at_ms is likewise left alone, so a handoff that lands mid-death lets
    the normal respawn finalizer complete and re-show the actor on clients. */
-static void reset_slot_gameplay(int slot, struct player_state *players,
-                                struct shot_state *shots,
-                                uint64_t *last_input_ms, uint64_t now) {
+static void reset_slot_gameplay(struct room *room, int slot, uint64_t now) {
+  struct player_state *players = room->players;
+  struct shot_state *shots = room->shots;
   if (slot < 0 || slot >= MAX_PLAYERS) {
     return;
   }
@@ -788,7 +814,7 @@ static void reset_slot_gameplay(int slot, struct player_state *players,
   players[slot].zombie_think_next_ms = now;
   players[slot].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
   players[slot].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
-  last_input_ms[slot] = 0;
+  room->last_input_ms[slot] = 0;
 }
 
 /* Announce one slot's name, cycling a slot per tick.
@@ -798,9 +824,10 @@ static void reset_slot_gameplay(int slot, struct player_state *players,
    serial path does not absorb the burst. Spread out, nothing is dropped.
    Empty slots are announced as blank rather than skipped, so a client stops
    showing a name once that player leaves. */
-static void broadcast_next_name(int sock, struct client_slot *clients,
-                                uint8_t *seq, int *rotate, int debug) {
-  (void)sock;
+static void broadcast_next_name(struct room *room, int debug) {
+  struct client_slot *clients = room->clients;
+  uint8_t *seq = &room->seq;
+  int *rotate = &room->name_rotate;
   static const uint8_t blank[NAME_LEN] = {' ', ' ', ' ', ' ',
                                           ' ', ' ', ' ', ' '};
   int i = *rotate % MAX_PLAYERS;
@@ -985,13 +1012,14 @@ static void broadcast_reliable_event(struct client_slot *clients,
   }
 }
 
-static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
-                                 struct player_state *players, uint8_t *brick_bits,
-                                 int sock, struct client_slot *clients,
-                                 uint8_t *seq, int debug,
-                                 uint64_t now, uint64_t *last_input_ms,
-                                 struct transport_counters *global_transport,
-                                 int lag_ms) {
+static void handle_client_packet(struct room *room, int slot,
+                                 const uint8_t *pkt, size_t len, int debug,
+                                 uint64_t now) {
+  struct player_state *players = room->players;
+  uint8_t *brick_bits = room->brick_bits;
+  struct client_slot *clients = room->clients;
+  uint8_t *seq = &room->seq;
+  struct transport_counters *global_transport = &room->global_transport;
   if (len == 4 && pkt[0] == PKT_RELIABLE_ACK) {
     uint16_t ack = (uint16_t)pkt[2] | ((uint16_t)pkt[3] << 8);
     reliable_ack(&clients[slot], slot, ack, now, debug);
@@ -1069,7 +1097,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
                                    INPUT_QUEUE_MAX);
           c->input_q[tail].seq = delta.seq;
           c->input_q[tail].joy = delta.joy;
-          c->input_q[tail].ready_at_ms = now + (uint64_t)lag_ms;
+          c->input_q[tail].ready_at_ms = now + (uint64_t)room->config.lag_ms;
           c->input_count++;
         } else if (debug) {
           /* Not acked: the client keeps it pending and replays it. */
@@ -1077,7 +1105,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
                  (unsigned)delta.seq);
         }
       }
-      last_input_ms[pid] = now;
+      room->last_input_ms[pid] = now;
       clients[slot].transport.accepted_delta++;
       global_transport->accepted_delta++;
       if (debug) {
@@ -1094,7 +1122,7 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
     sanitize_name(&pkt[3], clients[slot].name);
     uint8_t out[3 + NAME_LEN];
     build_name((*seq)++, (uint8_t)slot, clients[slot].name, out, sizeof(out));
-    broadcast_packet(sock, clients, out, sizeof(out));
+    broadcast_packet(room->listener_fd, clients, out, sizeof(out));
     broadcast_reliable_event(clients, out, sizeof(out), seq, now, debug);
     if (debug) {
       printf("NAME slot=%d name=\"%.*s\"\n", slot, NAME_LEN,
@@ -1108,13 +1136,13 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
     if (pid < MAX_PLAYERS) {
       uint8_t sx = 0, sy = 0;
       uint8_t out[6];
-      pick_spawn(brick_bits, players, &sx, &sy);
+      pick_spawn(room, &sx, &sy);
       players[pid].x = sx;
       players[pid].y = sy;
       build_respawn((*seq)++, pid, sx, sy, 0x03, out, sizeof(out));
-      broadcast_packet(sock, clients, out, sizeof(out));
+      broadcast_packet(room->listener_fd, clients, out, sizeof(out));
       broadcast_reliable_event(clients, out, sizeof(out), seq, now, debug);
-      queue_respawn_echo(out);
+      queue_respawn_echo(room, out);
       if (debug) {
         printf("TX respawn pid=%u x=%u y=%u\n", pid, sx, sy);
       }
@@ -1128,9 +1156,9 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
     if (x < 20 && y < 19 && !is_outer_wall_cell((int)x, (int)y)) {
       uint8_t out[4];
       clear_brick(brick_bits, x, y);
-      queue_brick_echo(x, y);
+      queue_brick_echo(room, x, y);
       build_brick_delta((*seq)++, x, y, out, sizeof(out));
-      broadcast_packet(sock, clients, out, sizeof(out));
+      broadcast_packet(room->listener_fd, clients, out, sizeof(out));
       broadcast_reliable_event(clients, out, sizeof(out), seq, now, debug);
       if (debug) {
         printf("TX brick_delta x=%u y=%u\n", x, y);
@@ -1140,13 +1168,11 @@ static void handle_client_packet(int slot, const uint8_t *pkt, size_t len,
   }
 }
 
-static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
-                                 struct player_state *players, uint8_t *brick_bits,
-                                 int sock, struct client_slot *clients,
-                                 uint8_t *seq, int debug,
-                                 uint64_t now, uint64_t *last_input_ms,
-                                 struct transport_counters *global_transport,
-                                 int lag_ms) {
+static void process_client_bytes(struct room *room, int slot,
+                                 const uint8_t *buf, size_t n, int debug,
+                                 uint64_t now) {
+  struct client_slot *clients = room->clients;
+  struct transport_counters *global_transport = &room->global_transport;
   struct client_slot *c = &clients[slot];
   for (size_t i = 0; i < n; i++) {
     uint8_t pkt[16]; /* NAME is the longest inbound packet at 11 bytes */
@@ -1162,9 +1188,7 @@ static void process_client_bytes(int slot, const uint8_t *buf, size_t n,
     /* The CRC/COBS layer establishes frame boundaries.  Retain the legacy
        DELTA layouts only as payload compatibility, not as a raw stream scan. */
     c->received_packet = 1;
-    handle_client_packet(slot, pkt, (size_t)pkt_len, players, brick_bits, sock,
-                         clients, seq, debug, now, last_input_ms,
-                         global_transport, lag_ms);
+    handle_client_packet(room, slot, pkt, (size_t)pkt_len, debug, now);
   }
 }
 
@@ -1194,8 +1218,9 @@ static uint8_t stick_from_dir(uint8_t dir) {
   }
 }
 
-static int dir_free(uint8_t dir, const struct player_state *players,
-                    const uint8_t *bricks, int idx) {
+static int dir_free(uint8_t dir, const struct room *room, int idx) {
+  const struct player_state *players = room->players;
+  const uint8_t *bricks = room->brick_bits;
   int dx = 0, dy = 0;
   switch (dir & 0x03) {
     case 0: dx = 1; break;
@@ -1208,7 +1233,7 @@ static int dir_free(uint8_t dir, const struct player_state *players,
   if (is_brick(bricks, nx, ny)) {
     return 0;
   }
-  if (is_player_at(players, nx, ny, idx)) {
+  if (is_player_at(room, nx, ny, idx)) {
     return 0;
   }
   return 1;
@@ -1240,8 +1265,10 @@ static int clear_col_shot(const uint8_t *bricks, int x, int y0, int y1) {
   return 1;
 }
 
-static void zombie_ai(int idx, struct player_state *players,
-                      const uint8_t *bricks, const uint8_t *human_mask) {
+static void zombie_ai(struct room *room, int idx,
+                      const uint8_t *human_mask) {
+  struct player_state *players = room->players;
+  const uint8_t *bricks = room->brick_bits;
   uint8_t zx = players[idx].x;
   uint8_t zy = players[idx].y;
   players[idx].zombie_fire_pending = 0;
@@ -1304,11 +1331,11 @@ static void zombie_ai(int idx, struct player_state *players,
 
   // Choose longer axis first, then try short; else shoot out wall
   if (abs(best_dy) >= abs(best_dx)) {
-    if (dir_free(dir_y, players, bricks, idx)) {
+    if (dir_free(dir_y, room, idx)) {
       players[idx].joy = stick_from_dir(dir_y);
       return;
     }
-    if (dir_free(dir_x, players, bricks, idx)) {
+    if (dir_free(dir_x, room, idx)) {
       players[idx].joy = stick_from_dir(dir_x);
       return;
     }
@@ -1316,11 +1343,11 @@ static void zombie_ai(int idx, struct player_state *players,
     players[idx].zombie_fire_pending = 1;
     return;
   }
-  if (dir_free(dir_x, players, bricks, idx)) {
+  if (dir_free(dir_x, room, idx)) {
     players[idx].joy = stick_from_dir(dir_x);
     return;
   }
-  if (dir_free(dir_y, players, bricks, idx)) {
+  if (dir_free(dir_y, room, idx)) {
     players[idx].joy = stick_from_dir(dir_y);
     return;
   }
@@ -1328,10 +1355,9 @@ static void zombie_ai(int idx, struct player_state *players,
   players[idx].zombie_fire_pending = 1;
 }
 
-static void apply_move_if_free(struct player_state *p,
-                               const uint8_t *bricks,
-                               const struct player_state *players,
-                               int idx) {
+static void apply_move_if_free(struct room *room, int idx) {
+  struct player_state *p = &room->players[idx];
+  const uint8_t *bricks = room->brick_bits;
   uint8_t stick = (uint8_t)(p->joy & 0x0F);
   int dx = 0;
   int dy = 0;
@@ -1345,16 +1371,18 @@ static void apply_move_if_free(struct player_state *p,
   if (nx > 19) nx = 19;
   if (ny < 0) ny = 0;
   if (ny > 18) ny = 18;
-  if (!is_brick(bricks, nx, ny) && !is_player_at(players, nx, ny, idx)) {
+  if (!is_brick(bricks, nx, ny) && !is_player_at(room, nx, ny, idx)) {
     p->x = (uint8_t)nx;
     p->y = (uint8_t)ny;
   }
 }
 
-static void start_shot(int shooter, struct player_state *players,
-                       struct shot_state *shots, uint8_t *bricks,
-                       int sock, struct client_slot *clients, uint8_t *seq,
-                       uint8_t joy, int debug) {
+static void start_shot(struct room *room, int shooter, uint8_t joy, int debug) {
+  struct player_state *players = room->players;
+  struct shot_state *shots = room->shots;
+  uint8_t *bricks = room->brick_bits;
+  struct client_slot *clients = room->clients;
+  uint8_t *seq = &room->seq;
   if (players[shooter].respawn_at_ms != 0) {
     return;
   }
@@ -1380,10 +1408,10 @@ static void start_shot(int shooter, struct player_state *players,
   if (is_brick(bricks, sx, sy)) {
     if (!is_outer_wall_cell(sx, sy)) {
       clear_brick(bricks, sx, sy);
-      queue_brick_echo((uint8_t)sx, (uint8_t)sy);
+      queue_brick_echo(room, (uint8_t)sx, (uint8_t)sy);
       uint8_t pkt[4];
       build_brick_delta((*seq)++, (uint8_t)sx, (uint8_t)sy, pkt, sizeof(pkt));
-      broadcast_packet(sock, clients, pkt, sizeof(pkt));
+      broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
       broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now_ms(), debug);
       if (debug) {
         printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
@@ -1399,12 +1427,12 @@ static void start_shot(int shooter, struct player_state *players,
   if (sx < 0 || sx > 19 || sy < 0 || sy > 18) {
     return;
   }
-  if (is_player_at(players, sx, sy, shooter)) {
+  if (is_player_at(room, sx, sy, shooter)) {
     for (int p = 0; p < MAX_PLAYERS; p++) {
       if (p == shooter) {
         continue;
       }
-      if (!slot_on_board(players, p)) {
+      if (!slot_on_board(room, p)) {
         continue;
       }
       if (players[p].x == (uint8_t)sx && players[p].y == (uint8_t)sy) {
@@ -1414,16 +1442,16 @@ static void start_shot(int shooter, struct player_state *players,
         {
           uint8_t rpkt[6];
           build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, rpkt, sizeof(rpkt));
-          broadcast_packet(sock, clients, rpkt, sizeof(rpkt));
+          broadcast_packet(room->listener_fd, clients, rpkt, sizeof(rpkt));
           broadcast_reliable_event(clients, rpkt, sizeof(rpkt), seq, now_ms(),
                                    debug);
-          queue_respawn_echo(rpkt);
+          queue_respawn_echo(room, rpkt);
         }
         /* Defensive clear: ensure any stale client-side shot sprite is removed. */
         {
           uint8_t spkt[6];
           build_shot((*seq)++, (uint8_t)shooter, 0, 0, 0, spkt, sizeof(spkt));
-          broadcast_packet(sock, clients, spkt, sizeof(spkt));
+          broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
         }
         if (debug) {
           printf("TX immediate hit shooter=%d victim=%d\n", shooter, p);
@@ -1451,10 +1479,12 @@ static void start_shot(int shooter, struct player_state *players,
   }
 }
 
-static void step_shots(struct player_state *players, struct shot_state *shots,
-                       uint8_t *bricks, int sock,
-                       struct client_slot *clients, uint8_t *seq,
-                       int debug) {
+static void step_shots(struct room *room, int debug) {
+  struct player_state *players = room->players;
+  struct shot_state *shots = room->shots;
+  uint8_t *bricks = room->brick_bits;
+  struct client_slot *clients = room->clients;
+  uint8_t *seq = &room->seq;
   uint64_t now = now_ms();
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!shots[i].active) {
@@ -1467,16 +1497,16 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
       shots[i].clear_burst = 3;
       uint8_t pkt[6];
       build_shot((*seq)++, (uint8_t)i, 0, 0, 0, pkt, sizeof(pkt));
-      broadcast_packet(sock, clients, pkt, sizeof(pkt));
+      broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
       continue;
     }
     if (is_brick(bricks, nx, ny)) {
       if (!is_outer_wall_cell(nx, ny)) {
         clear_brick(bricks, nx, ny);
-        queue_brick_echo((uint8_t)nx, (uint8_t)ny);
+        queue_brick_echo(room, (uint8_t)nx, (uint8_t)ny);
         uint8_t pkt[4];
         build_brick_delta((*seq)++, (uint8_t)nx, (uint8_t)ny, pkt, sizeof(pkt));
-        broadcast_packet(sock, clients, pkt, sizeof(pkt));
+        broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
         broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
         if (debug) {
           printf("TX brick_delta x=%u y=%u\n", pkt[2], pkt[3]);
@@ -1491,14 +1521,14 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
       shots[i].clear_burst = 3;
       uint8_t spkt[6];
       build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
-      broadcast_packet(sock, clients, spkt, sizeof(spkt));
+      broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
       continue;
     }
     for (int p = 0; p < MAX_PLAYERS; p++) {
       if (p == i) {
         continue;
       }
-      if (!slot_on_board(players, p)) {
+      if (!slot_on_board(room, p)) {
         continue;
       }
       if (players[p].x == (uint8_t)nx && players[p].y == (uint8_t)ny) {
@@ -1506,9 +1536,9 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
         players[p].respawn_at_ms = now + 2000;
         uint8_t pkt[6];
         build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, pkt, sizeof(pkt));
-        broadcast_packet(sock, clients, pkt, sizeof(pkt));
+        broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
         broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
-        queue_respawn_echo(pkt);
+        queue_respawn_echo(room, pkt);
         if (debug) {
           printf("TX respawn pending pid=%u\n", (unsigned)p);
           {
@@ -1521,7 +1551,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
         shots[i].clear_burst = 3;
         uint8_t spkt[6];
         build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
-        broadcast_packet(sock, clients, spkt, sizeof(spkt));
+        broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
         goto next_shot;
       }
     }
@@ -1532,7 +1562,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
       build_shot((*seq)++, (uint8_t)i, (uint8_t)nx, (uint8_t)ny,
                  shot_active_flags(&shots[i]),
                  spkt, sizeof(spkt));
-      broadcast_packet(sock, clients, spkt, sizeof(spkt));
+      broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
       if (debug) {
         char detail[96];
         snprintf(detail, sizeof(detail), "x=%d y=%d dir=%d,%d",
@@ -1552,7 +1582,7 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
     shots[i].clear_burst--;
     uint8_t spkt[6];
     build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
-    broadcast_packet(sock, clients, spkt, sizeof(spkt));
+    broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
   }
 }
 
@@ -1561,9 +1591,9 @@ static void step_shots(struct player_state *players, struct shot_state *shots,
    the client's pending-input ring trusts when deciding what it may discard, so
    reporting an input as applied when it was not is what produced the snap-back
    on a fast corner turn. */
-static void apply_queued_input(struct client_slot *clients,
-                               struct player_state *players, int debug,
-                               uint64_t now) {
+static void apply_queued_input(struct room *room, int debug, uint64_t now) {
+  struct client_slot *clients = room->clients;
+  struct player_state *players = room->players;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!clients[i].in_use) {
       continue;
@@ -1596,11 +1626,12 @@ static void apply_queued_input(struct client_slot *clients,
   }
 }
 
-static void step_players(struct player_state *players, struct shot_state *shots,
-                         uint8_t *bricks, int sock,
-                         struct client_slot *clients, uint8_t *seq,
-                         int debug, int zombies,
-                         const uint64_t *last_input_ms) {
+static void step_players(struct room *room, int debug) {
+  struct player_state *players = room->players;
+  struct client_slot *clients = room->clients;
+  const uint64_t *last_input_ms = room->last_input_ms;
+  uint8_t *seq = &room->seq;
+  int zombies = room->config.zombies;
   /* Same-tick authoritative combat/world order:
    * 1. Finalize expired respawns.
    * 2. Select authoritative joy/facing for this tick.
@@ -1632,17 +1663,17 @@ static void step_players(struct player_state *players, struct shot_state *shots,
   }
   /* Everything downstream this tick -- collision, fire evaluation, shot hits,
      respawn placement -- asks slot_on_board() rather than the two masks. */
-  g_occupied_mask = 0;
+  room->occupied_mask = 0;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (zombie_mask[i] || human_mask[i]) {
-      g_occupied_mask |= (uint8_t)(1u << i);
+      room->occupied_mask |= (uint8_t)(1u << i);
     }
   }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (players[i].respawn_at_ms != 0 &&
         now >= players[i].respawn_at_ms) {
       uint8_t sx = 0, sy = 0;
-      pick_spawn(bricks, players, &sx, &sy);
+      pick_spawn(room, &sx, &sy);
       players[i].x = sx;
       players[i].y = sy;
       players[i].respawn_at_ms = 0;
@@ -1653,9 +1684,9 @@ static void step_players(struct player_state *players, struct shot_state *shots,
       players[i].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
       uint8_t pkt[6];
       build_respawn((*seq)++, (uint8_t)i, sx, sy, 0x03, pkt, sizeof(pkt));
-      broadcast_packet(sock, clients, pkt, sizeof(pkt));
+      broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
       broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
-      queue_respawn_echo(pkt);
+      queue_respawn_echo(room, pkt);
       if (debug) {
         printf("TX respawn pid=%u x=%u y=%u\n", (unsigned)i, sx, sy);
         {
@@ -1698,7 +1729,7 @@ static void step_players(struct player_state *players, struct shot_state *shots,
     int can_move = can_act;
     if (zombie_mask[i] && can_act) {
       if (now >= players[i].zombie_think_next_ms) {
-        zombie_ai(i, players, bricks, human_mask);
+        zombie_ai(room, i, human_mask);
         players[i].zombie_think_next_ms = now + ZOMBIE_THINK_MS;
       }
       action_joy = players[i].joy;
@@ -1715,12 +1746,11 @@ static void step_players(struct player_state *players, struct shot_state *shots,
     uint8_t stick = (uint8_t)(action_joy & 0x0F);
     int trig = (action_joy & 0x10) != 0;
     if (can_act) {
-      start_shot(i, players, shots, bricks, sock, clients, seq, action_joy,
-                 debug);
+      start_shot(room, i, action_joy, debug);
       if (can_move && !(trig && stick != 0x0F)) {
         uint8_t before_x = players[i].x;
         uint8_t before_y = players[i].y;
-        apply_move_if_free(&players[i], bricks, players, i);
+        apply_move_if_free(room, i);
         /* Only when a direction was actually asked for. A neutral stick moves
            nobody, and reporting that as "blocked" made every idle actor log a
            blocked move on every tick -- the log said four players were pinned
@@ -1749,7 +1779,7 @@ static void step_players(struct player_state *players, struct shot_state *shots,
       }
     }
   }
-  step_shots(players, shots, bricks, sock, clients, seq, debug);
+  step_shots(room, debug);
 }
 
 static void build_brick_full(uint8_t seq, const uint8_t *bits,
@@ -1802,29 +1832,277 @@ static int load_brick_layout(const char *path, uint8_t *bits, size_t bits_len) {
 
 static void usage(const char *argv0) {
   fprintf(stderr,
-          "Usage: %s [--port PORT] [--bind ADDR] [--tick-hz N] [--zombies N] [--brick PATH] [--lag-ms N] [--debug]\n"
-          "  --bind ADDR  bind a specific IPv4 address instead of all interfaces.\n",
-          argv0);
+          "Usage: %s [--port PORT | --port-base PORT] [--room-count N]\n"
+          "          [--zombies N | --room-zombies LIST] [--bind ADDR]\n"
+          "          [--tick-hz N] [--brick PATH] [--lag-ms N] [--debug]\n"
+          "  --port PORT       one-room compatibility form (default 9000).\n"
+          "  --port-base PORT  first listener; later rooms use consecutive ports.\n"
+          "  --room-count N    number of isolated rooms (1-%d, default 1).\n"
+          "  --zombies N       zombie count for every room (0-3, default 1).\n"
+          "  --room-zombies L  comma-separated zombie count for each room.\n"
+          "  --bind ADDR       bind a specific IPv4 address.\n",
+          argv0, MAX_ROOMS);
 }
 
+static int parse_int_arg(const char *text, int *out) {
+  char *end = NULL;
+  errno = 0;
+  long value = strtol(text, &end, 10);
+  if (errno != 0 || end == text || *end != '\0' || value < 0 ||
+      value > 2147483647L) {
+    return -1;
+  }
+  *out = (int)value;
+  return 0;
+}
+
+static int parse_room_zombies(const char *text, int room_count, int *out) {
+  const char *p = text;
+  for (int room_index = 0; room_index < room_count; room_index++) {
+    char *end = NULL;
+    errno = 0;
+    long value = strtol(p, &end, 10);
+    if (errno != 0 || end == p || value < 0 || value >= MAX_PLAYERS) {
+      return -1;
+    }
+    out[room_index] = (int)value;
+    if (room_index + 1 == room_count) {
+      return *end == '\0' ? 0 : -1;
+    }
+    if (*end != ',') {
+      return -1;
+    }
+    p = end + 1;
+  }
+  return -1;
+}
+
+static int create_listener(int port, const struct in_addr *bind_ip) {
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) {
+    return -1;
+  }
+  int reuse = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+    close(fd);
+    return -1;
+  }
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr = *bind_ip;
+  addr.sin_port = htons((uint16_t)port);
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
+      listen(fd, MAX_PLAYERS) < 0 ||
+      fcntl(fd, F_SETFL, O_NONBLOCK) < 0) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+static int init_room(struct room *room, const struct room_config *config,
+                     const struct in_addr *bind_ip, uint64_t now) {
+  memset(room, 0, sizeof(*room));
+  room->config = *config;
+  room->listener_fd = -1;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    room->clients[i].fd = -1;
+  }
+  if (load_brick_layout(config->brick_path, room->brick_reset_bits,
+                        sizeof(room->brick_reset_bits)) != 0) {
+    memset(room->brick_reset_bits, 0, sizeof(room->brick_reset_bits));
+    fprintf(stderr, "Warning: failed to load brick layout: %s\n",
+            config->brick_path);
+  }
+  memcpy(room->brick_bits, room->brick_reset_bits, sizeof(room->brick_bits));
+  room->occupied_mask = 0x0F;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    uint8_t sx = 0, sy = 0;
+    pick_spawn(room, &sx, &sy);
+    room->players[i].x = sx;
+    room->players[i].y = sy;
+    room->players[i].joy = 0x0F;
+    room->players[i].zombie_think_next_ms = now;
+    room->players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
+    room->players[i].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
+  }
+  room->tick_ms = 1000ULL / (uint64_t)config->tick_hz;
+  if (room->tick_ms == 0) {
+    room->tick_ms = 1;
+  }
+  room->next_tick = now;
+  room->last_transport_summary_ms = now;
+  room->last_brick_resync_ms = now;
+  room->last_name_rotate_ms = now;
+  room->last_seat_mask = 0xFF;
+  room->listener_fd = create_listener(config->port, bind_ip);
+  return room->listener_fd >= 0 ? 0 : -1;
+}
+
+static void destroy_room(struct room *room, int debug) {
+  if (debug) {
+    log_transport_summaries(room->clients, &room->global_transport);
+  }
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    reset_client_slot(&room->clients[i]);
+  }
+  if (room->listener_fd >= 0) {
+    close(room->listener_fd);
+    room->listener_fd = -1;
+  }
+}
+
+static void accept_room_client(struct room *room, int debug, uint64_t now) {
+  struct sockaddr_in src;
+  socklen_t src_len = sizeof(src);
+  int fd = accept(room->listener_fd, (struct sockaddr *)&src, &src_len);
+  if (fd < 0) {
+    if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+      perror("accept");
+    }
+    return;
+  }
+  int slot = alloc_client_slot(room->clients, room->config.zombies);
+  if (slot < 0 || tcp_configure(fd) < 0) {
+    close(fd);
+    return;
+  }
+  init_client_slot(&room->clients[slot], fd, &src, src_len, now);
+  log_client_event("connected", slot, &room->clients[slot].addr);
+  reset_slot_gameplay(room, slot, now);
+  uint8_t bfull[51];
+  build_brick_full(room->seq++, room->brick_bits, bfull, sizeof(bfull));
+  send_checked(&room->clients[slot], bfull, sizeof(bfull));
+  room->clients[slot].sent_bricks = 1;
+  if (debug) {
+    printf("room=%d TX brick_full -> slot %d\n", room->config.port, slot);
+  }
+}
+
+static void service_room_timers(struct room *room, int debug, uint64_t now) {
+  reap_timed_out_clients(room, now, debug);
+  if (now - room->last_name_rotate_ms >= NAME_ROTATE_MS) {
+    room->last_name_rotate_ms = now;
+    broadcast_next_name(room, debug);
+  }
+  reliable_tick(room->clients, now, debug);
+  if (now - room->last_brick_resync_ms >= BRICK_RESYNC_MS) {
+    room->last_brick_resync_ms = now;
+    uint8_t bfull[51];
+    build_brick_full(room->seq++, room->brick_bits, bfull, sizeof(bfull));
+    broadcast_packet(room->listener_fd, room->clients, bfull, sizeof(bfull));
+    if (debug) {
+      printf("room=%d TX brick_full resync -> all clients\n",
+             room->config.port);
+    }
+  }
+  uint8_t seat_mask = compute_seat_mask(room->clients);
+  if (seat_mask != room->last_seat_mask ||
+      now - room->last_seat_ms >= SEAT_REPEAT_MS) {
+    room->last_seat_mask = seat_mask;
+    room->last_seat_ms = now;
+    uint8_t pkt[3];
+    build_seats(room->seq++, seat_mask, pkt, sizeof(pkt));
+    broadcast_packet(room->listener_fd, room->clients, pkt, sizeof(pkt));
+    if (debug) {
+      printf("room=%d TX seats mask=%X -> all clients\n",
+             room->config.port, seat_mask);
+    }
+  }
+  if (debug &&
+      now - room->last_transport_summary_ms >= TRANSPORT_SUMMARY_MS) {
+    log_transport_summaries(room->clients, &room->global_transport);
+    room->last_transport_summary_ms = now;
+  }
+}
+
+static void tick_room(struct room *room, int debug, uint64_t now) {
+  uint64_t tick_deadline = room->next_tick;
+  flush_brick_echo(room, debug);
+  flush_respawn_echo(room, debug);
+  apply_queued_input(room, debug, now);
+  step_players(room, debug);
+  uint8_t zombie_mask[MAX_PLAYERS];
+  uint8_t zombie_bits = 0;
+  uint8_t snapshot_seq = room->seq++;
+  compute_zombie_mask(room->clients, room->config.zombies, zombie_mask);
+  for (int z = 0; z < MAX_PLAYERS; z++) {
+    if (zombie_mask[z]) {
+      zombie_bits |= (uint8_t)(1u << z);
+    }
+  }
+  uint8_t pkt[20];
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (!room->clients[i].in_use) {
+      continue;
+    }
+    build_snapshot(snapshot_seq, room->players,
+                   room->clients[i].applied_input_seq, pkt, sizeof(pkt));
+    pkt[2] = (uint8_t)(0x01u | ((uint8_t)i << 1) |
+                       ((uint8_t)(zombie_bits & 0x0Fu) << 3));
+    if (room->clients[i].have_applied_input_seq) {
+      pkt[2] |= 0x80u;
+    }
+    ssize_t wn = send_checked(&room->clients[i], pkt, sizeof(pkt));
+    if (debug && wn == (ssize_t)sizeof(pkt)) {
+      printf("room=%d TX snapshot -> slot %d\n", room->config.port, i);
+    }
+  }
+  /* Keep the exact deadline progression used by the one-room server. */
+  uint64_t tick_ms = room->tick_ms;
+  uint64_t next_tick = tick_deadline + tick_ms;
+  if (next_tick <= now) {
+    unsigned skipped = 0;
+    while (next_tick <= now && skipped < 4) {
+      next_tick += tick_ms;
+      skipped++;
+    }
+    if (next_tick <= now) {
+      next_tick = now + tick_ms;
+    }
+  }
+  room->next_tick = next_tick;
+}
+
+struct poll_ref {
+  int room_index;
+  int slot; /* -1 is the room listener */
+  int fd;
+};
+
 int main(int argc, char **argv) {
-  int port = 9000;
+  int port_base = 9000;
+  int room_count = 1;
   int tick_hz = 10;
   int debug = 0;
   int zombies = 1;
   int lag_ms = 0;
   const char *brick_path = "server/brick_layout.txt";
   const char *bind_addr = NULL;
+  const char *room_zombies_arg = NULL;
+  int saw_port = 0;
+  int saw_port_base = 0;
+  int saw_zombies = 0;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-      port = atoi(argv[++i]);
+      saw_port = 1;
+      if (parse_int_arg(argv[++i], &port_base) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--port-base") == 0 && i + 1 < argc) {
+      saw_port_base = 1;
+      if (parse_int_arg(argv[++i], &port_base) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--room-count") == 0 && i + 1 < argc) {
+      if (parse_int_arg(argv[++i], &room_count) != 0) goto bad_args;
     } else if (strcmp(argv[i], "--bind") == 0 && i + 1 < argc) {
       bind_addr = argv[++i];
     } else if (strcmp(argv[i], "--tick-hz") == 0 && i + 1 < argc) {
-      tick_hz = atoi(argv[++i]);
+      if (parse_int_arg(argv[++i], &tick_hz) != 0) goto bad_args;
     } else if (strcmp(argv[i], "--zombies") == 0 && i + 1 < argc) {
-      zombies = atoi(argv[++i]);
+      saw_zombies = 1;
+      if (parse_int_arg(argv[++i], &zombies) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--room-zombies") == 0 && i + 1 < argc) {
+      room_zombies_arg = argv[++i];
     } else if (strcmp(argv[i], "--brick") == 0 && i + 1 < argc) {
       brick_path = argv[++i];
     } else if (strcmp(argv[i], "--lag-ms") == 0 && i + 1 < argc) {
@@ -1832,290 +2110,175 @@ int main(int argc, char **argv) {
          run reproduces the pending-input backlog a real Atari always has.
          At zero latency the client's reposition-and-replay path barely runs,
          which hides bugs in it. */
-      lag_ms = atoi(argv[++i]);
+      if (parse_int_arg(argv[++i], &lag_ms) != 0) goto bad_args;
     } else if (strcmp(argv[i], "--debug") == 0) {
       debug = 1;
     } else if (strcmp(argv[i], "--help") == 0) {
       usage(argv[0]);
       return 0;
     } else {
-      usage(argv[0]);
-      return 1;
+      goto bad_args;
     }
   }
 
-  if (port <= 0 || port > 65535 || tick_hz <= 0) {
-    fprintf(stderr, "Invalid port or tick-hz.\\n");
-    return 1;
-  }
-  if (zombies < 0) {
-    zombies = 0;
-  }
-  if (zombies > (MAX_PLAYERS - 1)) {
-    zombies = MAX_PLAYERS - 1;
+  if (room_count < 1 || room_count > MAX_ROOMS || port_base < 1 ||
+      port_base > 65535 || room_count - 1 > 65535 - port_base ||
+      tick_hz < 1 || tick_hz > 1000 || zombies < 0 ||
+      zombies >= MAX_PLAYERS ||
+      (saw_port && (saw_port_base || room_count != 1)) ||
+      (saw_zombies && room_zombies_arg != NULL)) {
+    goto bad_args;
   }
 
+  int *room_zombies = calloc((size_t)room_count, sizeof(*room_zombies));
+  struct room *rooms = calloc((size_t)room_count, sizeof(*rooms));
+  size_t poll_count = (size_t)room_count * (MAX_PLAYERS + 1u);
+  struct pollfd *pfds = calloc(poll_count, sizeof(*pfds));
+  struct poll_ref *refs = calloc(poll_count, sizeof(*refs));
+  if (!room_zombies || !rooms || !pfds || !refs) {
+    fprintf(stderr, "Out of memory creating %d rooms.\n", room_count);
+    free(room_zombies);
+    free(rooms);
+    free(pfds);
+    free(refs);
+    return 1;
+  }
+  for (int i = 0; i < room_count; i++) room_zombies[i] = zombies;
+  if (room_zombies_arg != NULL &&
+      parse_room_zombies(room_zombies_arg, room_count, room_zombies) != 0) {
+    fprintf(stderr, "Invalid --room-zombies list for %d rooms.\n", room_count);
+    free(room_zombies);
+    free(rooms);
+    free(pfds);
+    free(refs);
+    return 1;
+  }
+
+  struct in_addr bind_ip;
+  bind_ip.s_addr = htonl(INADDR_ANY);
+  if (bind_addr != NULL && inet_pton(AF_INET, bind_addr, &bind_ip) != 1) {
+    fprintf(stderr, "Invalid --bind address: %s\n", bind_addr);
+    free(room_zombies);
+    free(rooms);
+    free(pfds);
+    free(refs);
+    return 1;
+  }
   signal(SIGINT, on_sigint);
   signal(SIGTERM, on_sigint);
   signal(SIGPIPE, SIG_IGN);
-
-  int sock = socket(AF_INET, SOCK_STREAM, 0);
-  if (sock < 0) {
-    perror("socket");
-    return 1;
-  }
-
-  int reuse = 1;
-  if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-    perror("SO_REUSEADDR");
-    close(sock);
-    return 1;
-  }
-
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons((uint16_t)port);
-  if (bind_addr != NULL) {
-    if (inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) {
-      fprintf(stderr, "Invalid --bind address: %s\n", bind_addr);
-      close(sock);
-      return 1;
-    }
-  }
-
-  if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    perror("bind");
-    close(sock);
-    return 1;
-  }
-
-  if (listen(sock, MAX_PLAYERS) < 0 ||
-      fcntl(sock, F_SETFL, O_NONBLOCK) < 0) {
-    perror("listen/nonblocking");
-    close(sock);
-    return 1;
-  }
-
-  struct client_slot clients[MAX_PLAYERS];
-  struct player_state players[MAX_PLAYERS];
-  struct shot_state shots[MAX_PLAYERS];
-  uint64_t last_input_ms[MAX_PLAYERS];
-  struct transport_counters global_transport;
-  memset(clients, 0, sizeof(clients));
-  for (int i = 0; i < MAX_PLAYERS; i++) clients[i].fd = -1;
-  memset(players, 0, sizeof(players));
-  memset(shots, 0, sizeof(shots));
-  memset(last_input_ms, 0, sizeof(last_input_ms));
-  memset(&global_transport, 0, sizeof(global_transport));
-  uint8_t brick_bits[48];
-  if (load_brick_layout(brick_path, brick_bits, sizeof(brick_bits)) != 0) {
-    memset(brick_bits, 0, sizeof(brick_bits));
-    fprintf(stderr, "Warning: failed to load brick layout: %s\n", brick_path);
-  }
   srand((unsigned int)time(NULL));
   uint64_t init_now = now_ms();
-  for (int i = 0; i < MAX_PLAYERS; i++) {
-    uint8_t sx = 0, sy = 0;
-    pick_spawn(brick_bits, players, &sx, &sy);
-    players[i].x = sx;
-    players[i].y = sy;
-    players[i].joy = 0x0F;
-    players[i].zombie_fire_pending = 0;
-    players[i].zombie_think_next_ms = init_now;
-    players[i].zombie_move_next_ms = init_now + ZOMBIE_MOVE_MS;
-    players[i].zombie_fire_next_ms = init_now + ZOMBIE_FIRE_MS;
+  setvbuf(stdout, NULL, _IOLBF, 0);
+  int rooms_started = 0;
+  for (int i = 0; i < room_count; i++) {
+    struct room_config config = {
+        .port = port_base + i,
+        .zombies = room_zombies[i],
+        .tick_hz = tick_hz,
+        .lag_ms = lag_ms,
+        .brick_path = brick_path,
+    };
+    if (init_room(&rooms[i], &config, &bind_ip, init_now) != 0) {
+      fprintf(stderr, "Failed to bind/start room %d on TCP port %d: %s\n", i,
+              config.port, strerror(errno));
+      for (int j = 0; j < rooms_started; j++) destroy_room(&rooms[j], debug);
+      free(room_zombies);
+      free(rooms);
+      free(pfds);
+      free(refs);
+      return 1;
+    }
+    rooms_started++;
+    printf("maze-war room %d listening on TCP port %d, %d Hz, zombies=%d\n",
+           i, config.port, config.tick_hz, config.zombies);
   }
 
-  uint8_t seq = 0;
-  uint64_t next_tick = now_ms();
-  uint64_t last_transport_summary_ms = now_ms();
-  uint64_t last_brick_resync_ms = now_ms();
-  uint64_t last_name_rotate_ms = now_ms();
-  uint64_t last_seat_ms = 0;
-  uint8_t last_seat_mask = 0xFF; /* never a valid mask: forces a first send */
-  int name_rotate = 0;
-  memset(g_brick_echo, 0, sizeof(g_brick_echo));
-  const uint64_t tick_ms = 1000ULL / (uint64_t)tick_hz;
-
-  setvbuf(stdout, NULL, _IOLBF, 0);
-  printf("maze-war server listening on TCP port %d, %d Hz, zombies=%d\n",
-         port, tick_hz, zombies);
-
   while (g_running) {
-    reap_timed_out_clients(clients, now_ms(), debug, players, shots,
-                           last_input_ms);
-    struct pollfd pfds[MAX_PLAYERS + 1];
-    pfds[0] = (struct pollfd){.fd = sock, .events = POLLIN};
-    for (int i = 0; i < MAX_PLAYERS; i++) {
-      pfds[i + 1] = (struct pollfd){
-          .fd = clients[i].fd,
-          .events = POLLIN | (clients[i].tx.len ? POLLOUT : 0)};
-    }
     uint64_t now = now_ms();
-    int timeout_ms = next_tick > now ? (int)(next_tick - now) : 0;
-    if (timeout_ms > 1000) timeout_ms = 1000;
-    int pr = poll(pfds, MAX_PLAYERS + 1, timeout_ms);
+    uint64_t earliest_tick = rooms[0].next_tick;
+    size_t poll_index = 0;
+    for (int r = 0; r < room_count; r++) {
+      reap_timed_out_clients(&rooms[r], now, debug);
+      if (rooms[r].next_tick < earliest_tick) earliest_tick = rooms[r].next_tick;
+      pfds[poll_index] = (struct pollfd){.fd = rooms[r].listener_fd,
+                                        .events = POLLIN};
+      refs[poll_index++] = (struct poll_ref){r, -1, rooms[r].listener_fd};
+      for (int i = 0; i < MAX_PLAYERS; i++) {
+        int fd = rooms[r].clients[i].in_use ? rooms[r].clients[i].fd : -1;
+        pfds[poll_index] = (struct pollfd){
+            .fd = fd,
+            .events = POLLIN | (rooms[r].clients[i].tx.len ? POLLOUT : 0)};
+        refs[poll_index++] = (struct poll_ref){r, i, fd};
+      }
+    }
+    uint64_t wait_ms = earliest_tick > now ? earliest_tick - now : 0;
+    int timeout_ms = wait_ms > 1000 ? 1000 : (int)wait_ms;
+    int pr = poll(pfds, poll_count, timeout_ms);
     now = now_ms();
     if (pr < 0 && errno != EINTR) {
       perror("poll");
       break;
     }
-    /* Service existing peers before accepting, so reused slots cannot inherit
-       poll events from their previous fd. One bounded read per peer per tick. */
-    for (int i = 0; pr > 0 && i < MAX_PLAYERS; i++) {
-      if (!clients[i].in_use) continue;
-      short events = pfds[i + 1].revents;
+    /* Existing peers go first. The recorded fd check prevents an event for a
+       closed descriptor from being applied to a new occupant after fd reuse. */
+    for (size_t p = 0; pr > 0 && p < poll_count; p++) {
+      if (refs[p].slot < 0 || pfds[p].revents == 0) continue;
+      struct room *room = &rooms[refs[p].room_index];
+      int i = refs[p].slot;
+      struct client_slot *client = &room->clients[i];
+      if (!client->in_use || client->fd != refs[p].fd) continue;
+      short events = pfds[p].revents;
       int failed = (events & (POLLERR | POLLNVAL)) != 0;
       if (!failed && (events & (POLLIN | POLLHUP))) {
         uint8_t buf[256];
-        ssize_t n = recv(clients[i].fd, buf, sizeof(buf), 0);
+        ssize_t n = recv(client->fd, buf, sizeof(buf), 0);
         if (n > 0) {
-          clients[i].last_seen_ms = now;
-          if (debug) printf("RX(%zd) from slot %d\n", n, i);
-          transport_stats_note_raw_bytes(&clients[i].transport, (size_t)n);
-          transport_stats_note_raw_bytes(&global_transport, (size_t)n);
-          process_client_bytes(i, buf, (size_t)n, players, brick_bits, sock,
-                               clients, &seq, debug, now, last_input_ms,
-                               &global_transport, lag_ms);
+          client->last_seen_ms = now;
+          if (debug) printf("room=%d RX(%zd) from slot %d\n",
+                            room->config.port, n, i);
+          transport_stats_note_raw_bytes(&client->transport, (size_t)n);
+          transport_stats_note_raw_bytes(&room->global_transport, (size_t)n);
+          process_client_bytes(room, i, buf, (size_t)n, debug, now);
         } else if (n == 0 || (errno != EINTR && errno != EAGAIN &&
                               errno != EWOULDBLOCK)) {
           failed = 1;
         }
       }
       if (!failed && (events & POLLOUT)) {
-        failed = tcp_tx_flush(clients[i].fd, &clients[i].tx) < 0;
+        failed = tcp_tx_flush(client->fd, &client->tx) < 0;
       }
-      if (failed || clients[i].tx.failed) {
-        drop_client(clients, i, debug, players, shots, last_input_ms, now);
-      }
-    }
-    if (pr > 0 && (pfds[0].revents & POLLIN)) {
-      struct sockaddr_in src;
-      socklen_t src_len = sizeof(src);
-      int fd = accept(sock, (struct sockaddr *)&src, &src_len);
-      if (fd >= 0) {
-        int slot = alloc_client_slot(clients, zombies);
-        if (slot < 0 || tcp_configure(fd) < 0) {
-          close(fd);
-        } else {
-          init_client_slot(&clients[slot], fd, &src, src_len, now);
-          log_client_event("connected", slot, &clients[slot].addr);
-          reset_slot_gameplay(slot, players, shots, last_input_ms, now);
-          uint8_t bfull[51];
-          build_brick_full(seq++, brick_bits, bfull, sizeof(bfull));
-          send_checked(&clients[slot], bfull, sizeof(bfull));
-          clients[slot].sent_bricks = 1;
-          if (debug) printf("TX brick_full -> slot %d\n", slot);
-        }
-      } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
-        perror("accept");
+      if (failed || client->tx.failed) {
+        drop_client(room, i, debug, now);
       }
     }
-
-    if (now_ms() - last_name_rotate_ms >= NAME_ROTATE_MS) {
-      last_name_rotate_ms = now_ms();
-      broadcast_next_name(sock, clients, &seq, &name_rotate, debug);
-    }
-
-    reliable_tick(clients, now_ms(), debug);
-
-    if (now_ms() - last_brick_resync_ms >= BRICK_RESYNC_MS) {
-      last_brick_resync_ms = now_ms();
-      uint8_t bfull[51];
-      build_brick_full(seq++, brick_bits, bfull, sizeof(bfull));
-      broadcast_packet(sock, clients, bfull, sizeof(bfull));
-      if (debug) {
-        printf("TX brick_full resync -> all clients\n");
+    /* Accept at most one peer per room per pass, keeping accept floods bounded. */
+    for (size_t p = 0; pr > 0 && p < poll_count; p++) {
+      if (refs[p].slot == -1 && (pfds[p].revents & POLLIN)) {
+        accept_room_client(&rooms[refs[p].room_index], debug, now);
       }
     }
-
-    reap_timed_out_clients(clients, now_ms(), debug, players, shots,
-                           last_input_ms);
-
-    /* After the reap, so a timed-out seat is reported free on the same pass
-       that frees it. */
-    {
-      uint8_t seat_mask = compute_seat_mask(clients);
-      if (seat_mask != last_seat_mask ||
-          now_ms() - last_seat_ms >= SEAT_REPEAT_MS) {
-        last_seat_mask = seat_mask;
-        last_seat_ms = now_ms();
-        uint8_t pkt[3];
-        build_seats(seq++, seat_mask, pkt, sizeof(pkt));
-        broadcast_packet(sock, clients, pkt, sizeof(pkt));
-        if (debug) {
-          printf("TX seats mask=%X -> all clients\n", seat_mask);
-        }
-      }
-    }
-    if (debug && now_ms() - last_transport_summary_ms >= TRANSPORT_SUMMARY_MS) {
-      log_transport_summaries(clients, &global_transport);
-      last_transport_summary_ms = now_ms();
-    }
-
     now = now_ms();
-    if (now >= next_tick) {
-      uint64_t tick_deadline = next_tick;
-      /* Before the step, so an echo never shares a tick with the break that
-         produced it: one brick packet per tick, never two. */
-      flush_brick_echo(sock, clients, &seq, debug);
-      /* Same rule as the brick echo: one repeat per tick, ahead of the step, so
-         an echo never shares a tick with the transition that produced it. */
-      flush_respawn_echo(sock, clients, &seq, debug);
-      /* Sets this tick's authoritative joy and the ack that goes with it. */
-      apply_queued_input(clients, players, debug, now);
-      step_players(players, shots, brick_bits, sock, clients, &seq, debug,
-                   zombies, last_input_ms);
-      uint8_t zombie_mask[MAX_PLAYERS];
-      uint8_t zombie_bits = 0;
-      uint8_t snapshot_seq = seq++;
-      compute_zombie_mask(clients, zombies, zombie_mask);
-      for (int z = 0; z < MAX_PLAYERS; z++) {
-        if (zombie_mask[z]) {
-          zombie_bits |= (uint8_t)(1u << z);
-        }
-      }
-      uint8_t pkt[20];
-      for (int i = 0; i < MAX_PLAYERS; i++) {
-        if (!clients[i].in_use) {
-          continue;
-        }
-        build_snapshot(snapshot_seq, players, clients[i].applied_input_seq, pkt,
-                       sizeof(pkt));
-        // flags: bit0 valid, bits1..2 recipient pid, bits3..6 zombie-slot mask.
-        pkt[2] = (uint8_t)(0x01u | ((uint8_t)i << 1) |
-                           ((uint8_t)(zombie_bits & 0x0Fu) << 3));
-        if (clients[i].have_applied_input_seq) {
-          pkt[2] |= 0x80u;
-        }
-        ssize_t wn = send_checked(&clients[i], pkt, sizeof(pkt));
-        if (debug && wn == (ssize_t)sizeof(pkt)) {
-          printf("TX snapshot -> slot %d\n", i);
-        }
-      }
-      next_tick = tick_deadline + tick_ms;
-      if (next_tick <= now) {
-        unsigned skipped = 0;
-        while (next_tick <= now && skipped < 4) {
-          next_tick += tick_ms;
-          skipped++;
-        }
-        if (next_tick <= now) {
-          next_tick = now + tick_ms;
-        }
-      }
+    for (int r = 0; r < room_count; r++) {
+      service_room_timers(&rooms[r], debug, now);
+    }
+    /* Every due room advances once before any room can advance again. */
+    for (int r = 0; r < room_count; r++) {
+      if (now >= rooms[r].next_tick) tick_room(&rooms[r], debug, now);
     }
   }
 
-  if (debug) {
-    log_transport_summaries(clients, &global_transport);
-  }
-  for (int i = 0; i < MAX_PLAYERS; i++) reset_client_slot(&clients[i]);
-  close(sock);
+  for (int i = 0; i < room_count; i++) destroy_room(&rooms[i], debug);
+  free(room_zombies);
+  free(rooms);
+  free(pfds);
+  free(refs);
   if (debug) {
     puts("server stopped");
   }
   return 0;
+
+bad_args:
+  usage(argv[0]);
+  return 1;
 }

@@ -59,7 +59,7 @@ grep -A2 -F "HD_PR${TAB}LDA${TAB}(INPROM),Y" "$ATARI_SRC" | grep -E "CMP[$TAB ]+
 # TCP allows SO_REUSEADDR for restart after TIME_WAIT. The live duplicate-bind
 # and restart assertions are in tcp_transport_smoke.sh.
 grep -F 'SOCK_STREAM' "$SERVER_SRC" >/dev/null
-grep -F 'listen(sock, MAX_PLAYERS)' "$SERVER_SRC" >/dev/null
+grep -F 'listen(fd, MAX_PLAYERS)' "$SERVER_SRC" >/dev/null
 
 # Slot lifecycle resets on the client: a slot that changes role, or a local pid
 # that moves, must not keep latches describing the previous occupant.

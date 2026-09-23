@@ -67,7 +67,9 @@ make clean
 ## Server Usage
 
 ```text
-build/maze-war-server [--port PORT] [--tick-hz N] [--zombies N] [--brick PATH] [--debug]
+build/maze-war-server [--port PORT | --port-base PORT] [--room-count N]
+                     [--zombies N | --room-zombies LIST]
+                     [--tick-hz N] [--brick PATH] [--debug]
 ```
 
 Defaults:
@@ -75,6 +77,7 @@ Defaults:
 - `--tick-hz 10`
 - `--zombies 1` (0..3 accepted)
 - `--brick server/brick_layout.txt`
+- one isolated four-seat room
 
 Examples:
 
@@ -84,6 +87,9 @@ Examples:
 
 # verbose output, custom tick and no AI zombies
 ./build/maze-war-server --port 9000 --tick-hz 15 --zombies 0 --debug
+
+# three isolated rooms on ports 9000-9002 with per-room Zombie counts
+./build/maze-war-server --room-count 3 --port-base 9000 --room-zombies 1,2,3
 ```
 
 ## Terminal Client Usage
@@ -146,6 +152,8 @@ Controls (SDL client):
 
 - Transport: TCP (Atari `NET_FLAGS=$05`, unchanged 57600 baud)
 - Default server port: `9000`
+- The Atari startup screen asks for `HOST`, `PORT`, and `NAME` separately; the
+  port defaults to 9000 and accepts decimal values from 1 through 65535.
 - Max players: 4 total slots
 - Server tick: fixed rate (`--tick-hz`, default 10 Hz)
 - A disconnected Linux client exits; restart it to reconnect. The Atari returns
@@ -183,7 +191,9 @@ During mixed-session debugging, start the server with `--debug` and capture both
   the server publishes.
 - On join, a client is assigned a slot (player id), receives full brick state,
   then follows snapshots/events.
-- AI zombies are simulated on the server in unused slots (configurable with
-  `--zombies`).
+- AI zombies are simulated on the server in unused slots (globally configurable
+  with `--zombies`, or per room with `--room-zombies`).
+- A server process may host isolated rooms on consecutive TCP ports; the
+  listener port selects the room and the gameplay packet format stays the same.
 - The Atari and Linux clients speak the same protocol, so both can connect to
   the same server instance.

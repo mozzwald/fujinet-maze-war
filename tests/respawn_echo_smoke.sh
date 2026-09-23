@@ -206,7 +206,7 @@ if [ "${echoes:-0}" -lt "$((sends + 1))" ]; then
 fi
 # One repeat per tick, ahead of the step, like the brick echo -- a burst is what
 # loses packets in the first place.
-grep -A4 -F "flush_respawn_echo(sock, clients, &seq, debug);" "$SERVER_SRC" \
+grep -A4 -F "flush_respawn_echo(room, debug);" "$SERVER_SRC" \
     | grep -F "apply_queued_input(" >/dev/null || {
     echo "FAIL: the respawn echo no longer flushes ahead of the step" >&2
     exit 1

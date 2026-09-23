@@ -202,14 +202,14 @@ SERVER_SRC="$ROOT_DIR/server/main.c"
 # three call sites cannot drift apart again.
 grep -E "^static int slot_on_board" "$SERVER_SRC" >/dev/null || {
     echo "FAIL: no single on-board predicate" >&2; exit 1; }
-if [ "$(grep -c "slot_on_board(players," "$SERVER_SRC")" -lt 3 ]; then
+if [ "$(grep -c "slot_on_board(room," "$SERVER_SRC")" -lt 3 ]; then
     echo "FAIL: collision, fire evaluation and shot hits do not all use it" >&2
     exit 1
 fi
 # It has to know who is actually in a slot, refreshed every tick.
-grep -F "g_occupied_mask" "$SERVER_SRC" >/dev/null || {
+grep -F "room->occupied_mask" "$SERVER_SRC" >/dev/null || {
     echo "FAIL: the on-board predicate cannot see slot occupancy" >&2; exit 1; }
-grep -A6 -F "g_occupied_mask = 0;" "$SERVER_SRC" | grep -F "zombie_mask[i] || human_mask[i]" >/dev/null || {
+grep -A6 -F "room->occupied_mask = 0;" "$SERVER_SRC" | grep -F "zombie_mask[i] || human_mask[i]" >/dev/null || {
     echo "FAIL: occupancy is not rebuilt from this tick's masks" >&2; exit 1; }
 
 # Atari: the hide pass runs every frame, not only when the HUD is refreshed.

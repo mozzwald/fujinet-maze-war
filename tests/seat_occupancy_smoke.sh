@@ -160,8 +160,8 @@ grep -E "SEAT_REPEAT_MS" "$SERVER_SRC" >/dev/null || {
     echo "FAIL: SEATS has no repeat timer" >&2; exit 1; }
 # A timed-out seat must be reported free on the same pass that frees it, so the
 # broadcast has to sit after the reap, not before it.
-grep -A12 -F "reap_timed_out_clients(clients, now_ms(), debug, players, shots," \
-    "$SERVER_SRC" | grep -F "compute_seat_mask(clients)" >/dev/null || {
+sed -n '/^static void service_room_timers/,/^}/p' "$SERVER_SRC" \
+    | grep -F "compute_seat_mask(room->clients)" >/dev/null || {
     echo "FAIL: seat mask is not recomputed after the client reap" >&2; exit 1; }
 
 # Atari client: parses 0x44, and an unheld slot gets no label and no score.

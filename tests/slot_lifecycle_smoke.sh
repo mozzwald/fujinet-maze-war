@@ -218,7 +218,7 @@ grep -F "client disconnected slot=1" "$LOG_FILE" >/dev/null
 # clear burst, must reset facing and score, must re-base the zombie schedules,
 # and must run on BOTH transitions (join and reap).
 SERVER_SRC="$ROOT_DIR/server/main.c"
-reset_body=$(sed -n '/^static void reset_slot_gameplay(int slot, struct player_state/,/^}/p' \
+reset_body=$(sed -n '/^static void reset_slot_gameplay(struct room \*room/,/^}/p' \
     "$SERVER_SRC")
 if [ -z "$reset_body" ]; then
     echo "FAIL: reset_slot_gameplay definition not found" >&2
@@ -250,12 +250,12 @@ esac
 # Both call sites must survive. Match the argument lists exactly: the
 # declaration and definition both start `reset_slot_gameplay(int slot`, which a
 # looser pattern counts as a call.
-if ! grep -F 'reset_slot_gameplay(slot, players, shots, last_input_ms, now)' \
+if ! grep -F 'reset_slot_gameplay(room, slot, now)' \
      "$SERVER_SRC" >/dev/null; then
     echo "FAIL: no reset_slot_gameplay call on the join path" >&2
     exit 1
 fi
-if ! grep -F 'reset_slot_gameplay(i, players, shots, last_input_ms, now)' \
+if ! grep -F 'reset_slot_gameplay(room, i, now)' \
      "$SERVER_SRC" >/dev/null; then
     echo "FAIL: no reset_slot_gameplay call on the reap path" >&2
     exit 1
@@ -268,7 +268,7 @@ fi
 # respawning player and an empty slot (see vacant_slot_collision_smoke.sh).
 SERVER_SRC="$ROOT_DIR/server/main.c"
 sed -n '/^static int is_player_at/,/^}/p' "$SERVER_SRC" \
-    | grep -F "slot_on_board(players, i)" >/dev/null || {
+    | grep -F "slot_on_board(room, i)" >/dev/null || {
     echo "FAIL: is_player_at counts respawning players, walling off death cells" >&2
     exit 1
 }

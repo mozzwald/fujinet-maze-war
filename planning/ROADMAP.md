@@ -202,7 +202,7 @@ Plans:
 **Depends on**: Phase 6; Phase 7 plans 07-01 through 07-04
 **Reference**: `ref/mazewar_lobby_rounds_implementation_plan.md`
 **Research**: `phases/08-lobby-rounds-polish/08-RESEARCH.md`
-**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-01 is in progress on `gpt-5.6-terra` with high reasoning.
+**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-02 is awaiting its mixed-room checkpoint on `gpt-5.6-sol` with high reasoning.
 **Round boundary contract**: [08-PROTOCOL.md](phases/08-lobby-rounds-polish/08-PROTOCOL.md)
 **Success Criteria**:
   1. One server process runs isolated four-seat rooms on distinct TCP ports.
@@ -214,7 +214,7 @@ Plans:
   7. Obsolete unreachable title/game-over code is removed and its measured space is reused under enforced memory-layout limits.
 **Plans**: 11 plans
 Plans:
-- [ ] `08-01` — Remove unreachable title/game-over implementation and establish measured Atari memory headroom.
+- [x] `08-01` — Remove unreachable title/game-over implementation and establish measured Atari memory headroom. Accepted on real Atari/FujiNet against emulation 2026-09-11.
 - [ ] `08-02` — Encapsulate behavior in one Room, then add isolated multi-room TCP listeners.
 - [ ] `08-03` — Add authoritative MATCH_END/ROUND_START protocol and complete round reset.
 - [ ] `08-04` — Add the nonblocking Atari/SDL round-end presentation and results.
@@ -295,4 +295,4 @@ Phase 6 hardening freezes the baseline; Phase 8 makes it Lobby-releasable.
 | 4. Render-State Separation | 5/5 effective; 04-06 retracted | Closed as good enough for now after 2026-09-11 user testing; revisit bounded timed remote-sample playback if a future cloud-hosted server makes WAN latency visible | 2026-09-11 |
 | 6. Mixed-Session Validation and Hardening | 1/1 | Complete; user mixed-session acceptance | 2026-09-11 |
 | 7. Realtime Transport Reliability | 4/4 executable | Complete as scoped and merged; 07-05 remains a deferred, not-recommended design note | 2026-09-10 |
-| 8. Lobby and Round Polish | 0/11 | 08-01 ready for hardware regression test | - |
+| 8. Lobby and Round Polish | 1/11 | 08-02 implementation complete; mixed one-room/two-room checkpoint pending | - |

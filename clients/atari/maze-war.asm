@@ -91,6 +91,7 @@ NET_FRAME_MAX	=	60	;longest frame we accept (BRICK_FULL encodes to 53)
 NET_DESYNC_MAX	=	3	;remote failed-recovery attempts before forced snap
 NET_HARD_P0	=	12	;local hard-snap guard (only on severe divergence)
 HOST_MAX	=	31	;max hostname length
+PORT_MAX	=	5	;decimal TCP port, 1..65535
 NAME_LEN	=	8	;HUD gives each slot columns 4..11 before the score digit
 NAME_PKT_LEN	=	3+NAME_LEN	;$43, seq, pid, then the name
 REL_PKT_MAX	=	4+NAME_PKT_LEN+2	;$53, seq, rev lo/hi, NAME, CRC
@@ -855,8 +856,8 @@ NET_CLRMAP1
 	STA	C_SP
 	LDA	# >NET_INIT_ARGS
 	STA	C_SP+1
-	LDA	#NET_PORT_LO
-	LDX	#NET_PORT_HI
+	LDA	NET_PORT_ARG_A
+	LDX	NET_PORT_ARG_X
 	JSR	NS_INIT
 	STA	NET_INITST
 	LDA	NET_SAVPTR
@@ -1077,6 +1078,11 @@ NNE_DIFF
 ;THEY CAN CONTAIN SPACES (SCREEN CODE $00).
 ;
 HOST_MSGDRAW
+	LDY	#39		;replace the whole previous status, including longer text
+	LDA	#0
+HMD_CLR	STA	HOSTSCR+80,Y
+	DEY
+	BPL	HMD_CLR
 	LDA	HOST_MSG+1
 	BEQ	HMD_X
 	STA	HOST_MPTR+1
@@ -4126,6 +4132,20 @@ HI_LOOP	JSR	TXT_CURSOR
 	BEQ	HI_BS
 	CMP	#$08
 	BEQ	HI_BS
+	; The port field is decimal-only. HOSTBUF retains the hostname filter below,
+	; so punctuation still cannot become part of the NS_INIT host string.
+	LDX	INBUF+1
+	CPX	# >PORTBUF
+	BNE	HI_ANY
+	LDX	INBUF
+	CPX	# <PORTBUF
+	BNE	HI_ANY
+	CMP	#'0'
+	BCC	HI_LOOP
+	CMP	#'9'+1
+	BCC	HI_ADD
+	BCS	HI_LOOP
+HI_ANY
 	CMP	#$20
 	BCC	HI_LOOP
 	CMP	#'0'
@@ -4233,6 +4253,22 @@ HOST_FIELD
 	LDA	#HOST_MAX
 	STA	INMAX
 	RTS
+PORT_FIELD
+	LDA	# <PORTBUF
+	STA	INBUF
+	LDA	# >PORTBUF
+	STA	INBUF+1
+	LDA	# <PORTPROMPT
+	STA	INPROM
+	LDA	# >PORTPROMPT
+	STA	INPROM+1
+	LDA	# <[HOSTSCR+40]	;row 1, directly below the host
+	STA	INROW
+	LDA	# >[HOSTSCR+40]
+	STA	INROW+1
+	LDA	#PORT_MAX
+	STA	INMAX
+	RTS
 NAME_FIELD
 	LDA	# <NAMEBUF
 	STA	INBUF
@@ -4297,6 +4333,78 @@ NMSC_OK	RTS
 NMSC_SP	LDA	#$00
 	RTS
 ;
+; Convert PORTBUF decimal text into the register byte order NS_INIT expects.
+; A holds the host-order high byte and X the low byte at the call site: for
+; 9000 ($2328), NS_INIT receives A=$23/X=$28 just as before this field.
+; Carry set means blank, zero, non-decimal, or above 65535.
+PORT_PARSE
+	LDA	#0
+	STA	PORTVAL_LO
+	STA	PORTVAL_HI
+	LDY	#0
+PP_LOOP	LDA	PORTBUF,Y
+	BEQ	PP_DONE
+	CMP	#'0'
+	BCC	PP_BAD
+	CMP	#'9'+1
+	BCS	PP_BAD
+	SEC
+	SBC	#'0'
+	TAX			;digit while value is multiplied by ten
+	; Save value*2.
+	LDA	PORTVAL_LO
+	ASL
+	STA	PORTTMP_LO
+	LDA	PORTVAL_HI
+	ROL
+	STA	PORTTMP_HI
+	BCS	PP_BAD
+	; Turn the original value into value*8, rejecting 16-bit overflow.
+	ASL	PORTVAL_LO
+	ROL	PORTVAL_HI
+	BCS	PP_BAD
+	ASL	PORTVAL_LO
+	ROL	PORTVAL_HI
+	BCS	PP_BAD
+	ASL	PORTVAL_LO
+	ROL	PORTVAL_HI
+	BCS	PP_BAD
+	; value*8 + value*2 + digit.
+	CLC
+	LDA	PORTVAL_LO
+	ADC	PORTTMP_LO
+	STA	PORTVAL_LO
+	LDA	PORTVAL_HI
+	ADC	PORTTMP_HI
+	BCS	PP_BAD
+	STA	PORTVAL_HI
+	TXA
+	CLC
+	ADC	PORTVAL_LO
+	STA	PORTVAL_LO
+	LDA	PORTVAL_HI
+	ADC	#0
+	BCS	PP_BAD
+	STA	PORTVAL_HI
+	INY
+	CPY	#PORT_MAX
+	BCC	PP_LOOP
+	LDA	PORTBUF,Y
+	BNE	PP_BAD
+PP_DONE	CPY	#0
+	BEQ	PP_BAD
+	LDA	PORTVAL_LO
+	ORA	PORTVAL_HI
+	BEQ	PP_BAD
+	LDA	PORTVAL_HI
+	STA	NET_PORT_ARG_A
+	LDA	PORTVAL_LO
+	STA	NET_PORT_ARG_X
+	CLC
+	RTS
+PP_BAD	SEC
+	RTS
+;
 HOST_BOOT	LDA	#$40	;DISABLE DLI
 	STA	NMIEN
 	LDA	CHBASE
@@ -4311,8 +4419,26 @@ HOST_BOOT	LDA	#$40	;DISABLE DLI
 	JSR	HOST_MSGDRAW
 	JSR	NAME_FIELD	;paint the name field so both are visible
 	JSR	TXT_DRAW
+	JSR	PORT_FIELD	;paint the default/current TCP port
+	JSR	TXT_DRAW
 	JSR	HOST_FIELD
 	JSR	TXT_INPUT
+	; Invalid numeric input stays on the port field with a useful status line.
+HB_PORT	JSR	PORT_FIELD
+	JSR	TXT_INPUT
+	JSR	PORT_PARSE
+	BCC	HB_PORT_OK
+	LDA	# <MSG_BADPORT
+	STA	HOST_MSG
+	LDA	# >MSG_BADPORT
+	STA	HOST_MSG+1
+	JSR	HOST_MSGDRAW
+	JMP	HB_PORT
+HB_PORT_OK
+	LDA	#0		;remove PORT error before the name field
+	STA	HOST_MSG
+	STA	HOST_MSG+1
+	JSR	HOST_MSGDRAW
 	JSR	NAME_FIELD
 	JSR	TXT_INPUT
 	LDA	HOST_CHSAV
@@ -6725,12 +6851,23 @@ MSG_CONNECT	.BYTE	"CONNECTING TO SERVER...",$FF
 MSG_NOSRV	.BYTE	"NO REPLY - CHECK HOST AND SERVER",$FF
 MSG_LOST	.BYTE	"SERVER STOPPED RESPONDING",$FF
 MSG_INITFAIL	.BYTE	"FUJINET DID NOT OPEN THE CONNECTION",$FF
+MSG_BADPORT	.BYTE	"PORT MUST BE 1-65535",$FF
 HOSTPROMPT	.BYTE	"HOST: ",$FF
+PORTPROMPT	.BYTE	"PORT: ",$FF
 NAMEPROMPT	.BYTE	"NAME: ",$FF
 HOSTBUF	.BYTE	0
 	.DS	HOST_MAX
+PORTBUF	.BYTE	$39,$30,$30,$30,0	;ASCII input bytes, not screen codes
+	.DS	PORT_MAX-4
 NAMEBUF	.BYTE	0
 	.DS	NAME_LEN
+; Mutable NS_INIT register bytes. PORT_PARSE writes host high/low here.
+NET_PORT_ARG_A	.BYTE	NET_PORT_LO
+NET_PORT_ARG_X	.BYTE	NET_PORT_HI
+PORTVAL_LO	.DS	1
+PORTVAL_HI	.DS	1
+PORTTMP_LO	.DS	1
+PORTTMP_HI	.DS	1
 NET_STATE_END
 ;
 	ORG	$02E0
