@@ -20,6 +20,28 @@ grep -E "JSR[$TAB ]+SND_SEL" "$ATARI_SRC" >/dev/null
 grep -E "JSR[$TAB ]+SND_OFF" "$ATARI_SRC" >/dev/null
 grep -E "CPX[$TAB ]+NET_LOCAL_PID" "$ATARI_SRC" >/dev/null
 
+# MOVRATE=1 removed the original quiet CHKTIME frames. Idle actors and the
+# alternating quiet half of MOVSND must therefore silence explicitly or the
+# $04/$20 walk shuffle stays latched as a continuous low rumble.
+setime_block=$(sed -n '/^SETIME[[:space:]]/,/^STRTMOV[[:space:]]/p' "$ATARI_SRC")
+printf '%s' "$setime_block" | grep -qE "JSR[$TAB ]+SND_OFF" \
+    || { echo "FAIL: idle movement path no longer silences its game channel" >&2; exit 1; }
+movsnd_block=$(sed -n '/^MOVSND[[:space:]]/,/^MOVMXIT[[:space:]]/p' "$ATARI_SRC")
+printf '%s' "$movsnd_block" | grep -qE "JSR[$TAB ]+SND_OFF" \
+    || { echo "FAIL: quiet walk phase can leave the shuffle tone latched" >&2; exit 1; }
+
+# Cold start and identity changes can otherwise orphan a nonzero channel with
+# no actor left able to release it. Both game channels must be silent before
+# the VBI is installed, and a role reset must clear channel 2 with its owner.
+start_block=$(grep -A8 -E '^START[[:space:]]' "$ATARI_SRC")
+printf '%s' "$start_block" | grep -qE "STA[$TAB ]+AUDC1" \
+    || { echo "FAIL: START does not silence POKEY channel 1" >&2; exit 1; }
+printf '%s' "$start_block" | grep -qE "STA[$TAB ]+AUDC2" \
+    || { echo "FAIL: START does not silence POKEY channel 2" >&2; exit 1; }
+role_reset=$(sed -n '/^NET_ROLE_RESET$/,/^NET_LOCAL_PID_RESET$/p' "$ATARI_SRC")
+printf '%s' "$role_reset" | grep -qE "STA[$TAB ]+AUDC2" \
+    || { echo "FAIL: role reset releases channel 2 without silencing it" >&2; exit 1; }
+
 # NS_GetStatus sticky error observability present
 grep -E "NS_STAT[$TAB ]*=[$TAB ]*NS_BASE\+21" "$ATARI_SRC" >/dev/null
 grep -E "JSR[$TAB ]+NS_STAT" "$ATARI_SRC" >/dev/null

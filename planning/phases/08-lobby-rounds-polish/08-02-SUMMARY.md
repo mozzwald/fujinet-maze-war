@@ -1,8 +1,9 @@
 # 08-02 — Isolated multi-room TCP server
 
-Status: implementation complete and automated validation green; awaiting the
-user's real Atari/FujiNet plus emulator acceptance before ROOM-01 and ROOM-02
-are marked complete.
+Status: complete and accepted. The user verified both one-room and multi-room
+configurations with real Atari clients: two Ataris in separate rooms did not
+conflict, and two Ataris connected to the same room played together correctly.
+ROOM-01 and ROOM-02 are complete.
 
 ## Atari port-selection follow-up
 
@@ -59,14 +60,11 @@ identity.
 - The two-room isolation test passes under AddressSanitizer and
   UndefinedBehaviorSanitizer.
 
-## Required user checkpoint
+## User acceptance
 
-Run the default one-room command with the existing Atari/FujiNet plus emulator
-pair and confirm normal movement, combat, names, HUD, Zombie handoff, and brick
-updates are unchanged. Then run two rooms on consecutive ports, place one
-client in each, and confirm activity or disconnects in one room do not appear
-or stall the other.
+The mixed configuration checkpoint passed: the single-room configuration
+accepted two Atari clients, while the multi-room configuration kept two Atari
+clients in separate rooms without cross-room conflict.
 
-After acceptance, use **08-03 — `gpt-6-astra`, high reasoning** for the
-authoritative match-end and round-reset synchronization contract. This
-recommendation remains conditional until the 08-02 mixed test passes.
+The next step is **08-03 — `gpt-6-astra`, high reasoning** for the authoritative
+match-end and round-reset synchronization contract.

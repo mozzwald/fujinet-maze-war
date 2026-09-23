@@ -78,6 +78,29 @@ printf '%s' "$respawn" | grep -qE "JSR[[:space:]]+NET_AUTH_REPOS" \
 printf '%s' "$respawn" | grep -qE "JSR[[:space:]]+SETSTIL" \
   || fail "final respawn does not redraw a still actor at the spawn cell"
 
+# Round reset erases all PM graphics before the first new-round snapshot.
+# An unchanged spawn coordinate therefore still needs an explicit VBI redraw;
+# coordinate-difference staging cannot infer that the pixels are gone.
+grep -qE "^NET_REDRAW_MASK[[:space:]]+\.DS[[:space:]]+1" "$ATARI_SRC" \
+  || fail "round redraw mask is not declared"
+grep -qE "^NET_STAGE_REVEAL[[:space:]]+\.DS[[:space:]]+1" "$ATARI_SRC" \
+  || fail "snapshot staging has no interrupt-safe round reveal flag"
+commit_reveal=$(awk '$1=="NET_STAGE_COMMIT"{on=1} on{print} on&&/^NSC_NOREVEAL/{exit}' "$ATARI_SRC")
+printf '%s' "$commit_reveal" | grep -qE "STA[[:space:]]+NET_REDRAW_MASK" \
+  || fail "forced redraw is published before the VBI commits snapshot coordinates"
+snap_apply=$(awk '$1=="NET_SNAP_APPLY"{on=1} on{print} on&&/^NSNAP_EXIT/{exit}' "$ATARI_SRC")
+printf '%s' "$snap_apply" | grep -qE "STA[[:space:]]+NET_REDRAW_MASK" \
+  && fail "mainline snapshot apply can race the VBI by publishing redraw early"
+redraw=$(awk '$1=="VBI_RDR_LP"{on=1} on{print} on&&/BPL[[:space:]]+VBI_RDR_LP/{exit}' "$ATARI_SRC")
+printf '%s' "$redraw" | grep -qE "LDA[[:space:]]+NET_DEAD_MASK" \
+  || fail "round redraw does not skip dead/vacant slots"
+printf '%s' "$redraw" | grep -qE "JSR[[:space:]]+NET_AUTH_REPOS" \
+  || fail "round redraw does not reset render and simulation to authority"
+printf '%s' "$redraw" | grep -qE "JSR[[:space:]]+SETSTIL" \
+  || fail "round redraw does not restore the PM actor image"
+grep -qE "^NET_ROUND_HUD" "$ATARI_SRC" \
+  && fail "temporary WIN HUD marker still overlaps the shirt-colour missile"
+
 # --- drawing reads render state only -----------------------------------
 # ERASMAN is the one that has bitten hardest: it blanks two characters at the
 # actor's cell, so it must bound-check and blank the cell that was DRAWN.

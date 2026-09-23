@@ -24,13 +24,19 @@ enum {
   PKT_NAME = 0x43,
   PKT_SEATS = 0x44,
   PKT_RELIABLE_ACK = 0x45,
+  PKT_HELLO = 0x46,
+  PKT_WELCOME = 0x47,
+  PKT_REJECT = 0x48,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52,
-  PKT_RELIABLE_EVENT = 0x53
+  PKT_RELIABLE_EVENT = 0x53,
+  PKT_MATCH_END = 0x54,
+  PKT_ROUND_START = 0x55
 };
 
 enum { MAX_PLAYERS = 4 };
+enum { PROTOCOL_VERSION = 1, ROUND_PLAYING = 0, ROUND_OVER = 1 };
 /* Matches the Atari HUD field; the server sanitizes and space-pads. */
 enum { NAME_LEN = 8 };
 enum { NAME_RESEND_MS = 2000 };
@@ -58,6 +64,11 @@ static uint64_t now_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static int round_is_newer(uint8_t candidate, uint8_t current) {
+  uint8_t distance = (uint8_t)(candidate - current);
+  return distance != 0 && distance < 0x80;
 }
 
 static uint8_t pack_joy(uint8_t stick, uint8_t trig) {
@@ -107,7 +118,10 @@ static int slot_in_play(uint8_t role_mask, uint8_t seat_mask, int local_pid,
 static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
                         const struct shot_state *shots,
                         const uint8_t names[MAX_PLAYERS][NAME_LEN],
-                        uint8_t role_mask, uint8_t seat_mask, int local_pid) {
+                        uint8_t role_mask, uint8_t seat_mask, int local_pid,
+                        int round_phase, uint8_t round_id,
+                        uint8_t winner_pid, uint8_t kill_limit,
+                        int ready) {
   for (int y = 0; y < 19; y++) {
     for (int x = 0; x < 20; x++) {
       int idx = y * 20 + x;
@@ -154,6 +168,16 @@ static void draw_screen(const uint8_t *bricks, const struct player_state *ps,
     mvprintw(20 + p, 0, "%c%d %-*s %3u   ", (p == local_pid) ? '>' : ' ', p,
              NAME_LEN, label, ps[p].score);
   }
+  if (round_phase == ROUND_OVER) {
+    mvprintw(0, 23, "ROUND %u OVER", (unsigned)round_id);
+    mvprintw(1, 23, "PLAYER %u WINS", (unsigned)(winner_pid + 1));
+    mvprintw(2, 23, "FIRST TO %u", (unsigned)kill_limit);
+    mvprintw(3, 23, "NEXT ROUND SOON");
+  } else if (!ready) {
+    mvprintw(0, 23, "SYNCING ROUND %u", (unsigned)round_id);
+  } else {
+    for (int row = 0; row < 4; row++) mvprintw(row, 23, "%18s", "");
+  }
   refresh();
 }
 
@@ -167,14 +191,15 @@ static void usage(const char *argv0) {
 }
 
 static void send_respawn(int sock, struct tcp_tx *tx,
-                         uint8_t *seq, int local_pid) {
-  uint8_t pkt[6];
+                         uint8_t *seq, int local_pid, uint8_t round_id) {
+  uint8_t pkt[7];
   pkt[0] = PKT_RESPAWN;
   pkt[1] = (*seq)++;
   pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
   pkt[3] = 0;
   pkt[4] = 0;
   pkt[5] = 0;
+  pkt[6] = round_id;
   tcp_tx_queue_frame(sock, tx, pkt, sizeof(pkt));
 }
 
@@ -189,22 +214,26 @@ static void send_reliable_ack(int sock, struct tcp_tx *tx, uint8_t *seq,
 }
 
 static int reliable_inner_is_valid(const uint8_t *pkt, ssize_t len) {
-  if (len == 4 && pkt[0] == PKT_BRICK_DELTA) {
+  if (len == 5 && pkt[0] == PKT_BRICK_DELTA) {
     return 1;
   }
-  if (len == 6 && pkt[0] == PKT_RESPAWN) {
+  if (len == 7 && pkt[0] == PKT_RESPAWN) {
     return 1;
   }
   if (len == 3 + NAME_LEN && pkt[0] == PKT_NAME) {
     return 1;
   }
+  if (len == 52 && pkt[0] == PKT_BRICK_FULL) return 1;
+  if (len == 43 && pkt[0] == PKT_MATCH_END) return 1;
+  if (len == 3 && pkt[0] == PKT_ROUND_START) return 1;
   return 0;
 }
 
 static void handle_curses_key(int ch, int *up, int *down, int *left,
                               int *right, int *fire, int *running,
                               int sock, struct tcp_tx *tx,
-                              uint8_t *seq, int local_pid) {
+                              uint8_t *seq, int local_pid, uint8_t round_id,
+                              int gameplay_enabled) {
   switch (ch) {
     case KEY_UP:
     case 'w':
@@ -231,7 +260,7 @@ static void handle_curses_key(int ch, int *up, int *down, int *left,
       break;
     case 'r':
     case 'R':
-      send_respawn(sock, tx, seq, local_pid);
+      if (gameplay_enabled) send_respawn(sock, tx, seq, local_pid, round_id);
       break;
     case 27:
       *running = 0;
@@ -345,7 +374,20 @@ int main(int argc, char **argv) {
   uint64_t last_send_ms = 0;
   uint8_t seq = 0;
   uint16_t reliable_applied_rev = 0;
+  int have_welcome = 0;
+  uint8_t round_id = 0;
+  int round_phase = ROUND_OVER;
+  uint8_t kill_limit = 0;
+  uint8_t winner_pid = 0;
+  int round_authorized = 0;
+  int round_map_ready = 0;
+  int round_snapshot_ready = 0;
   uint64_t next_redraw = now_ms();
+
+  {
+    uint8_t hello[2] = {PKT_HELLO, PROTOCOL_VERSION};
+    tcp_tx_queue_frame(sock, &tx, hello, sizeof(hello));
+  }
 
   if (debug) {
     if (evfd >= 0) {
@@ -379,7 +421,24 @@ int main(int argc, char **argv) {
       if (n == 0) break;
       const uint8_t *pkt = buf;
       ssize_t pkt_len = n;
-      if (n >= 8 && buf[0] == PKT_RELIABLE_EVENT) {
+      int reliable_inner = 0;
+      if (n == 5 && buf[0] == PKT_WELCOME &&
+          buf[1] == PROTOCOL_VERSION) {
+        have_welcome = 1;
+        round_id = buf[2];
+        round_phase = buf[3];
+        kill_limit = buf[4];
+        round_authorized = 0;
+        round_map_ready = 0;
+        round_snapshot_ready = 0;
+        continue;
+      }
+      if (n >= 2 && buf[0] == PKT_REJECT) {
+        running = 0;
+        break;
+      }
+      if (!have_welcome) continue;
+      if (n >= 7 && buf[0] == PKT_RELIABLE_EVENT) {
         uint16_t rev = (uint16_t)buf[2] | ((uint16_t)buf[3] << 8);
         pkt = &buf[4];
         pkt_len = n - 4;
@@ -390,17 +449,51 @@ int main(int argc, char **argv) {
         }
         reliable_applied_rev = rev;
         send_reliable_ack(sock, &tx, &seq, reliable_applied_rev);
+        reliable_inner = 1;
       }
-      if (pkt_len >= 3 && pkt[0] == PKT_BRICK_FULL && pkt_len >= 51) {
+      if (pkt_len == 3 && pkt[0] == PKT_ROUND_START) {
+        uint8_t incoming = pkt[1];
+        if (incoming == round_id || round_is_newer(incoming, round_id)) {
+          if (incoming != round_id || !round_authorized) {
+            memset(shots, 0, sizeof(shots));
+            round_map_ready = 0;
+            round_snapshot_ready = 0;
+          }
+          round_id = incoming;
+          kill_limit = pkt[2];
+          round_phase = ROUND_PLAYING;
+          round_authorized = 1;
+          last_joy = 0xFF;
+        }
+      } else if (pkt_len == 43 && pkt[0] == PKT_MATCH_END) {
+        if (pkt[1] == round_id) {
+          round_phase = ROUND_OVER;
+          winner_pid = pkt[2];
+          role_mask = pkt[4];
+          seat_mask = (uint8_t)(pkt[3] & (uint8_t)~pkt[4]);
+          kill_limit = pkt[5];
+          memcpy(&players[0].score, &pkt[6], 1);
+          memcpy(&players[1].score, &pkt[7], 1);
+          memcpy(&players[2].score, &pkt[8], 1);
+          memcpy(&players[3].score, &pkt[9], 1);
+          memcpy(names, &pkt[11], MAX_PLAYERS * NAME_LEN);
+          memset(shots, 0, sizeof(shots));
+          last_joy = 0xFF;
+        }
+      } else if (pkt_len == 52 && pkt[0] == PKT_BRICK_FULL &&
+                 pkt[51] == round_id) {
         memcpy(bricks, &pkt[3], 48);
-      } else if (pkt_len >= 4 && pkt[0] == PKT_BRICK_DELTA) {
+        if (reliable_inner) round_map_ready = 1;
+      } else if (pkt_len == 5 && pkt[0] == PKT_BRICK_DELTA &&
+                 pkt[4] == round_id && round_phase == ROUND_PLAYING) {
         uint8_t x = pkt[2];
         uint8_t y = pkt[3];
         if (x < 20 && y < 19) {
           int idx = y * 20 + x;
           bricks[idx / 8] &= (uint8_t)~(1u << (idx % 8));
         }
-      } else if (pkt_len >= 6 && pkt[0] == PKT_RESPAWN) {
+      } else if (pkt_len == 7 && pkt[0] == PKT_RESPAWN &&
+                 pkt[6] == round_id && round_phase == ROUND_PLAYING) {
         uint8_t rp = pkt[2];
         if (rp < MAX_PLAYERS) {
           if (pkt[5] & 0x01) {
@@ -412,20 +505,24 @@ int main(int argc, char **argv) {
           }
         }
       } else if (pkt_len >= 3 && pkt[0] == PKT_SEATS) {
-        seat_mask = (uint8_t)(pkt[2] & 0x0F);
+        if (round_phase != ROUND_OVER)
+          seat_mask = (uint8_t)(pkt[2] & 0x0F);
       } else if (pkt_len >= 3 + NAME_LEN && pkt[0] == PKT_NAME) {
         uint8_t np = pkt[2];
-        if (np < MAX_PLAYERS) {
+        if (np < MAX_PLAYERS && round_phase != ROUND_OVER) {
           memcpy(names[np], &pkt[3], NAME_LEN);
         }
-      } else if (pkt_len >= 6 && pkt[0] == PKT_SHOT) {
+      } else if (pkt_len == 7 && pkt[0] == PKT_SHOT &&
+                 pkt[6] == round_id && round_phase == ROUND_PLAYING) {
         uint8_t sp = pkt[2];
         if (sp < MAX_PLAYERS) {
           shots[sp].x = pkt[3];
           shots[sp].y = pkt[4];
           shots[sp].active = pkt[5] ? 1 : 0;
         }
-      } else if (pkt_len >= 19 && pkt[0] == PKT_SNAPSHOT) {
+      } else if (pkt_len == 21 && pkt[0] == PKT_SNAPSHOT &&
+                 pkt[20] == round_id && round_phase == ROUND_PLAYING) {
+        round_snapshot_ready = 1;
         int snap_pid = (int)((pkt[2] >> 1) & 0x03);
         role_mask = (uint8_t)((pkt[2] >> 3) & 0x0F);
         int ack_valid = (pkt[2] & 0x80) != 0;
@@ -516,7 +613,9 @@ int main(int argc, char **argv) {
             break;
           case KEY_R:
             if (pressed) {
-              send_respawn(sock, &tx, &seq, local_pid);
+              if (round_authorized && round_map_ready && round_snapshot_ready &&
+                  round_phase == ROUND_PLAYING)
+                send_respawn(sock, &tx, &seq, local_pid, round_id);
             }
             break;
           default:
@@ -536,13 +635,16 @@ int main(int argc, char **argv) {
           break;
         }
         handle_curses_key(ch, &up, &down, &left, &right, &fire, &running,
-                          sock, &tx, &seq, local_pid);
+                          sock, &tx, &seq, local_pid, round_id,
+                          round_authorized && round_map_ready &&
+                              round_snapshot_ready &&
+                              round_phase == ROUND_PLAYING);
       }
     }
 
     /* The server repeats names it knows, but it cannot repeat one it never
        received, so keep sending until our own slot comes back named. */
-    if (name && now - last_name_send_ms >= NAME_RESEND_MS) {
+    if (have_welcome && name && now - last_name_send_ms >= NAME_RESEND_MS) {
       int known = (local_pid >= 0) && name_is_set(names[local_pid]);
       if (!known) {
         uint8_t pkt[3 + NAME_LEN];
@@ -555,15 +657,20 @@ int main(int argc, char **argv) {
       last_name_send_ms = now;
     }
 
-    uint8_t stick = compute_stick(up, down, left, right);
-    uint8_t joy = pack_joy(stick, (uint8_t)fire);
+    int gameplay_enabled = have_welcome && round_authorized &&
+                           round_map_ready && round_snapshot_ready &&
+                           round_phase == ROUND_PLAYING;
+    uint8_t stick = gameplay_enabled ? compute_stick(up, down, left, right)
+                                     : 0x0F;
+    uint8_t joy = gameplay_enabled ? pack_joy(stick, (uint8_t)fire) : 0x0F;
     if (joy != last_joy || (joy != 0x0F && now - last_send_ms > 100) ||
         now - last_send_ms >= 1000) {
-      uint8_t pkt[4];
+      uint8_t pkt[5];
       pkt[0] = PKT_DELTA;
       pkt[1] = seq++;
       pkt[2] = (uint8_t)((local_pid >= 0) ? local_pid : 0);
       pkt[3] = joy;
+      pkt[4] = round_id;
       tcp_tx_queue_frame(sock, &tx, pkt, sizeof(pkt));
       last_joy = joy;
       last_send_ms = now;
@@ -571,7 +678,8 @@ int main(int argc, char **argv) {
 
     if (now >= next_redraw) {
       draw_screen(bricks, players, shots, names, role_mask, seat_mask,
-                  local_pid);
+                  local_pid, round_phase, round_id, winner_pid, kill_limit,
+                  gameplay_enabled);
       next_redraw = now + 33;
     }
   }

@@ -71,16 +71,16 @@ for n in lists:
     if (a & 0xFC00) != ((a + 0x3F) & 0xFC00):
         fail(f"{n} at ${a:04X} can cross a 1K boundary; ANTIC would wrap it")
 
-# 2. The removed title is a real future-UI allocation range, not bytes shifted
-# into the maze. No loaded segment may overlap it.
+# 2. The removed title is now the bounded round/menu UI allocation. Phase 8-3
+# consumes part of it for persistent transition handlers; it must never grow
+# into the fixed maze data.
 ui_lo = sym["UI_DATA_START"]
 ui_hi = sym["MAZEDAT"] - 1
 if ui_hi - ui_lo + 1 < 0x100:
     fail(f"reclaimed UI range is only {ui_hi - ui_lo + 1} bytes")
-for a, b in segs:
-    if a <= ui_hi and b >= ui_lo:
-        fail(f"segment ${a:04X}-${b:04X} overlaps reclaimed UI range "
-             f"${ui_lo:04X}-${ui_hi:04X}")
+ui_used_hi = sym["UI_DATA_END"] - 1
+if ui_used_hi > ui_hi:
+    fail(f"UI data ends at ${ui_used_hi:04X}, past maze boundary ${ui_hi:04X}")
 
 # 3. Nothing may be loaded into the display buffers. They are reserved with .DS
 #    and written at runtime, so anything loaded there is shared memory.
@@ -107,6 +107,8 @@ if sym["ZP_END"] > 0xE9:
     fail(f"zero page ends at ${sym['ZP_END']:04X}, leaving less than five bytes before handler $EE")
 if sym["NET_STATE_END"] > 0x7F00:
     fail(f"NetStream state ends at ${sym['NET_STATE_END']:04X}, leaving less than $100 before $8000")
+if sym["NET_HIGH_CODE_END"] > 0x8800:
+    fail(f"high code ends at ${sym['NET_HIGH_CODE_END']:04X}, past its guarded $8400-$87FF reserve")
 
 # 6. Segments must not overlap each other either.
 for j in range(len(segs)):
@@ -118,7 +120,7 @@ for j in range(len(segs)):
 
 print("memory layout ok: lists at " +
       ", ".join(f"{n}=${sym[n]:04X}" for n in lists) +
-      f"; UI reserve ${ui_lo:04X}-${ui_hi:04X} ({ui_hi - ui_lo + 1} bytes)"
+      f"; UI allocation ${ui_lo:04X}-${ui_used_hi:04X} of ${ui_lo:04X}-${ui_hi:04X}"
       f"; core end ${sym['CORE_DATA_END']:04X}; ZP end ${sym['ZP_END']:04X}"
       f"; state end ${sym['NET_STATE_END']:04X}"
       f"; buffers ${buf_lo:04X}-${buf_hi:04X} clear of every segment")

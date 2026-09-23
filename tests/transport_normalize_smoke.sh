@@ -41,7 +41,7 @@ port = int(sys.argv[1])
 cases = [
     ("primary", bytes([0x41, 0x01, 0x00, 0x0F])),
     ("swapped", bytes([0x41, 0x00, 0x02, 0x0E])),
-    ("extra-0x41", bytes([0x41, 0x41, 0x03, 0x00, 0x0D])),
+    ("wrong-round", bytes([0x41, 0x03, 0x00, 0x0D, 0x02])),
 ]
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -59,4 +59,4 @@ SERVER_PID=
 
 grep -F "transport accepted slot=0 format=primary" "$LOG_FILE" >/dev/null
 grep -F "transport accepted slot=0 format=swapped" "$LOG_FILE" >/dev/null
-grep -F "transport accepted slot=0 format=extra-41" "$LOG_FILE" >/dev/null
+grep -F "DROP DELTA slot=0 bad-len=5" "$LOG_FILE" >/dev/null

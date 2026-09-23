@@ -41,7 +41,7 @@ port = int(sys.argv[1])
 payloads = [
     bytes([0x41, 0x01, 0x00, 0x0F]),
     bytes([0x41, 0x00, 0x02, 0x0E]),
-    bytes([0x41, 0x41, 0x02, 0x00, 0x0D]),
+    bytes([0x41, 0x02, 0x00, 0x0D]),
     bytes([0x41, 0x03, 0x00, 0x3F]),
 ]
 
@@ -61,7 +61,7 @@ SERVER_PID=
 grep -F "transport accepted slot=0" "$LOG_FILE" >/dev/null
 grep -F "transport summary slot=0" "$LOG_FILE" >/dev/null
 grep -F "delta_swapped=1" "$LOG_FILE" >/dev/null
-grep -F "delta_extra_41=1" "$LOG_FILE" >/dev/null
+grep -F "delta_extra_41=0" "$LOG_FILE" >/dev/null
 grep -F "delta_resync=" "$LOG_FILE" >/dev/null
 grep -F "drop_bad_joy=1" "$LOG_FILE" >/dev/null
 grep -F "drop_stale_seq=1" "$LOG_FILE" >/dev/null

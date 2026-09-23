@@ -50,6 +50,23 @@ if [ "$delta_calls" -ne 1 ]; then
     exit 1
 fi
 
+# Before WELCOME, the Atari must keep the replacement-socket recovery path
+# clean: retry HELLO on the periodic slot and do not let NAME or DELTA become
+# the first payload on a FujiNet-PC socket that opened after the initial write.
+hello_calls=$(grep -cE "JSR${TAB}+NET_TX_BUILD_HELLO" "$ATARI_SRC")
+if [ "$hello_calls" -ne 2 ]; then
+    echo "FAIL: expected initial HELLO plus one periodic retry site, found" \
+         "$hello_calls" >&2
+    exit 1
+fi
+poll_send=$(sed -n '/^NP_RELOK$/,/^NET_PLSND$/p' "$ATARI_SRC")
+printf '%s' "$poll_send" | grep -A4 -E "LDA${TAB}+NET_NAME_PEND" \
+    | grep -qE "LDA${TAB}+NET_WELCOME" \
+    || { echo "FAIL: NAME is no longer gated until WELCOME" >&2; exit 1; }
+printf '%s' "$poll_send" | grep -B2 -A4 -E "JSR${TAB}+NET_TX_BUILD_HELLO" \
+    | grep -qE "LDA${TAB}+NET_WELCOME" \
+    || { echo "FAIL: periodic send no longer retries HELLO before WELCOME" >&2; exit 1; }
+
 # The poll loop must not transmit on a raw input edge of its own any more.
 if sed -n '/^NET_POLL[[:space:]]/,/^NP_TICK$/p' "$ATARI_SRC" | grep -qE "JSR${TAB}+NET_TX_BUILD_DELTA"; then
     echo "FAIL: the poll loop transmits on an input edge again" >&2
@@ -70,7 +87,7 @@ fi
 # the poll loop: only a DELTA that actually left the machine may license a cell.
 # NET_TX_BUILD_DELTA is skipped when the transmitter is busy, so the store has
 # to sit after the JSR to inherit that skip.
-if ! grep -A3 -E "JSR${TAB}+NET_TX_BUILD_DELTA" "$ATARI_SRC" | grep -qE "STA${TAB}+NET_MOVE_DUE"; then
+if ! grep -A7 -E "JSR${TAB}+NET_TX_BUILD_DELTA" "$ATARI_SRC" | grep -qE "STA${TAB}+NET_MOVE_DUE"; then
     echo "FAIL: the transmit slot does not grant NET_MOVE_DUE. Without the" \
          "grant the local move decision can never run, or -- if the grant" \
          "moved earlier -- a skipped send still licenses a predicted cell" >&2

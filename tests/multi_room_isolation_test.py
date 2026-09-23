@@ -151,7 +151,12 @@ def main(root):
         clients.append(stalled)
         baseline_seq = wait_type(room1, 0x40)[1]
         for seq in range(40):
-            send_frame(stalled, bytes((0x43, seq, 0)) + b"FLOOD   ")
+            try:
+                send_frame(stalled, bytes((0x43, seq, 0)) + b"FLOOD   ")
+            except (BrokenPipeError, ConnectionResetError):
+                # Queue saturation now deliberately disconnects only this
+                # stalled peer instead of silently dropping reliable events.
+                break
         stamps = []
         snapshot_seqs = []
         deadline = time.monotonic() + 2

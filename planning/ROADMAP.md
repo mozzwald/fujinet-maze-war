@@ -202,7 +202,7 @@ Plans:
 **Depends on**: Phase 6; Phase 7 plans 07-01 through 07-04
 **Reference**: `ref/mazewar_lobby_rounds_implementation_plan.md`
 **Research**: `phases/08-lobby-rounds-polish/08-RESEARCH.md`
-**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-02 is awaiting its mixed-room checkpoint on `gpt-5.6-sol` with high reasoning.
+**Model/effort and handoffs**: [08-MODELS.md](phases/08-lobby-rounds-polish/08-MODELS.md). Every step ends with the next recommendation and pauses for the user to switch; 08-03 is hardware-accepted and the next step is 08-04 on `gpt-5.6-sol` with high reasoning.
 **Round boundary contract**: [08-PROTOCOL.md](phases/08-lobby-rounds-polish/08-PROTOCOL.md)
 **Success Criteria**:
   1. One server process runs isolated four-seat rooms on distinct TCP ports.
@@ -215,8 +215,8 @@ Plans:
 **Plans**: 11 plans
 Plans:
 - [x] `08-01` — Remove unreachable title/game-over implementation and establish measured Atari memory headroom. Accepted on real Atari/FujiNet against emulation 2026-09-11.
-- [ ] `08-02` — Encapsulate behavior in one Room, then add isolated multi-room TCP listeners.
-- [ ] `08-03` — Add authoritative MATCH_END/ROUND_START protocol and complete round reset.
+- [x] `08-02` — Encapsulate behavior in one Room, then add isolated multi-room TCP listeners. Accepted with two Ataris in one room and split across separate rooms.
+- [x] `08-03` — Add authoritative MATCH_END/ROUND_START protocol and complete round reset. Accepted in mixed real Atari/FujiNet and emulator testing, including reconnect, redraw, bullet-lifecycle, and idle-sound follow-ups, 2026-09-12.
 - [ ] `08-04` — Add the nonblocking Atari/SDL round-end presentation and results.
 - [ ] `08-05` — Add voluntary leave acknowledgement, orthogonal no-human grace, and shared session teardown/reset.
 - [ ] `08-06` — Generate build configuration and replace the old title with title/direct-connect UI.
@@ -295,4 +295,4 @@ Phase 6 hardening freezes the baseline; Phase 8 makes it Lobby-releasable.
 | 4. Render-State Separation | 5/5 effective; 04-06 retracted | Closed as good enough for now after 2026-09-11 user testing; revisit bounded timed remote-sample playback if a future cloud-hosted server makes WAN latency visible | 2026-09-11 |
 | 6. Mixed-Session Validation and Hardening | 1/1 | Complete; user mixed-session acceptance | 2026-09-11 |
 | 7. Realtime Transport Reliability | 4/4 executable | Complete as scoped and merged; 07-05 remains a deferred, not-recommended design note | 2026-09-10 |
-| 8. Lobby and Round Polish | 1/11 | 08-02 implementation complete; mixed one-room/two-room checkpoint pending | - |
+| 8. Lobby and Round Polish | 3/11 | 08-03 complete; pause for model switch before 08-04 presentation work | - |

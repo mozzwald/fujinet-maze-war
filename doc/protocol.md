@@ -16,9 +16,9 @@ This document matches current server behavior in `server/main.c`.
 One server process can host multiple isolated four-seat rooms. Each room owns
 its clients, player/shot state, brick map, input history, packet sequence,
 reliable-event revisions and queues, compatibility echoes, Zombie allocation,
-and all broadcast/tick timers. There is no room id in a gameplay payload: the
-TCP listener selects the room, so the existing Atari and Linux wire protocol is
-unchanged.
+  and all broadcast/tick timers. There is no room id in a gameplay payload: the
+  TCP listener selects the room. Round-scoped payloads do carry a one-byte
+  `round_id` so delayed state cannot cross a reset boundary.
 
 The default command still starts one room on TCP port 9000. `--port PORT` is
 the one-room compatibility form. Multi-room hosting uses `--room-count N` and
@@ -39,16 +39,23 @@ therefore not required in the hostname field.
 
 | Type | Name        | Dir   | Size | Description |
 |------|-------------|-------|------|-------------|
-| 0x40 | SNAPSHOT    | S->C  | 20   | Authoritative world/player state |
-| 0x41 | DELTA       | C->S  | 4    | Client input update |
-| 0x42 | SHOT        | S->C  | 6    | Shot state update |
+| 0x40 | SNAPSHOT    | S->C  | 21   | Authoritative world/player state |
+| 0x41 | DELTA       | C->S  | 5    | Client input update |
+| 0x42 | SHOT        | S->C  | 7    | Shot state update |
 | 0x43 | NAME        | S<->C | 11   | Per-slot display name |
 | 0x44 | SEATS       | S->C  | 3    | Which slots a client holds |
 | 0x45 | RELIABLE_ACK | C->S | 4    | Cumulative reliable-event ACK |
-| 0x50 | BRICK_FULL  | S->C  | 51   | Full brick bitset |
-| 0x51 | BRICK_DELTA | S<->C | 4    | Brick removed |
-| 0x52 | RESPAWN     | S<->C | 6    | Respawn request/event |
-| 0x53 | RELIABLE_EVENT | S->C | 8..15 | Ordered wrapper for reliable events |
+| 0x46 | HELLO       | C->S  | 2    | Required protocol-version offer |
+| 0x47 | WELCOME     | S->C  | 5    | Session/round anchor |
+| 0x48 | REJECT      | S->C  | 3    | Incompatible session response |
+| 0x50 | BRICK_FULL  | S->C  | 52   | Full brick bitset and round id |
+| 0x51 | BRICK_DELTA | S<->C | 5    | Brick removed in a round |
+| 0x52 | RESPAWN     | S<->C | 7    | Respawn request/event in a round |
+| 0x53 | RELIABLE_EVENT | S->C | 7..56 | Ordered wrapper for reliable events |
+| 0x54 | MATCH_END   | S->C* | 43   | Frozen authoritative result |
+| 0x55 | ROUND_START | S->C* | 3    | New-round authorization |
+
+`*` means the payload is carried as the inner body of `RELIABLE_EVENT`.
 
 ## Framing and Integrity (server -> client)
 
@@ -80,9 +87,9 @@ parser that scans for a type marker stays misaligned until a payload byte
 happens to look like one, which is how spurious BRICK_DELTAs and corrupt
 positions kept getting through.
 
-Client-to-server payloads retain their existing packet types and historical
-DELTA compatibility forms, inside the same COBS+CRC frame. The server retains a
-frame parser per accepted connection across arbitrary partial or combined reads.
+The server retains a frame parser per accepted connection across arbitrary
+partial or combined reads. Phase 8-3 is a coordinated protocol break: every
+client must complete the version-1 handshake and send round-tagged gameplay.
 
 All host sockets use TCP_NODELAY and nonblocking I/O after connecting. Send
 queues preserve partial writes; queue overflow disconnects the affected peer
@@ -115,7 +122,7 @@ Valid stick nibbles accepted by server:
 
 ## Packets
 
-### 0x40 SNAPSHOT (20 bytes, S->C)
+### 0x40 SNAPSHOT (21 bytes, S->C)
 
 Sent each server tick (default 10 Hz) to each connected client.
 
@@ -132,6 +139,7 @@ Sent each server tick (default 10 Hz) to each connected client.
 [11] p0_joy [12] p1_joy [13] p2_joy [14] p3_joy
 [15] p0_score [16] p1_score [17] p2_score [18] p3_score
 [19] ack_seq
+[20] round_id
 ```
 
 `flags` bit layout:
@@ -151,7 +159,7 @@ Notes:
   when turning a corner at speed.
 - When `ack_valid` is clear, byte `[19]` must be ignored.
 
-### 0x41 DELTA (4 bytes, C->S)
+### 0x41 DELTA (5 bytes, C->S)
 
 Primary wire format:
 
@@ -160,11 +168,8 @@ Primary wire format:
 [1] seq
 [2] pid
 [3] joy
+[4] round_id
 ```
-
-Compatibility formats accepted by server:
-- `[0x41][pid][seq][joy]` (seq/pid swapped)
-- byte-stream form with extra leading `0x41`: `[0x41][0x41][seq][pid][joy]`
 
 Internal canonical DELTA form after normalization:
 
@@ -177,7 +182,9 @@ Server behavior:
 - Incoming DELTA is accepted only if payload `pid` (or swapped `pid`) matches that slot.
 - DELTA seq is filtered per slot: duplicate or too-old packets are dropped.
 - Invalid `joy` bytes (bits 5..7 set or invalid stick nibble) are dropped.
-- Wire compatibility is repaired before gameplay input mutation; later gameplay code only consumes the canonical DELTA form above.
+- A stale or future `round_id` is discarded without advancing the applied-input ACK.
+- During intermission, matching neutral DELTAs are liveness heartbeats and do
+  not enter the input queue or advance the applied-input ACK.
 
 ### Transport Debug Counters
 
@@ -194,7 +201,7 @@ When the server runs with `--debug`, it logs `transport accepted slot=` for each
 - `drop_stale_seq`
 - `accepted_delta`
 
-### 0x42 SHOT (6 bytes, S->C)
+### 0x42 SHOT (7 bytes, S->C)
 
 ```
 [0] type = 0x42
@@ -203,6 +210,7 @@ When the server runs with `--debug`, it logs `transport accepted slot=` for each
 [3] x
 [4] y
 [5] flags
+[6] round_id
 ```
 
 `flags` bit layout:
@@ -214,6 +222,10 @@ Notes:
 - On clear, server sends `flags=0` and may send repeated clear bursts for reliability.
 - Clients must treat `SHOT` as server-authored projectile state. Fire remains
   intent-only `DELTA joy` input; clients do not derive projectile origin locally.
+- The Atari tracks ownership of painted shot characters separately from actor
+  action flags. Each active update refreshes a 60-VBI watchdog; if all repeated
+  clear frames are lost, the orphan is erased after about one second. Entering
+  frozen results clears every painted shot on the next VBI.
 
 ### 0x43 NAME (11 bytes, S<->C)
 
@@ -285,8 +297,32 @@ Behavior:
   has been applied in order.
 - A duplicate ACK for the previous revision triggers a rate-limited fast
   retransmit of the unacknowledged stream before the timeout path fires.
+- ACKs beyond the highest revision actually sent are rejected. A full reliable
+  queue disconnects only that stalled client; the room and other peers keep
+  advancing.
 
-### 0x50 BRICK_FULL (51 bytes, S->C)
+### 0x46 HELLO, 0x47 WELCOME, 0x48 REJECT
+
+The first accepted client payload is `HELLO [0x46, version=1]`. Until it
+arrives, the socket owns no gameplay seat and receives no snapshots or map.
+Valid non-HELLO frames received before the handshake are ignored without
+mutating game state; this lets a client recover if its network adapter replaces
+the host TCP socket after the first HELLO was queued. The Atari sends no NAME
+or DELTA before WELCOME and retries HELLO at its normal 10 Hz send cadence.
+The server allows three seconds for this exchange.
+
+An accepted client receives:
+
+```
+WELCOME [0x47, version, round_id, phase, kill_limit]
+```
+
+`phase` is 0 while playing and 1 during frozen results. An explicit HELLO with
+an incompatible version or malformed length receives
+`REJECT [0x48, expected_version, reason]` and the connection closes. WELCOME
+is the initial modulo-256 round anchor.
+
+### 0x50 BRICK_FULL (52 bytes, S->C)
 
 Full brick layout bitset (`20*19=380` bits => 48 bytes).
 
@@ -295,6 +331,7 @@ Full brick layout bitset (`20*19=380` bits => 48 bytes).
 [1] seq
 [2] flags (bit0=full)
 [3]..[50] brick bitset (48 bytes)
+[51] round_id
 ```
 
 Bit ordering:
@@ -302,13 +339,14 @@ Bit ordering:
 - For cell `(x,y)`, linear index is `idx = y*20 + x`
 - Byte index `idx/8`, bit index `idx%8` (LSB-first in each byte)
 
-### 0x51 BRICK_DELTA (4 bytes, S<->C)
+### 0x51 BRICK_DELTA (5 bytes, S<->C)
 
 ```
 [0] type = 0x51
 [1] seq
 [2] x
 [3] y
+[4] round_id
 ```
 
 Behavior:
@@ -322,7 +360,7 @@ Behavior:
   an interior brick destroys that brick immediately and emits `BRICK_DELTA`
   without first emitting an active `SHOT`.
 
-### 0x52 RESPAWN (6 bytes, S<->C)
+### 0x52 RESPAWN (7 bytes, S<->C)
 
 ```
 [0] type = 0x52
@@ -331,6 +369,7 @@ Behavior:
 [3] x
 [4] y
 [5] flags
+[6] round_id
 ```
 
 `flags` bits currently used:
@@ -350,33 +389,74 @@ Current server behavior:
   coordinates still hold the cell it died in, so counting it as an obstacle
   would make that cell an invisible wall for the whole respawn delay.
 
-### 0x53 RELIABLE_EVENT (8..15 bytes, S->C)
+### 0x53 RELIABLE_EVENT (7..56 bytes, S->C)
 
 ```
 [0] type = 0x53
 [1] seq
 [2] stream revision, low byte
 [3] stream revision, high byte
-[4..] inner event payload: NAME, BRICK_DELTA, or RESPAWN
+[4..] inner event payload: NAME, BRICK_FULL/DELTA, RESPAWN, MATCH_END,
+       or ROUND_START
 ```
 
 Behavior:
 - Each TCP client has its own ordered reliable-event stream. Revisions start at
   1 for a new connection and are acknowledged with `RELIABLE_ACK`.
-- The server currently enqueues `NAME`, `BRICK_DELTA`, and `RESPAWN` payloads
-  into this stream. Retransmits are byte-identical copies of the stored wrapper
-  packet.
+- Reliable revisions continue across rounds. Retransmits are byte-identical
+  copies of the stored wrapper packet.
 - Clients apply only the next expected revision. A gap is not applied; the
   client re-ACKs the highest applied revision so the server can retransmit.
-- The legacy direct packets, brick/respawn repeats, name rotation, and full map
-  resync remain in place as transition fallbacks while 07-04 is measured.
+- Clients consume and ACK a valid old-round event to advance the reliable
+  stream while suppressing its gameplay effect.
+- Direct brick/respawn repeats, name rotation, and periodic full-map repair
+  remain. A direct `BRICK_FULL` repairs the current map but cannot authorize a
+  new round; the reliable map baseline is part of the reset barrier.
+
+### 0x54 MATCH_END (43-byte reliable inner payload)
+
+```
+[0] 0x54  [1] round_id  [2] winner_pid
+[3] final_active_mask   [4] final_zombie_mask  [5] kill_limit
+[6..9] final scores p0..p3
+[10] historical_zombie_mask
+[11..42] four frozen, padded 8-byte display names
+```
+
+The first score mutation that reaches the configured limit (1..10, default 5)
+is clamped and freezes this payload once. Later combat in the same tick stops.
+Fallback names are slot-qualified `WIZARD n` or `ZOMBIE n`; unused result rows
+are blank. NAME and SEATS updates during intermission do not rewrite the frozen
+result. The server continues snapshots and clients continue neutral heartbeats
+through the intermission (default 5000 ms).
+
+### 0x55 ROUND_START (3-byte reliable inner payload)
+
+```
+[0] 0x55  [1] round_id  [2] kill_limit
+```
+
+At the intermission deadline the server restores canonical bricks, resets
+scores, actors, shots, respawns, inputs and echoes, assigns valid spawns, and
+increments `round_id`. It retains connections, names, seats and reliable
+revision streams. Each client receives reliable `ROUND_START`, a reliable
+matching `BRICK_FULL`, and continuing matching snapshots.
+
+Clients clear per-round prediction/transients and open gameplay only after all
+three matching pieces have arrived: ROUND_START authorization, fully applied
+reliable map, and a fresh snapshot. Arrival order does not matter. Round IDs
+use modulo-256 comparison: distances 1..127 are newer, 128..255 are stale, and
+equality is a duplicate/current epoch. The handshake anchor makes wrap 255->0
+unambiguous within the bounded session and retry lifetimes.
 
 ## Connection and Slot Semantics
 
 - Server tracks clients by their accepted TCP socket; the peer address is logged only.
 - Display names are per slot and are cleared on handoff (see Slot handoff).
 - On accept, server assigns a slot (`pid`); excess connections are closed.
-- New clients immediately receive a `BRICK_FULL`.
+- New clients receive WELCOME and the current reliable round state only after
+  a valid HELLO. A join during results receives the frozen MATCH_END and waits
+  for the next normal reset barrier.
 - Client timeout is 15 seconds without received bytes; a new connection must
   complete an inbound packet within 3 seconds. EOF and socket failures release
   the seat immediately. Both Linux clients send idle keepalives.
@@ -485,5 +565,7 @@ Additional rules:
 
 - Send DELTA input updates.
 - Use SNAPSHOT as authoritative state.
-- Apply BRICK_FULL once then BRICK_DELTA updates.
+- Apply the reliable BRICK_FULL baseline for each authorized round, then apply
+  matching-round BRICK_DELTA updates. A direct BRICK_FULL may repair the
+  current map but does not satisfy the new-round readiness barrier.
 - Apply SHOT and RESPAWN events as received.

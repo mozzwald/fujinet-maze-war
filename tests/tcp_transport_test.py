@@ -62,15 +62,15 @@ try:
         time.sleep(.02)
     a = connect()
     assert wait_packet(a, lambda p: p[0] == 0x50)
-    for byte in encode_frame(bytes([0x41, 1, 0, 0x0f])):
+    for byte in encode_frame(bytes([0x41, 1, 0, 0x0f, 1])):
         a.sendall(bytes([byte]))
         time.sleep(.01)
     snapshot(a, 0, 1)
     b = connect()
     send_frame(b, bytes([0x41, 1, 1, 0x0f]))
     snapshot(b, 1, 1)
-    a.sendall(encode_frame(bytes([0x41, 2, 0, 0x0f])) +
-              encode_frame(bytes([0x41, 3, 0, 0x0f])))
+    a.sendall(encode_frame(bytes([0x41, 2, 0, 0x0f, 1])) +
+              encode_frame(bytes([0x41, 3, 0, 0x0f, 1])))
     snapshot(a, 0, 3)
     # Isolated writes must be applied on a prompt game tick (NODELAY path).
     start = time.monotonic()

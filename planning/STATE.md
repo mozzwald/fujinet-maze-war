@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: 2026-09-11 - User accepted the corrected 08-01 build on real Atari/FujiNet against emulation. 08-02 has heap-owned isolated Room state, consecutive nonblocking TCP listeners, validated per-room Zombie configuration, fair bounded polling, and two-room isolation/sanitizer coverage. Its first checkpoint exposed that the Atari host field cannot type a colon; the client now prompts for a separate validated decimal port and an emulator edit to 9001 produced the expected NS_INIT bytes $23/$29. Await the mixed one-room/two-room checkpoint before closing ROOM-01/ROOM-02. After acceptance, use gpt-6-astra with high reasoning for 08-03.
-last_updated: "2026-09-11T00:00:00.000Z"
+stopped_at: 2026-09-12 - Phase 08-03 is complete and hardware-accepted, including authoritative rounds, same-host reconnect, post-reset redraw, shot cleanup, and idle POKEY silence. Pause for the required model switch before 08-04; use gpt-5.6-sol with high reasoning.
+last_updated: "2026-09-12T00:00:00.000Z"
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 28
-  completed_plans: 17
+  completed_plans: 19
 ---
 
 # Project State
@@ -19,9 +19,9 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** An Atari wizard can move and fire smoothly while staying visually aligned with the server-authoritative game state in a live multiplayer match.
-**Current focus:** Validate the 08-02 multi-room server with the default real Atari/FujiNet plus emulator session and with clients split across two consecutive room ports. Bounded timed remote-sample playback remains the first revisit if future cloud-hosted WAN testing makes remote movement worse.
+**Current focus:** Phase 08-03 is complete. Pause for the required model switch, then implement 08-04's nonblocking Atari/SDL round-end presentation with `gpt-5.6-sol` at high reasoning. Bounded timed remote-sample playback remains the first revisit if future cloud-hosted WAN testing makes remote movement worse.
 
-## Current branch: a8-net-fix (2026-09-11)
+## Current branch: a8-net-fix (2026-09-12)
 
 Phase 4 is closed as good enough for now: the first repair pass fixed the confirmed follower direction/distance defects, raised render/send capacity for 10 Hz NTSC play, restored pending replay reachability, and made server tick deadlines fixed with bounded overrun recovery. User testing found two-computer emulation almost flawless and real Atari XL with hardware FujiNet acceptable, with only occasional one-to-two-cell remote jumps. Bounded timed remote-sample playback was not implemented and is now explicitly reserved as the first revisit if a future cloud-hosted server adds enough WAN latency to make remote motion feel worse. 07-01, 07-02, 07-03, and 07-04 are complete and merged into `a8-net-fix`. TCP runs with `$05`, REGISTER clear,
 57600 baud, and the unchanged handler. The user confirmed the Atari/FujiNet
@@ -41,15 +41,18 @@ Phase: 05.1 (link-integrity-and-frame-resync) — COMPLETE 2026-09-04. Unplanned
 
 Execution order going forward: Phase 8 plans 08-01 through 08-11. Phases 3, 3.1, 4, 5, 5.1, 6, and Phase 7's executable scope are closed and merged.
 
-## Phase 8 planning note (2026-09-11)
+## Phase 8 planning note (2026-09-12)
 
 Review update: `phases/08-lobby-rounds-polish/08-MODELS.md` lists model/effort
 recommendations for every step and requires the next recommendation in each
-closing summary, followed by a pause for the user to switch. **08-01 is
-hardware-accepted. 08-02 is ready for its mixed one-room/two-room checkpoint;
-after acceptance use 08-03: gpt-6-astra, high reasoning.** The round synchronization contract now lives
-in `08-PROTOCOL.md`; shared teardown moves earlier to 08-05. Planning review
-does not mark implementation or hardware checkpoints complete.
+closing summary, followed by a pause for the user to switch. **08-01, 08-02,
+and 08-03 are hardware-accepted.** The 08-03
+authoritative round/reset contract, same-host recovery, post-reset sprite
+redraw, shot-lifecycle cleanup, and inherited idle POKEY tone repair all passed
+the user's mixed emulator and real Atari/FujiNet checkpoints. The next step is
+08-04 on gpt-5.6-sol with high reasoning; pause for the required model switch
+before implementation. The round synchronization contract now lives
+in `08-PROTOCOL.md`; shared teardown moves earlier to 08-05.
 
 The source-grounded plan is in `planning/phases/08-lobby-rounds-polish/`.
 It corrects the reference proposal to use the current TCP NetStream path, makes

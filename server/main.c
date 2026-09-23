@@ -24,10 +24,17 @@ enum {
   PKT_NAME = 0x43,
   PKT_SEATS = 0x44,
   PKT_RELIABLE_ACK = 0x45,
+  PKT_HELLO = 0x46,
+  PKT_WELCOME = 0x47,
+  PKT_REJECT = 0x48,
   PKT_BRICK_FULL = 0x50,
   PKT_BRICK_DELTA = 0x51,
   PKT_RESPAWN = 0x52,
-  PKT_RELIABLE_EVENT = 0x53
+  PKT_RELIABLE_EVENT = 0x53,
+  PKT_MATCH_END = 0x54,
+  PKT_ROUND_START = 0x55,
+  PKT_LEAVE_ROOM = 0x56,
+  PKT_LEAVE_ACK = 0x57
 };
 
 enum { MAX_PLAYERS = 4, MAX_ROOMS = 64 };
@@ -86,8 +93,17 @@ enum { RESPAWN_ECHO_REPEATS = 2 };
    20-column line before the score digit at column 15, so 8 is what fits. */
 #define NAME_LEN 8
 enum {
+  PROTOCOL_VERSION = 1,
+  SNAPSHOT_LEN = 21,
+  DELTA_LEN = 5,
+  SHOT_LEN = 7,
+  BRICK_FULL_LEN = 52,
+  BRICK_DELTA_LEN = 5,
+  RESPAWN_LEN = 7,
+  MATCH_END_LEN = 43,
+  ROUND_START_LEN = 3,
   RELIABLE_QUEUE_MAX = 24,
-  RELIABLE_EVENT_MAX = 3 + NAME_LEN,
+  RELIABLE_EVENT_MAX = 52,
   RELIABLE_PKT_MAX = 4 + RELIABLE_EVENT_MAX,
   RELIABLE_RESEND_MS = 300,
   RELIABLE_FAST_MS = 75
@@ -125,6 +141,7 @@ struct client_slot {
   struct tcp_frame_rx frame_rx;
   uint64_t connected_ms;
   int received_packet;
+  int handshake_ok;
   /* All-zero means unnamed: the client never sent a NAME, or the slot changed
      hands. Clients fall back to their WIZARD/ZOMBIE label in that case. */
   uint8_t name[NAME_LEN];
@@ -151,6 +168,7 @@ struct client_slot {
   uint8_t input_count;
   uint16_t reliable_next_rev;
   uint16_t reliable_acked_rev;
+  uint16_t reliable_sent_rev;
   uint64_t reliable_last_send_ms;
   uint64_t reliable_last_fast_ms;
   struct {
@@ -168,6 +186,8 @@ struct room_config {
   int zombies;
   int tick_hz;
   int lag_ms;
+  int kill_limit;
+  int intermission_ms;
   const char *brick_path;
 };
 
@@ -178,7 +198,7 @@ struct brick_echo {
 };
 
 struct respawn_echo {
-  uint8_t pkt[6];
+  uint8_t pkt[RESPAWN_LEN];
   uint8_t left;
 };
 
@@ -207,11 +227,20 @@ struct room {
   uint64_t last_seat_ms;
   uint8_t last_seat_mask;
   int name_rotate;
-  /* Reserved ownership for 08-03/08-05; no behavior is attached yet. */
   uint8_t round_id;
   uint8_t round_state;
+  uint8_t historical_zombie_mask;
+  uint8_t final_active_mask;
+  uint8_t final_zombie_mask;
+  uint8_t winner_pid;
+  uint8_t final_scores[MAX_PLAYERS];
+  uint8_t frozen_names[MAX_PLAYERS][NAME_LEN];
+  uint8_t frozen_match[MATCH_END_LEN];
+  uint64_t intermission_deadline_ms;
   uint64_t no_human_deadline_ms;
 };
+
+enum { ROUND_PLAYING = 0, ROUND_OVER = 1 };
 
 static volatile sig_atomic_t g_running = 1;
 
@@ -225,6 +254,13 @@ static int packet_has_bad_joy_for_slot(const uint8_t *pkt, size_t len,
                                        uint8_t slot);
 static void reset_client_slot(struct client_slot *client);
 static void reset_slot_gameplay(struct room *room, int slot, uint64_t now);
+static void build_brick_full(uint8_t seq, const uint8_t *bits,
+                             uint8_t round_id, uint8_t *out, size_t out_len);
+static void send_round_state(struct room *room, int slot, uint64_t now,
+                             int debug);
+static void enter_round_over(struct room *room, int winner, uint64_t now,
+                             int debug);
+static void reset_round(struct room *room, uint64_t now, int debug);
 
 static void on_sigint(int sig) {
   (void)sig;
@@ -283,6 +319,7 @@ static void init_client_slot(struct client_slot *client, int fd,
   client->last_seen_ms = now;
   client->connected_ms = now;
   client->sent_bricks = 0;
+  client->handshake_ok = 0;
   client->have_delta_seq = 0;
   client->last_delta_seq = 0;
   client->have_applied_input_seq = 0;
@@ -291,6 +328,7 @@ static void init_client_slot(struct client_slot *client, int fd,
   client->input_count = 0;
   client->reliable_next_rev = 1;
   client->reliable_acked_rev = 0;
+  client->reliable_sent_rev = 0;
   client->reliable_last_send_ms = 0;
   client->reliable_last_fast_ms = 0;
   client->reliable_head = 0;
@@ -334,10 +372,11 @@ static void reap_timed_out_clients(struct room *room, uint64_t now, int debug) {
     if (!clients[i].in_use) {
       continue;
     }
-    if (!clients[i].tx.failed &&
-        now - clients[i].last_seen_ms < CLIENT_TIMEOUT_MS &&
-        (clients[i].received_packet ||
-         now - clients[i].connected_ms < CLIENT_HANDSHAKE_MS)) {
+    int handshake_alive = !clients[i].handshake_ok &&
+                          now - clients[i].connected_ms < CLIENT_HANDSHAKE_MS;
+    int session_alive = clients[i].handshake_ok &&
+                        now - clients[i].last_seen_ms < CLIENT_TIMEOUT_MS;
+    if (!clients[i].tx.failed && (handshake_alive || session_alive)) {
       continue;
     }
     drop_client(room, i, debug, now);
@@ -367,8 +406,9 @@ static void log_transport_summaries(const struct client_slot *clients,
 }
 
 static void build_snapshot(uint8_t seq, const struct player_state *players,
-                           uint8_t ack_seq, uint8_t *out, size_t out_len) {
-  if (out_len < 20) {
+                           uint8_t ack_seq, uint8_t round_id,
+                           uint8_t *out, size_t out_len) {
+  if (out_len < SNAPSHOT_LEN) {
     return;
   }
   out[0] = PKT_SNAPSHOT;
@@ -391,6 +431,7 @@ static void build_snapshot(uint8_t seq, const struct player_state *players,
   out[17] = players[2].score;
   out[18] = players[3].score;
   out[19] = ack_seq;
+  out[20] = round_id;
 }
 
 static int is_brick(const uint8_t *bricks, int x, int y) {
@@ -465,7 +506,7 @@ static void build_name(uint8_t seq, uint8_t pid, const uint8_t *name,
 static uint8_t compute_seat_mask(const struct client_slot *clients) {
   uint8_t mask = 0;
   for (int i = 0; i < MAX_PLAYERS; i++) {
-    if (clients[i].in_use) {
+    if (clients[i].in_use && clients[i].handshake_ok) {
       mask |= (uint8_t)(1u << i);
     }
   }
@@ -483,6 +524,7 @@ static void build_seats(uint8_t seq, uint8_t mask, uint8_t *out,
 }
 
 static void build_brick_delta(uint8_t seq, uint8_t x, uint8_t y,
+                              uint8_t round_id,
                               uint8_t *out, size_t out_len);
 static void broadcast_packet(int sock, struct client_slot *clients,
                              const uint8_t *pkt, size_t len);
@@ -500,7 +542,7 @@ static void queue_respawn_echo(struct room *room, const uint8_t *pkt) {
   if (pid >= MAX_PLAYERS) {
     return;
   }
-  memcpy(room->respawn_echo[pid].pkt, pkt, 6);
+  memcpy(room->respawn_echo[pid].pkt, pkt, RESPAWN_LEN);
   room->respawn_echo[pid].left = RESPAWN_ECHO_REPEATS;
 }
 
@@ -514,8 +556,8 @@ static void flush_respawn_echo(struct room *room, int debug) {
       continue;
     }
     room->respawn_echo[i].left--;
-    uint8_t pkt[6];
-    memcpy(pkt, room->respawn_echo[i].pkt, 6);
+    uint8_t pkt[RESPAWN_LEN];
+    memcpy(pkt, room->respawn_echo[i].pkt, RESPAWN_LEN);
     pkt[1] = room->seq++;
     broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
     if (debug) {
@@ -554,9 +596,9 @@ static void flush_brick_echo(struct room *room, int debug) {
       continue;
     }
     room->brick_echo[i].left--;
-    uint8_t pkt[4];
+    uint8_t pkt[BRICK_DELTA_LEN];
     build_brick_delta(room->seq++, room->brick_echo[i].x,
-                      room->brick_echo[i].y, pkt,
+                      room->brick_echo[i].y, room->round_id, pkt,
                       sizeof(pkt));
     broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
     if (debug) {
@@ -568,19 +610,22 @@ static void flush_brick_echo(struct room *room, int debug) {
 }
 
 static void build_brick_delta(uint8_t seq, uint8_t x, uint8_t y,
+                              uint8_t round_id,
                               uint8_t *out, size_t out_len) {
-  if (out_len < 4) {
+  if (out_len < BRICK_DELTA_LEN) {
     return;
   }
   out[0] = PKT_BRICK_DELTA;
   out[1] = seq;
   out[2] = x;
   out[3] = y;
+  out[4] = round_id;
 }
 
 static void build_respawn(uint8_t seq, uint8_t pid, uint8_t x, uint8_t y,
-                          uint8_t flags, uint8_t *out, size_t out_len) {
-  if (out_len < 6) {
+                          uint8_t flags, uint8_t round_id,
+                          uint8_t *out, size_t out_len) {
+  if (out_len < RESPAWN_LEN) {
     return;
   }
   out[0] = PKT_RESPAWN;
@@ -589,11 +634,13 @@ static void build_respawn(uint8_t seq, uint8_t pid, uint8_t x, uint8_t y,
   out[3] = x;
   out[4] = y;
   out[5] = flags;
+  out[6] = round_id;
 }
 
 static void build_shot(uint8_t seq, uint8_t pid, uint8_t x, uint8_t y,
-                       uint8_t active, uint8_t *out, size_t out_len) {
-  if (out_len < 6) {
+                       uint8_t active, uint8_t round_id,
+                       uint8_t *out, size_t out_len) {
+  if (out_len < SHOT_LEN) {
     return;
   }
   out[0] = PKT_SHOT;
@@ -602,6 +649,7 @@ static void build_shot(uint8_t seq, uint8_t pid, uint8_t x, uint8_t y,
   out[3] = x;
   out[4] = y;
   out[5] = active;
+  out[6] = round_id;
 }
 
 static void debug_combat_order(int debug, const char *phase, int slot,
@@ -911,7 +959,7 @@ static void broadcast_packet(int sock, struct client_slot *clients,
                              const uint8_t *pkt, size_t len) {
   (void)sock;
   for (int i = 0; i < MAX_PLAYERS; i++) {
-    if (!clients[i].in_use) {
+    if (!clients[i].in_use || !clients[i].handshake_ok) {
       continue;
     }
     send_checked(&clients[i], pkt, len);
@@ -925,6 +973,7 @@ static void reliable_send_from(struct client_slot *client, uint64_t now,
   }
   uint8_t idx = client->reliable_head;
   send_checked(client, client->reliable_q[idx].pkt, client->reliable_q[idx].len);
+  client->reliable_sent_rev = client->reliable_q[idx].rev;
   client->reliable_q[idx].retries++;
   if (debug) {
     uint16_t rev = client->reliable_q[idx].rev;
@@ -948,6 +997,14 @@ static void reliable_tick(struct client_slot *clients, uint64_t now, int debug) 
 
 static void reliable_ack(struct client_slot *client, int slot, uint16_t ack,
                          uint64_t now, int debug) {
+  if ((uint16_t)(ack - client->reliable_sent_rev) < 0x8000u &&
+      ack != client->reliable_sent_rev) {
+    if (debug) {
+      printf("DROP reliable ACK slot=%d unsent=%u sent=%u\n", slot,
+             (unsigned)ack, (unsigned)client->reliable_sent_rev);
+    }
+    return;
+  }
   if (ack == client->reliable_acked_rev &&
       client->reliable_count > 0 &&
       now - client->reliable_last_fast_ms >= RELIABLE_FAST_MS) {
@@ -974,12 +1031,20 @@ static void reliable_ack(struct client_slot *client, int slot, uint16_t ack,
   }
 }
 
-static void reliable_enqueue_client(struct client_slot *client, int slot,
-                                    const uint8_t *event, size_t event_len,
-                                    uint8_t *seq, uint64_t now, int debug) {
-  if (!client->in_use || event_len == 0 || event_len > RELIABLE_EVENT_MAX ||
+static int reliable_enqueue_client(struct client_slot *client, int slot,
+                                   const uint8_t *event, size_t event_len,
+                                   uint8_t *seq, uint64_t now, int debug) {
+  if (!client->in_use || !client->handshake_ok) {
+    return 0;
+  }
+  if (event_len == 0 || event_len > RELIABLE_EVENT_MAX ||
       client->reliable_count >= RELIABLE_QUEUE_MAX) {
-    return;
+    client->tx.failed = 1;
+    if (debug) {
+      printf("DROP client slot=%d reliable queue saturated type=%02X\n", slot,
+             event_len ? (unsigned)event[0] : 0u);
+    }
+    return -1;
   }
   uint8_t idx = (uint8_t)((client->reliable_head + client->reliable_count) %
                           RELIABLE_QUEUE_MAX);
@@ -996,19 +1061,22 @@ static void reliable_enqueue_client(struct client_slot *client, int slot,
   client->reliable_count++;
   if (client->reliable_count == 1) {
     send_checked(client, pkt, client->reliable_q[idx].len);
+    client->reliable_sent_rev = rev;
     client->reliable_last_send_ms = now;
   }
   if (debug) {
     printf("TX reliable new slot=%d rev=%u type=%02X\n", slot, (unsigned)rev,
            (unsigned)event[0]);
   }
+  return 0;
 }
 
 static void broadcast_reliable_event(struct client_slot *clients,
                                      const uint8_t *event, size_t event_len,
                                      uint8_t *seq, uint64_t now, int debug) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
-    reliable_enqueue_client(&clients[i], i, event, event_len, seq, now, debug);
+    (void)reliable_enqueue_client(&clients[i], i, event, event_len, seq, now,
+                                  debug);
   }
 }
 
@@ -1020,6 +1088,41 @@ static void handle_client_packet(struct room *room, int slot,
   struct client_slot *clients = room->clients;
   uint8_t *seq = &room->seq;
   struct transport_counters *global_transport = &room->global_transport;
+  struct client_slot *client = &clients[slot];
+
+  if (!client->handshake_ok) {
+    if (len == 2 && pkt[0] == PKT_HELLO && pkt[1] == PROTOCOL_VERSION) {
+      uint8_t welcome[5] = {PKT_WELCOME, PROTOCOL_VERSION, room->round_id,
+                            room->round_state,
+                            (uint8_t)room->config.kill_limit};
+      client->handshake_ok = 1;
+      client->received_packet = 1;
+      send_checked(client, welcome, sizeof(welcome));
+      send_round_state(room, slot, now, debug);
+      if (debug) {
+        printf("room=%d HELLO accepted slot=%d version=%u round=%u phase=%u\n",
+               room->config.port, slot, (unsigned)PROTOCOL_VERSION,
+               (unsigned)room->round_id, (unsigned)room->round_state);
+      }
+    } else if (len > 0 && pkt[0] == PKT_HELLO) {
+      uint8_t reject[3] = {PKT_REJECT, PROTOCOL_VERSION, 1};
+      send_checked(client, reject, sizeof(reject));
+      (void)tcp_tx_flush(client->fd, &client->tx);
+      client->tx.failed = 1;
+      if (debug) {
+        printf("room=%d HELLO rejected slot=%d\n", room->config.port, slot);
+      }
+    } else if (debug) {
+      /* FujiNet-PC may reopen its TCP socket between the Atari's first HELLO
+         and the next queued frame. Do not turn a harmless pre-handshake NAME
+         or heartbeat into a reconnect loop: it owns no seat and mutates no
+         game state, and the Atari retries HELLO until WELCOME arrives. */
+      printf("room=%d waiting for HELLO slot=%d ignored type=%02X len=%zu\n",
+             room->config.port, slot, len ? (unsigned)pkt[0] : 0u, len);
+    }
+    return;
+  }
+
   if (len == 4 && pkt[0] == PKT_RELIABLE_ACK) {
     uint16_t ack = (uint16_t)pkt[2] | ((uint16_t)pkt[3] << 8);
     reliable_ack(&clients[slot], slot, ack, now, debug);
@@ -1030,8 +1133,10 @@ static void handle_client_packet(struct room *room, int slot,
     uint8_t pid = (uint8_t)slot;
     if (pid < MAX_PLAYERS) {
       struct transport_delta_packet delta;
-      if (!transport_decode_delta_for_slot(pkt, len, pid, &delta)) {
-        if (packet_has_bad_joy_for_slot(pkt, len, pid)) {
+      if (len != DELTA_LEN || pkt[4] != room->round_id ||
+          !transport_decode_delta_for_slot(pkt, DELTA_LEN - 1, pid, &delta)) {
+        if (len == DELTA_LEN &&
+            packet_has_bad_joy_for_slot(pkt, DELTA_LEN - 1, pid)) {
           clients[slot].transport.drop_bad_joy++;
           global_transport->drop_bad_joy++;
         }
@@ -1043,6 +1148,15 @@ static void handle_client_packet(struct room *room, int slot,
           }
           printf("%s expected-pid=%u\n", (len > 0) ? "]" : "",
                  (unsigned)pid);
+        }
+        return;
+      }
+      if (room->round_state != ROUND_PLAYING) {
+        /* A neutral DELTA is the session heartbeat during results. It keeps
+           the peer alive but never enters the input queue or advances the
+           applied-input acknowledgement. */
+        if ((delta.joy & 0x1Fu) != 0x0Fu && debug) {
+          printf("DROP DELTA slot=%d gameplay during intermission\n", slot);
         }
         return;
       }
@@ -1131,15 +1245,17 @@ static void handle_client_packet(struct room *room, int slot,
     return;
   }
 
-  if (len == 6 && pkt[0] == PKT_RESPAWN) {
+  if (room->round_state == ROUND_PLAYING && len == RESPAWN_LEN &&
+      pkt[0] == PKT_RESPAWN && pkt[6] == room->round_id) {
     uint8_t pid = (uint8_t)slot;
     if (pid < MAX_PLAYERS) {
       uint8_t sx = 0, sy = 0;
-      uint8_t out[6];
+      uint8_t out[RESPAWN_LEN];
       pick_spawn(room, &sx, &sy);
       players[pid].x = sx;
       players[pid].y = sy;
-      build_respawn((*seq)++, pid, sx, sy, 0x03, out, sizeof(out));
+      build_respawn((*seq)++, pid, sx, sy, 0x03, room->round_id, out,
+                    sizeof(out));
       broadcast_packet(room->listener_fd, clients, out, sizeof(out));
       broadcast_reliable_event(clients, out, sizeof(out), seq, now, debug);
       queue_respawn_echo(room, out);
@@ -1150,14 +1266,15 @@ static void handle_client_packet(struct room *room, int slot,
     return;
   }
 
-  if (len == 4 && pkt[0] == PKT_BRICK_DELTA) {
+  if (room->round_state == ROUND_PLAYING && len == BRICK_DELTA_LEN &&
+      pkt[0] == PKT_BRICK_DELTA && pkt[4] == room->round_id) {
     uint8_t x = pkt[2];
     uint8_t y = pkt[3];
     if (x < 20 && y < 19 && !is_outer_wall_cell((int)x, (int)y)) {
-      uint8_t out[4];
+      uint8_t out[BRICK_DELTA_LEN];
       clear_brick(brick_bits, x, y);
       queue_brick_echo(room, x, y);
-      build_brick_delta((*seq)++, x, y, out, sizeof(out));
+      build_brick_delta((*seq)++, x, y, room->round_id, out, sizeof(out));
       broadcast_packet(room->listener_fd, clients, out, sizeof(out));
       broadcast_reliable_event(clients, out, sizeof(out), seq, now, debug);
       if (debug) {
@@ -1200,7 +1317,7 @@ static void compute_zombie_mask(const struct client_slot *clients, int zombies,
   }
   int remaining = zombies;
   for (int i = 1; i < MAX_PLAYERS && remaining > 0; i++) {
-    if (clients[i].in_use) {
+    if (clients[i].in_use && clients[i].handshake_ok) {
       continue;
     }
     out_mask[i] = 1;
@@ -1377,6 +1494,23 @@ static void apply_move_if_free(struct room *room, int idx) {
   }
 }
 
+static int award_score(struct room *room, int shooter, uint64_t now,
+                       int debug) {
+  if (room->round_state != ROUND_PLAYING || shooter < 0 ||
+      shooter >= MAX_PLAYERS) {
+    return 0;
+  }
+  if (room->players[shooter].score < (uint8_t)room->config.kill_limit) {
+    room->players[shooter].score++;
+  }
+  if (room->players[shooter].score >= (uint8_t)room->config.kill_limit) {
+    room->players[shooter].score = (uint8_t)room->config.kill_limit;
+    enter_round_over(room, shooter, now, debug);
+    return 1;
+  }
+  return 0;
+}
+
 static void start_shot(struct room *room, int shooter, uint8_t joy, int debug) {
   struct player_state *players = room->players;
   struct shot_state *shots = room->shots;
@@ -1409,8 +1543,9 @@ static void start_shot(struct room *room, int shooter, uint8_t joy, int debug) {
     if (!is_outer_wall_cell(sx, sy)) {
       clear_brick(bricks, sx, sy);
       queue_brick_echo(room, (uint8_t)sx, (uint8_t)sy);
-      uint8_t pkt[4];
-      build_brick_delta((*seq)++, (uint8_t)sx, (uint8_t)sy, pkt, sizeof(pkt));
+      uint8_t pkt[BRICK_DELTA_LEN];
+      build_brick_delta((*seq)++, (uint8_t)sx, (uint8_t)sy,
+                        room->round_id, pkt, sizeof(pkt));
       broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
       broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now_ms(), debug);
       if (debug) {
@@ -1437,11 +1572,15 @@ static void start_shot(struct room *room, int shooter, uint8_t joy, int debug) {
       }
       if (players[p].x == (uint8_t)sx && players[p].y == (uint8_t)sy) {
         uint64_t now = now_ms();
-        players[shooter].score++;
+        int round_ended = award_score(room, shooter, now, debug);
+        if (round_ended) {
+          return;
+        }
         players[p].respawn_at_ms = now + 2000;
         {
-          uint8_t rpkt[6];
-          build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, rpkt, sizeof(rpkt));
+          uint8_t rpkt[RESPAWN_LEN];
+          build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, room->round_id,
+                        rpkt, sizeof(rpkt));
           broadcast_packet(room->listener_fd, clients, rpkt, sizeof(rpkt));
           broadcast_reliable_event(clients, rpkt, sizeof(rpkt), seq, now_ms(),
                                    debug);
@@ -1449,8 +1588,9 @@ static void start_shot(struct room *room, int shooter, uint8_t joy, int debug) {
         }
         /* Defensive clear: ensure any stale client-side shot sprite is removed. */
         {
-          uint8_t spkt[6];
-          build_shot((*seq)++, (uint8_t)shooter, 0, 0, 0, spkt, sizeof(spkt));
+          uint8_t spkt[SHOT_LEN];
+          build_shot((*seq)++, (uint8_t)shooter, 0, 0, 0, room->round_id,
+                     spkt, sizeof(spkt));
           broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
         }
         if (debug) {
@@ -1495,8 +1635,9 @@ static void step_shots(struct room *room, int debug) {
     if (nx < 0 || nx > 19 || ny < 0 || ny > 18) {
       shots[i].active = 0;
       shots[i].clear_burst = 3;
-      uint8_t pkt[6];
-      build_shot((*seq)++, (uint8_t)i, 0, 0, 0, pkt, sizeof(pkt));
+      uint8_t pkt[SHOT_LEN];
+      build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, pkt,
+                 sizeof(pkt));
       broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
       continue;
     }
@@ -1504,8 +1645,9 @@ static void step_shots(struct room *room, int debug) {
       if (!is_outer_wall_cell(nx, ny)) {
         clear_brick(bricks, nx, ny);
         queue_brick_echo(room, (uint8_t)nx, (uint8_t)ny);
-        uint8_t pkt[4];
-        build_brick_delta((*seq)++, (uint8_t)nx, (uint8_t)ny, pkt, sizeof(pkt));
+        uint8_t pkt[BRICK_DELTA_LEN];
+        build_brick_delta((*seq)++, (uint8_t)nx, (uint8_t)ny,
+                          room->round_id, pkt, sizeof(pkt));
         broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
         broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
         if (debug) {
@@ -1519,8 +1661,9 @@ static void step_shots(struct room *room, int debug) {
       }
       shots[i].active = 0;
       shots[i].clear_burst = 3;
-      uint8_t spkt[6];
-      build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
+      uint8_t spkt[SHOT_LEN];
+      build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, spkt,
+                 sizeof(spkt));
       broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
       continue;
     }
@@ -1532,10 +1675,14 @@ static void step_shots(struct room *room, int debug) {
         continue;
       }
       if (players[p].x == (uint8_t)nx && players[p].y == (uint8_t)ny) {
-        players[i].score++;
+        int round_ended = award_score(room, i, now, debug);
+        if (round_ended) {
+          return;
+        }
         players[p].respawn_at_ms = now + 2000;
-        uint8_t pkt[6];
-        build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, pkt, sizeof(pkt));
+        uint8_t pkt[RESPAWN_LEN];
+        build_respawn((*seq)++, (uint8_t)p, 0, 0, 0x01, room->round_id, pkt,
+                      sizeof(pkt));
         broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
         broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
         queue_respawn_echo(room, pkt);
@@ -1549,8 +1696,9 @@ static void step_shots(struct room *room, int debug) {
         }
         shots[i].active = 0;
         shots[i].clear_burst = 3;
-        uint8_t spkt[6];
-        build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
+        uint8_t spkt[SHOT_LEN];
+        build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, spkt,
+                   sizeof(spkt));
         broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
         goto next_shot;
       }
@@ -1558,9 +1706,9 @@ static void step_shots(struct room *room, int debug) {
     shots[i].x = (uint8_t)nx;
     shots[i].y = (uint8_t)ny;
     {
-      uint8_t spkt[6];
+      uint8_t spkt[SHOT_LEN];
       build_shot((*seq)++, (uint8_t)i, (uint8_t)nx, (uint8_t)ny,
-                 shot_active_flags(&shots[i]),
+                 shot_active_flags(&shots[i]), room->round_id,
                  spkt, sizeof(spkt));
       broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
       if (debug) {
@@ -1580,8 +1728,9 @@ static void step_shots(struct room *room, int debug) {
       continue;
     }
     shots[i].clear_burst--;
-    uint8_t spkt[6];
-    build_shot((*seq)++, (uint8_t)i, 0, 0, 0, spkt, sizeof(spkt));
+    uint8_t spkt[SHOT_LEN];
+    build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, spkt,
+               sizeof(spkt));
     broadcast_packet(room->listener_fd, clients, spkt, sizeof(spkt));
   }
 }
@@ -1649,7 +1798,7 @@ static void step_players(struct room *room, int debug) {
     if (zombie_mask[i]) {
       continue;
     }
-    if (clients[i].in_use) {
+    if (clients[i].in_use && clients[i].handshake_ok) {
       human_mask[i] = 1;
       continue;
     }
@@ -1682,8 +1831,9 @@ static void step_players(struct room *room, int debug) {
       players[i].zombie_think_next_ms = now;
       players[i].zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
       players[i].zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
-      uint8_t pkt[6];
-      build_respawn((*seq)++, (uint8_t)i, sx, sy, 0x03, pkt, sizeof(pkt));
+      uint8_t pkt[RESPAWN_LEN];
+      build_respawn((*seq)++, (uint8_t)i, sx, sy, 0x03, room->round_id, pkt,
+                    sizeof(pkt));
       broadcast_packet(room->listener_fd, clients, pkt, sizeof(pkt));
       broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now, debug);
       queue_respawn_echo(room, pkt);
@@ -1747,6 +1897,9 @@ static void step_players(struct room *room, int debug) {
     int trig = (action_joy & 0x10) != 0;
     if (can_act) {
       start_shot(room, i, action_joy, debug);
+      if (room->round_state != ROUND_PLAYING) {
+        return;
+      }
       if (can_move && !(trig && stick != 0x0F)) {
         uint8_t before_x = players[i].x;
         uint8_t before_y = players[i].y;
@@ -1782,15 +1935,148 @@ static void step_players(struct room *room, int debug) {
   step_shots(room, debug);
 }
 
-static void build_brick_full(uint8_t seq, const uint8_t *bits,
+static void build_brick_full(uint8_t seq, const uint8_t *bits, uint8_t round_id,
                              uint8_t *out, size_t out_len) {
-  if (out_len < 51) {
+  if (out_len < BRICK_FULL_LEN) {
     return;
   }
   out[0] = PKT_BRICK_FULL;
   out[1] = seq;
   out[2] = 0x01;
   memcpy(&out[3], bits, 48);
+  out[51] = round_id;
+}
+
+static void build_fallback_name(uint8_t *out, int slot, int zombie) {
+  char text[NAME_LEN + 1];
+  snprintf(text, sizeof(text), zombie ? "ZOMBIE %d" : "WIZARD %d", slot + 1);
+  memcpy(out, text, NAME_LEN);
+}
+
+static void freeze_match_result(struct room *room, int winner) {
+  uint8_t zombie_mask[MAX_PLAYERS];
+  uint8_t zombie_bits = 0;
+  compute_zombie_mask(room->clients, room->config.zombies, zombie_mask);
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (zombie_mask[i]) zombie_bits |= (uint8_t)(1u << i);
+  }
+  room->historical_zombie_mask |= zombie_bits;
+  room->winner_pid = (uint8_t)winner;
+  room->final_active_mask = room->occupied_mask;
+  room->final_zombie_mask = zombie_bits;
+  memset(room->frozen_names, ' ', sizeof(room->frozen_names));
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    room->final_scores[i] = room->players[i].score;
+    if (!(room->final_active_mask & (1u << i))) continue;
+    if (!zombie_mask[i] && room->clients[i].in_use &&
+        room->clients[i].handshake_ok && name_is_set(room->clients[i].name)) {
+      memcpy(room->frozen_names[i], room->clients[i].name, NAME_LEN);
+    } else {
+      build_fallback_name(room->frozen_names[i], i, zombie_mask[i]);
+    }
+  }
+
+  uint8_t *pkt = room->frozen_match;
+  pkt[0] = PKT_MATCH_END;
+  pkt[1] = room->round_id;
+  pkt[2] = room->winner_pid;
+  pkt[3] = room->final_active_mask;
+  pkt[4] = room->final_zombie_mask;
+  pkt[5] = (uint8_t)room->config.kill_limit;
+  memcpy(&pkt[6], room->final_scores, MAX_PLAYERS);
+  pkt[10] = room->historical_zombie_mask;
+  memcpy(&pkt[11], room->frozen_names, sizeof(room->frozen_names));
+}
+
+static void enter_round_over(struct room *room, int winner, uint64_t now,
+                             int debug) {
+  if (room->round_state != ROUND_PLAYING) return;
+  room->round_state = ROUND_OVER;
+  freeze_match_result(room, winner);
+  room->intermission_deadline_ms = now + (uint64_t)room->config.intermission_ms;
+  memset(room->shots, 0, sizeof(room->shots));
+  memset(room->brick_echo, 0, sizeof(room->brick_echo));
+  memset(room->respawn_echo, 0, sizeof(room->respawn_echo));
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    room->players[i].joy = 0x0F;
+    room->clients[i].input_head = 0;
+    room->clients[i].input_count = 0;
+  }
+  broadcast_reliable_event(room->clients, room->frozen_match, MATCH_END_LEN,
+                           &room->seq, now, debug);
+  printf("room=%d round=%u winner=%u score=%u intermission_ms=%d\n",
+         room->config.port, (unsigned)room->round_id, (unsigned)winner,
+         (unsigned)room->final_scores[winner], room->config.intermission_ms);
+}
+
+static void send_round_state(struct room *room, int slot, uint64_t now,
+                             int debug) {
+  struct client_slot *client = &room->clients[slot];
+  if (!client->in_use || !client->handshake_ok) return;
+  if (room->round_state == ROUND_OVER) {
+    (void)reliable_enqueue_client(client, slot, room->frozen_match,
+                                  MATCH_END_LEN, &room->seq, now, debug);
+    return;
+  }
+  uint8_t start[ROUND_START_LEN] = {PKT_ROUND_START, room->round_id,
+                                    (uint8_t)room->config.kill_limit};
+  uint8_t map[BRICK_FULL_LEN];
+  build_brick_full(room->seq++, room->brick_bits, room->round_id, map,
+                   sizeof(map));
+  if (reliable_enqueue_client(client, slot, start, sizeof(start), &room->seq,
+                              now, debug) == 0) {
+    (void)reliable_enqueue_client(client, slot, map, sizeof(map), &room->seq,
+                                  now, debug);
+  }
+}
+
+static void reset_round(struct room *room, uint64_t now, int debug) {
+  room->round_id++;
+  room->round_state = ROUND_PLAYING;
+  room->intermission_deadline_ms = 0;
+  memcpy(room->brick_bits, room->brick_reset_bits, sizeof(room->brick_bits));
+  memset(room->shots, 0, sizeof(room->shots));
+  memset(room->brick_echo, 0, sizeof(room->brick_echo));
+  memset(room->respawn_echo, 0, sizeof(room->respawn_echo));
+
+  uint8_t zombie_mask[MAX_PLAYERS];
+  uint8_t zombie_bits = 0;
+  compute_zombie_mask(room->clients, room->config.zombies, zombie_mask);
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (zombie_mask[i]) zombie_bits |= (uint8_t)(1u << i);
+  }
+  room->historical_zombie_mask = zombie_bits;
+  room->occupied_mask = 0;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    struct player_state *player = &room->players[i];
+    player->joy = 0x0F;
+    player->score = 0;
+    player->respawn_at_ms = 0;
+    player->zombie_fire_pending = 0;
+    player->zombie_think_next_ms = now;
+    player->zombie_move_next_ms = now + ZOMBIE_MOVE_MS;
+    player->zombie_fire_next_ms = now + ZOMBIE_FIRE_MS;
+    room->last_input_ms[i] = 0;
+    room->clients[i].have_delta_seq = 0;
+    room->clients[i].have_applied_input_seq = 0;
+    room->clients[i].input_head = 0;
+    room->clients[i].input_count = 0;
+    if ((room->clients[i].in_use && room->clients[i].handshake_ok) ||
+        zombie_mask[i]) {
+      uint8_t sx = 0, sy = 0;
+      pick_spawn(room, &sx, &sy);
+      player->x = sx;
+      player->y = sy;
+      room->occupied_mask |= (uint8_t)(1u << i);
+    }
+  }
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    send_round_state(room, i, now, debug);
+  }
+  room->last_brick_resync_ms = now;
+  room->next_tick = now;
+  printf("room=%d round=%u started kill_limit=%d\n", room->config.port,
+         (unsigned)room->round_id, room->config.kill_limit);
 }
 
 static int load_brick_layout(const char *path, uint8_t *bits, size_t bits_len) {
@@ -1834,12 +2120,15 @@ static void usage(const char *argv0) {
   fprintf(stderr,
           "Usage: %s [--port PORT | --port-base PORT] [--room-count N]\n"
           "          [--zombies N | --room-zombies LIST] [--bind ADDR]\n"
-          "          [--tick-hz N] [--brick PATH] [--lag-ms N] [--debug]\n"
+          "          [--tick-hz N] [--brick PATH] [--lag-ms N]\n"
+          "          [--kill-limit N] [--intermission-ms N] [--debug]\n"
           "  --port PORT       one-room compatibility form (default 9000).\n"
           "  --port-base PORT  first listener; later rooms use consecutive ports.\n"
           "  --room-count N    number of isolated rooms (1-%d, default 1).\n"
           "  --zombies N       zombie count for every room (0-3, default 1).\n"
           "  --room-zombies L  comma-separated zombie count for each room.\n"
+          "  --kill-limit N    kills needed to win a round (1-10, default 5).\n"
+          "  --intermission-ms results-screen duration (default 5000).\n"
           "  --bind ADDR       bind a specific IPv4 address.\n",
           argv0, MAX_ROOMS);
 }
@@ -1936,6 +2225,15 @@ static int init_room(struct room *room, const struct room_config *config,
   room->last_brick_resync_ms = now;
   room->last_name_rotate_ms = now;
   room->last_seat_mask = 0xFF;
+  room->round_id = 1;
+  room->round_state = ROUND_PLAYING;
+  {
+    uint8_t zombie_mask[MAX_PLAYERS];
+    compute_zombie_mask(room->clients, room->config.zombies, zombie_mask);
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+      if (zombie_mask[i]) room->historical_zombie_mask |= (uint8_t)(1u << i);
+    }
+  }
   room->listener_fd = create_listener(config->port, bind_ip);
   return room->listener_fd >= 0 ? 0 : -1;
 }
@@ -1971,17 +2269,18 @@ static void accept_room_client(struct room *room, int debug, uint64_t now) {
   init_client_slot(&room->clients[slot], fd, &src, src_len, now);
   log_client_event("connected", slot, &room->clients[slot].addr);
   reset_slot_gameplay(room, slot, now);
-  uint8_t bfull[51];
-  build_brick_full(room->seq++, room->brick_bits, bfull, sizeof(bfull));
-  send_checked(&room->clients[slot], bfull, sizeof(bfull));
-  room->clients[slot].sent_bricks = 1;
   if (debug) {
-    printf("room=%d TX brick_full -> slot %d\n", room->config.port, slot);
+    printf("room=%d waiting for HELLO from slot %d\n", room->config.port,
+           slot);
   }
 }
 
 static void service_room_timers(struct room *room, int debug, uint64_t now) {
   reap_timed_out_clients(room, now, debug);
+  if (room->round_state == ROUND_OVER &&
+      now >= room->intermission_deadline_ms) {
+    reset_round(room, now, debug);
+  }
   if (now - room->last_name_rotate_ms >= NAME_ROTATE_MS) {
     room->last_name_rotate_ms = now;
     broadcast_next_name(room, debug);
@@ -1989,8 +2288,9 @@ static void service_room_timers(struct room *room, int debug, uint64_t now) {
   reliable_tick(room->clients, now, debug);
   if (now - room->last_brick_resync_ms >= BRICK_RESYNC_MS) {
     room->last_brick_resync_ms = now;
-    uint8_t bfull[51];
-    build_brick_full(room->seq++, room->brick_bits, bfull, sizeof(bfull));
+    uint8_t bfull[BRICK_FULL_LEN];
+    build_brick_full(room->seq++, room->brick_bits, room->round_id, bfull,
+                     sizeof(bfull));
     broadcast_packet(room->listener_fd, room->clients, bfull, sizeof(bfull));
     if (debug) {
       printf("room=%d TX brick_full resync -> all clients\n",
@@ -2019,10 +2319,12 @@ static void service_room_timers(struct room *room, int debug, uint64_t now) {
 
 static void tick_room(struct room *room, int debug, uint64_t now) {
   uint64_t tick_deadline = room->next_tick;
-  flush_brick_echo(room, debug);
-  flush_respawn_echo(room, debug);
-  apply_queued_input(room, debug, now);
-  step_players(room, debug);
+  if (room->round_state == ROUND_PLAYING) {
+    flush_brick_echo(room, debug);
+    flush_respawn_echo(room, debug);
+    apply_queued_input(room, debug, now);
+    step_players(room, debug);
+  }
   uint8_t zombie_mask[MAX_PLAYERS];
   uint8_t zombie_bits = 0;
   uint8_t snapshot_seq = room->seq++;
@@ -2032,13 +2334,17 @@ static void tick_room(struct room *room, int debug, uint64_t now) {
       zombie_bits |= (uint8_t)(1u << z);
     }
   }
-  uint8_t pkt[20];
+  if (room->round_state == ROUND_PLAYING) {
+    room->historical_zombie_mask |= zombie_bits;
+  }
+  uint8_t pkt[SNAPSHOT_LEN];
   for (int i = 0; i < MAX_PLAYERS; i++) {
-    if (!room->clients[i].in_use) {
+    if (!room->clients[i].in_use || !room->clients[i].handshake_ok) {
       continue;
     }
     build_snapshot(snapshot_seq, room->players,
-                   room->clients[i].applied_input_seq, pkt, sizeof(pkt));
+                   room->clients[i].applied_input_seq, room->round_id, pkt,
+                   sizeof(pkt));
     pkt[2] = (uint8_t)(0x01u | ((uint8_t)i << 1) |
                        ((uint8_t)(zombie_bits & 0x0Fu) << 3));
     if (room->clients[i].have_applied_input_seq) {
@@ -2078,6 +2384,8 @@ int main(int argc, char **argv) {
   int debug = 0;
   int zombies = 1;
   int lag_ms = 0;
+  int kill_limit = 5;
+  int intermission_ms = 5000;
   const char *brick_path = "server/brick_layout.txt";
   const char *bind_addr = NULL;
   const char *room_zombies_arg = NULL;
@@ -2111,6 +2419,10 @@ int main(int argc, char **argv) {
          At zero latency the client's reposition-and-replay path barely runs,
          which hides bugs in it. */
       if (parse_int_arg(argv[++i], &lag_ms) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--kill-limit") == 0 && i + 1 < argc) {
+      if (parse_int_arg(argv[++i], &kill_limit) != 0) goto bad_args;
+    } else if (strcmp(argv[i], "--intermission-ms") == 0 && i + 1 < argc) {
+      if (parse_int_arg(argv[++i], &intermission_ms) != 0) goto bad_args;
     } else if (strcmp(argv[i], "--debug") == 0) {
       debug = 1;
     } else if (strcmp(argv[i], "--help") == 0) {
@@ -2124,7 +2436,8 @@ int main(int argc, char **argv) {
   if (room_count < 1 || room_count > MAX_ROOMS || port_base < 1 ||
       port_base > 65535 || room_count - 1 > 65535 - port_base ||
       tick_hz < 1 || tick_hz > 1000 || zombies < 0 ||
-      zombies >= MAX_PLAYERS ||
+      zombies >= MAX_PLAYERS || kill_limit < 1 || kill_limit > 10 ||
+      intermission_ms < 100 || intermission_ms > 600000 ||
       (saw_port && (saw_port_base || room_count != 1)) ||
       (saw_zombies && room_zombies_arg != NULL)) {
     goto bad_args;
@@ -2177,6 +2490,8 @@ int main(int argc, char **argv) {
         .zombies = room_zombies[i],
         .tick_hz = tick_hz,
         .lag_ms = lag_ms,
+        .kill_limit = kill_limit,
+        .intermission_ms = intermission_ms,
         .brick_path = brick_path,
     };
     if (init_room(&rooms[i], &config, &bind_ip, init_now) != 0) {
