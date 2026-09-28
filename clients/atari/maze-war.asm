@@ -156,6 +156,7 @@ NET_LEAVE_NTSC	=	60	;bounded clean leave: about one second
 NET_LEAVE_PAL	=	50
 HUD_MISSILE_X	=	58	;small shirt-colour swatches beside the HUD names
 HUD_MISSILE_Y0	=	192	;PM Y for the first 20-column HUD row
+RESPAWN_FX_FRAMES =	32	;about half a second (NTSC/PAL); starting radius is 40
 RP_BEGIN	=	1
 RP_LOSER_EVAP	=	2
 RP_WINNER_DANCE	=	3
@@ -2209,6 +2210,7 @@ RPT_C6	CMP	#RP_RESULTS
 RPT_X	RTS
 
 RP_BEGIN_RUN
+	JSR	RESPAWN_FX_CANCEL	;HUD missiles must not outlive the round
 	JSR	NET_SHOT_WATCH_TICK	;phase=results makes this erase every live shot
 	LDX	#3		;discard old-round respawns without applying them
 RPB_RESP
@@ -2569,6 +2571,8 @@ ROUND_PRESENT_RESTORE
 	STA	GRACTL
 	STA	AUDC1
 	STA	AUDC2
+	STA	RESPAWN_FX_TIMER
+	STA	RESPAWN_FX_SEEN	;first spawn in the new round may show a fresh cue
 	LDY	#7
 RPR_COLOR
 	LDA	COLTBL,Y
@@ -4490,6 +4494,179 @@ LB_CONTROLS1	.BYTE	"UP/DOWN: ROOM  LEFT/RIGHT: PAGE",$FF
 LB_CONTROLS2	.BYTE	"RETURN/FIRE: JOIN  OPTION: DIRECT",$FF
 MSG_ROOM_NOTSAVED .BYTE	"ROOM SELECTED - APPKEY NOT SAVED",$FF
 ;
+; Local-only respawn cue. Borrow the four HUD missiles for double-width marks,
+; each four scanlines tall, converging on the confirmed spawn; restore the HUD.
+; All state and PM writes belong to the deferred VBI. No waits, screen writes,
+; player-colour changes, or scanline interrupts are needed. Keep this helper
+; in high code: the base core has very little space before display RAM.
+RESPAWN_FX_START
+	LDA	RESPAWN_FX_SEEN	;raw echoes and the reliable copy are the same spawn
+	BEQ	RFX_NEW
+	RTS
+RFX_NEW
+	LDA	#1
+	STA	RESPAWN_FX_SEEN
+	STX	RESPAWN_FX_PID
+	LDA	RNDX,X
+	ASL
+	ASL
+	ASL
+	CLC
+	ADC	#52		;centre of the eight-colour-clock spawn cell
+	STA	RESPAWN_FX_X
+	LDA	RNDY,X
+	ASL
+	ASL
+	ASL
+	CLC
+	ADC	#36		;centre of the eight-scanline spawn cell
+	STA	RESPAWN_FX_Y
+	LDA	#0
+	STA	RESPAWN_FX_TOP
+	STA	RESPAWN_FX_BOTTOM
+	LDA	#RESPAWN_FX_FRAMES
+	STA	RESPAWN_FX_TIMER
+	RTS
+
+RESPAWN_FX_ARM
+	CPX	NET_LOCAL_PID	;only a local pending death authorizes another cue
+	BNE	RFX_ARM_EXIT
+	LDA	#0
+	STA	RESPAWN_FX_SEEN
+RFX_ARM_EXIT
+	RTS
+
+RESPAWN_FX_CANCEL
+	LDA	RESPAWN_FX_TIMER
+	BNE	RFX_RESTORE
+	RTS
+RFX_RESTORE
+	LDA	#0
+	STA	RESPAWN_FX_TIMER
+	JMP	HUD_PM_INIT	;clears the entire missile page and restores width/X
+
+RESPAWN_FX_TICK
+	LDA	RESPAWN_FX_TIMER
+	BNE	RFX_ACTIVE
+	RTS
+RFX_ACTIVE
+	LDA	NET_GAME_SHOW	;do not consume the cue behind the initial reveal barrier
+	BNE	RFX_SHOW
+	RTS
+RFX_SHOW
+	LDX	NET_LOCAL_PID
+	CPX	RESPAWN_FX_PID
+	BNE	RESPAWN_FX_CANCEL
+	LDA	NET_DEAD_MASK
+	ORA	NET_VACANT_MASK
+	AND	PLRMSK,X
+	BNE	RESPAWN_FX_CANCEL
+	LDA	ACTFLAG,X
+	AND	#$02		;cancel if another death starts before the cue finishes
+	BNE	RESPAWN_FX_CANCEL
+	LDA	NET_LEAVING
+	BNE	RESPAWN_FX_CANCEL
+	LDA	RESPAWN_FX_TIMER
+	CMP	#RESPAWN_FX_FRAMES
+	BNE	RFX_ERASE
+	LDA	#$55		;first frame: double-width missiles for larger marks
+	STA	SIZEM
+	LDA	#0		;remove the HUD swatches while the cue owns the missiles
+	TAY
+RFX_CLEAR
+	STA	PMAREA+$300,Y
+	INY
+	BNE	RFX_CLEAR
+RFX_ERASE
+	LDA	#0		;later frames clear only the previous two four-line strips
+	LDY	RESPAWN_FX_TOP
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	LDY	RESPAWN_FX_BOTTOM
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	LDA	RESPAWN_FX_TIMER	;25% wider spread, still converging in 32 frames
+	LSR
+	LSR
+	CLC
+	ADC	RESPAWN_FX_TIMER
+	STA	RESPAWN_FX_DISTANCE
+	LDA	RESPAWN_FX_X
+	SEC
+	SBC	RESPAWN_FX_DISTANCE
+	CMP	#48		;clip left marks to the maze, including edge spawns
+	BCS	RFX_LEFT
+	LDA	#0
+RFX_LEFT
+	STA	HPOSM0
+	STA	HPOSM0+2
+	LDA	RESPAWN_FX_X
+	CLC
+	ADC	RESPAWN_FX_DISTANCE
+	CMP	#205		;four-colour-clock marks must fit before X=208
+	BCC	RFX_RIGHT
+	LDA	#0
+RFX_RIGHT
+	STA	HPOSM0+1
+	STA	HPOSM0+3
+	LDA	#0		;zero is an offscreen erase sentinel for a clipped row
+	STA	RESPAWN_FX_TOP
+	STA	RESPAWN_FX_BOTTOM
+	LDA	RESPAWN_FX_Y
+	SEC
+	SBC	RESPAWN_FX_DISTANCE
+	CMP	#32
+	BCC	RFX_BOTTOM
+	TAY
+	STY	RESPAWN_FX_TOP
+	LDA	#$0F		;missiles 0/1: upper-left and upper-right
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+	INY
+	STA	PMAREA+$300,Y
+RFX_BOTTOM
+	LDA	RESPAWN_FX_Y
+	CLC
+	ADC	RESPAWN_FX_DISTANCE
+	CMP	#181		;four lines must fit before maze end Y=184
+	BCS	RFX_AGE
+	TAY
+	STY	RESPAWN_FX_BOTTOM
+	LDA	PMAREA+$300,Y	;preserve upper marks when the rows converge/overlap
+	ORA	#$F0		;missiles 2/3: lower-left and lower-right
+	STA	PMAREA+$300,Y
+	INY
+	LDA	PMAREA+$300,Y
+	ORA	#$F0
+	STA	PMAREA+$300,Y
+	INY
+	LDA	PMAREA+$300,Y
+	ORA	#$F0
+	STA	PMAREA+$300,Y
+	INY
+	LDA	PMAREA+$300,Y
+	ORA	#$F0
+	STA	PMAREA+$300,Y
+RFX_AGE
+	DEC	RESPAWN_FX_TIMER
+	BNE	RFX_EXIT
+	JMP	HUD_PM_INIT
+RFX_EXIT
+	RTS
+
 NET_HIGH_CODE_END
 	ORG	CORE_DISPATCH_CONT
 NET_RX_40DONE
@@ -5818,6 +5995,7 @@ NRW_POSOK
 	JSR	SETSTIL		;put render and simulation on the spawn cell now.
 	CPX	NET_LOCAL_PID	;our own respawn lands as a wholesale jump;
 	BNE	NRAW_X		;keep it out of the drift metric
+	JSR	RESPAWN_FX_START
 	LDA	#30
 	STA	NET_DIAG_HOLD
 NRAW_X	RTS
@@ -5837,6 +6015,7 @@ NRW_PEND
 	LDA	NET_RESP_FLAGS
 	AND	#$01
 	BEQ	NRW_X
+	JSR	RESPAWN_FX_ARM
 	TXA
 	TAY
 	LDA	NET_DEAD_MASK	;already hidden: this death is done with
@@ -8298,6 +8477,7 @@ DONXTMN	DEX
 	JMP	CKMVLP
 EXIT	JSR	NET_SHOT_WATCH_TICK
 	JSR	NET_SHOT_APPLY_PEND
+	JSR	RESPAWN_FX_TICK
 	JMP	XITVBV
 ;
 ;
@@ -9660,6 +9840,14 @@ NET_RX_DBG	.DS	1	;set after first valid snapshot (enables seq checks)
 NET_IN_TMP	.DS	1	;input debounce scratch
 NET_BOOT_HIDE	.DS	1	;hide actors until first authoritative sync
 NET_LOCAL_PID	.DS	1	;pid assigned by server in snapshot flags
+RESPAWN_FX_TIMER .DS	1	;frames remaining; zero leaves HUD missiles alone
+RESPAWN_FX_DISTANCE .DS	1	;current radius: remaining frames * 5/4
+RESPAWN_FX_X	.DS	1	;fixed spawn centre in PM colour clocks
+RESPAWN_FX_Y	.DS	1	;fixed spawn centre in PM scanlines
+RESPAWN_FX_PID	.DS	1	;cancel if our assigned slot changes
+RESPAWN_FX_TOP	.DS	1	;previous top row, or offscreen zero
+RESPAWN_FX_BOTTOM .DS	1	;previous bottom row, or offscreen zero
+RESPAWN_FX_SEEN	.DS	1	;ignore final-spawn echoes until our next pending death
 NET_ROLE_MASK	.DS	1	;server role/zombie mask from snapshot flags
 NET_ROLE_NEW	.DS	1	;role mask decoded from the snapshot being applied
 NET_ROLE_CHG	.DS	1	;slots whose role changed, for NET_ROLE_RESET

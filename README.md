@@ -51,6 +51,23 @@ make build/maze-war-client
 make build/maze-war-client-sdl
 ```
 
+Build the Atari client for the live QA Lobby and `fujinet.online` rooms:
+
+```bash
+make HOST=fujinet.online ROOM_PORT_BASE=5025 ROOM_COUNT=4 DEFAULT_PORT=5025 \
+    BUILD_FLAVOR=QA LOBBY_BASE=https://qalobby.fujinet.online build/maze-war-net.xex
+```
+
+The local player's respawn briefly borrows the four HUD color markers for
+four marks converging diagonally on the spawn point. The HUD markers return
+after 32 frames; gameplay continues throughout. Repeated spawn packets do not
+restart the cue. A focused test executes the assembled routines across every
+legal spawn cell and slot:
+
+```bash
+uv run --with py65 tests/respawn_fx_execution.py
+```
+
 Output artifacts:
 - `build/maze-war.xex`: raw Atari client program assembled from `maze-war.asm`
 - `build/maze-war-net.xex`: `NSENGINE.OBX` + `maze-war.xex` concatenated
