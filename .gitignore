@@ -2,8 +2,8 @@ ref/
 build/
 AGENTS.md
 
-# Planning docs live in planning/ and are tracked. This entry stays so that a
-# tool recreating the old hidden directory does not quietly commit it again.
+# Planning docs are local to this checkout.
+/planning/
 .planning/
 
 # Local scratch and captured artifacts, kept on disk but out of the branch.
