@@ -160,7 +160,6 @@ static void snapshot_apply(const uint8_t *p)
     if (memcmp(game.names[game.local_pid], game.local_name, GAME_NAME_LEN) == 0)
         game.name_echoed = 1;
     game.snapshot_ready = 1;
-    game.delta_due = 1;
     game.heartbeat_age = 0;
     ++game.snapshots;
 }
@@ -180,6 +179,8 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
                 game.snapshot_ready = 0;
                 game.pending_count = 0;
                 game.fire_cue_frames = 0;
+                game.intent_count = 0;
+                game.input_sent = 0;
             }
             game.round_id = id;
             game.kill_limit = p[2];
@@ -197,6 +198,7 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
         game.phase = 1;
         game.pending_count = 0;
         game.fire_cue_frames = 0;
+        game.intent_count = 0;
         game.winner_pid = p[2];
         game.seat_mask = p[3] & (uint8_t)~p[4];
         game.zombie_mask = p[4];
@@ -274,7 +276,7 @@ void game_reset(void)
 {
     memset(&game, 0, sizeof(game));
     game.local_pid = 255;
-    game.input_joy = 15;
+    game.input_joy = game.sent_joy = 15;
     memcpy(game.local_name, "LYNX    ", GAME_NAME_LEN);
     game.name_age = 60;
 }
@@ -342,6 +344,27 @@ void game_step(void)
     if (game.heartbeat_age != 255) ++game.heartbeat_age;
 }
 
+void game_input_tick(uint16_t ticks)
+{
+    game.input_clock = ticks;
+}
+
+void game_sample_input(uint8_t directions, uint8_t fire, uint16_t ticks)
+{
+    uint8_t fresh = directions & (uint8_t)~game.direction_mask;
+    uint8_t mask;
+    uint8_t joy = game.input_joy & 15;
+    game_input_tick(ticks);
+    game.direction_mask = directions;
+    mask = joy == 14 ? 1 : joy == 7 ? 2 : joy == 13 ? 4 : joy == 11 ? 8 : 0;
+    if (fresh || !(directions & mask)) {
+        mask = fresh ? fresh : directions;
+        joy = mask & 1 ? 14 : mask & 2 ? 7 : mask & 4 ? 13 : mask & 8 ? 11 : 15;
+    }
+    if (fire) joy |= 0x10;
+    game_set_joy(joy);
+}
+
 void game_set_joy(uint8_t joy)
 {
     if (!joy_ok(joy)) return;
@@ -349,6 +372,11 @@ void game_set_joy(uint8_t joy)
         if ((joy & 0x10) && !(game.input_joy & 0x10) &&
             (joy & 15) != 15 && game_ready())
             game.fire_cue_frames = 3;
+        /* Preserve sampled presses across a release during a render. Each
+           intent is one discrete action, not a level-triggered repeat. */
+        if (game_ready() && joy != 15 &&
+            game.intent_count < GAME_INPUT_INTENTS)
+            game.intents[game.intent_count++] = joy;
         game.input_joy = joy;
         game.delta_due = 1;
     }
@@ -358,6 +386,10 @@ void game_set_joy(uint8_t joy)
 
 uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
 {
+    uint8_t joy;
+    uint8_t explicit_intent = 0;
+    uint8_t repeats_pending = 0;
+    uint8_t i;
     if (!out || cap < 11 || !game.have_welcome) return 0;
     if (game.ack_pending) {
         out[0] = PKT_RELIABLE_ACK;
@@ -376,27 +408,51 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
         game.name_age = 0;
         return 11;
     }
-    if (game.local_pid < 4 && !game.leave_requested &&
-        (game.delta_due || game.heartbeat_age >= 60)) {
-        out[0] = PKT_DELTA;
-        out[1] = game.tx_seq++;
-        out[2] = game.local_pid;
-        out[3] = game_ready() ? game.input_joy : 15;
-        out[4] = game.round_id;
-        if (game_ready()) {
-            /* Keep sending even if a long link stall fills the replay window.
-               The next snapshot restores the authoritative base. */
-            if (game.pending_count == GAME_PENDING_INPUTS)
-                game.pending_count = 0;
-            game.pending_seq[game.pending_count] = out[1];
-            game.pending_joy[game.pending_count++] = out[3];
-            predict_input(out[3]);
-        }
-        game.delta_due = 0;
-        game.heartbeat_age = 0;
-        return 5;
+    if (game.local_pid >= 4 || game.leave_requested) return 0;
+    joy = game_ready() ? game.input_joy : 15;
+    if (game_ready() && game.intent_count) {
+        joy = game.intents[0];
+        explicit_intent = 1;
+    } else if (game.input_sent && joy == game.sent_joy &&
+               !game.delta_due) {
+        if ((joy & 15) != 15) {
+            /* A snapshot never grants another move. Late service sends one
+               repeat and starts a new interval, with no catch-up burst. */
+            if ((uint16_t)(game.input_clock - game.repeat_at) >= 0x8000u)
+                return 0;
+            for (i = 0; i < game.pending_count; ++i)
+                if ((game.pending_joy[i] & 15) != 15 &&
+                    !(game.pending_joy[i] & 0x10)) ++repeats_pending;
+            if (!(joy & 0x10) && repeats_pending >= GAME_REPEAT_PENDING)
+                return 0;
+        } else if ((uint16_t)(game.input_clock - game.last_input_at) < 60)
+            return 0;
     }
-    return 0;
+    if (game_ready() && game.pending_count == GAME_PENDING_INPUTS) return 0;
+    out[0] = PKT_DELTA;
+    out[1] = game.tx_seq++;
+    out[2] = game.local_pid;
+    out[3] = joy;
+    out[4] = game.round_id;
+    if (explicit_intent) {
+        --game.intent_count;
+        memmove(game.intents, game.intents + 1, game.intent_count);
+    }
+    if (game_ready()) {
+        /* The replay ring also includes neutral and firing inputs. */
+        game.pending_seq[game.pending_count] = out[1];
+        game.pending_joy[game.pending_count++] = joy;
+        predict_input(joy);
+    }
+    game.last_input_at = game.input_clock;
+    game.sent_joy = joy;
+    game.input_sent = 1;
+    if ((joy & 15) != 15)
+        game.repeat_at = game.input_clock +
+            (explicit_intent ? GAME_REPEAT_DELAY : GAME_REPEAT_PERIOD);
+    game.delta_due = 0;
+    game.heartbeat_age = 0;
+    return 5;
 }
 
 uint8_t game_request_leave(uint8_t *out, uint8_t cap)

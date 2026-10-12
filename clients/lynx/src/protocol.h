@@ -7,6 +7,10 @@
 #define GAME_NAME_LEN 8
 #define GAME_BRICK_BYTES 48
 #define GAME_PENDING_INPUTS 8
+#define GAME_INPUT_INTENTS 4
+#define GAME_REPEAT_DELAY 15 /* 250 ms at the configured 60 Hz display */
+#define GAME_REPEAT_PERIOD 6 /* 10 steps/second */
+#define GAME_REPEAT_PENDING 2
 
 struct game_player {
     uint8_t x;
@@ -61,6 +65,14 @@ struct game_state {
     uint8_t pending_seq[GAME_PENDING_INPUTS];
     uint8_t pending_joy[GAME_PENDING_INPUTS];
     uint8_t fire_cue_frames;
+    uint16_t input_clock;
+    uint16_t repeat_at;
+    uint16_t last_input_at;
+    uint8_t sent_joy;
+    uint8_t input_sent;
+    uint8_t intent_count;
+    uint8_t intents[GAME_INPUT_INTENTS];
+    uint8_t direction_mask;
 };
 
 extern struct game_state game;
@@ -70,6 +82,10 @@ void game_reset(void);
 uint8_t game_receive(const uint8_t *packet, uint8_t len);
 uint8_t game_ready(void);
 void game_step(void);
+/* Feed the 60 Hz VBL clock before sampling buttons; elapsed render time counts. */
+void game_input_tick(uint16_t ticks);
+/* Direction bits: Up=1, Right=2, Down=4, Left=8; newly pressed axis wins. */
+void game_sample_input(uint8_t directions, uint8_t fire, uint16_t ticks);
 void game_set_joy(uint8_t joy);
 /* Emits at most one ACK, NAME, or DELTA payload per call. */
 uint8_t game_next_outbound(uint8_t *out, uint8_t cap);

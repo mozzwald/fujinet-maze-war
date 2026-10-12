@@ -10,8 +10,8 @@ parity, one stop bit; sends FujiNet device `$70` command `$F0` with raw TCP
 flag `$01`; and retries the Maze War v1 `HELLO` until it receives `WELCOME`,
 `REJECT`, or a bounded timeout. After `WELCOME`, it sends `NAME`, cumulative
 reliable ACKs, and paced `DELTA` inputs. The Lynx D-pad maps to cardinal
-movement and A fires. Button changes send a `DELTA` immediately; snapshots
-pace held-input repeats. The local wizard predicts sent movements and replays
+movement and A fires. Sampled presses are latched and sent between Suzy
+batches; a 60 Hz VBL clock paces held repeats independently of snapshots. The local wizard predicts sent movements and replays
 unacknowledged inputs over each authoritative snapshot. A short muzzle cue
 appears on A press; hit and score results still come from the server. It
 applies snapshots, seats, names, shots, brick maps,
@@ -63,35 +63,55 @@ one malformed COBS frame, no CRC failures, no RX-ring overflows, and no
 serial status errors. The cause of the occasional malformed frame needs
 investigation before calling the display path reliable.
 
-The movement renderer now caches the maze and restores only old player and
-shot areas on each of the two display pages. It advances the local wizard by
-small pixel steps between server snapshots while checking walls and keeping
-within two cells of the authoritative position. The local sprite no longer
-teleports for an ordinary large snapshot correction. In an isolated Handy
-open-map capture, the original full repaint showed 5 visible position changes
-over about 2.4 seconds; the new renderer showed 25 over 1.6 seconds of held
-movement, with the sprite present in all 44 sampled frames. Those samples are
-roughly 36 ms apart and can skip displayed frames, so their largest observed
-jump is not a per-frame step. The server still requires one fresh DELTA per
-movement tick; snapshots pace those packets. WAN and real ComLynx feel need
-physical testing.
-The local wizard now checks its entire 8×5 visual footprint before every
-predicted pixel step. This stops the sprite before any part enters a brick,
-including at corners and during turns; it can still move a pixel at a time
-through open cells. Wizard and muzzle pixels are clipped to walkable maze
-cells as a second safeguard. Corrections toward a server position use the
-same footprint check. Host playfield tests cover blocked horizontal and
-vertical steps, an L-shaped open path, wall pixel preservation, and an
-obstructed correction. A 45-frame Handy corridor capture showed movement up
-to a wall with zero green sprite pixels on wall cells.
-The server position also takes priority when prediction diverges: a new
-authoritative cell that moves away from the visual sprite triggers a safe
-rejoin when the gap exceeds one cell or conflicts with the held direction.
-If a wall blocks a smaller correction, the sprite rejoins at the server's
-walkable cell. Tests cover held input, firing from the authoritative area,
-and a server move across the held direction.
-The firing frame also aligns the local sprite with the server cell, where
-the shot actually originates.
+### Movement and turn control
+
+Each sampled directional press contributes one discrete input, even if it is
+released before an outbound slot is available. A four-entry intent FIFO
+preserves short taps and quick turns in order. The first step is immediate;
+a held direction waits 250 ms before repeating at 100 ms intervals. Late
+polling sends one repeat, never a burst to catch up. A new direction is sent
+without waiting for the repeat timer. If D-pad directions overlap, the newly
+pressed direction wins instead of a fixed Up/Right priority.
+
+Snapshot arrival no longer grants another movement input. Held repeats stop
+when two movement inputs are awaiting server acknowledgement, bounding the
+old-direction backlog on a slow connection. Explicit taps/turns retain their
+order. A full eight-entry replay ring waits for acknowledgements instead of
+clearing prediction history. A released button cancels future held repeats;
+inputs already transmitted still have to be applied by the server.
+
+The local sprite interpolates only toward the cell predicted by transmitted
+inputs, then settles on that cell. It no longer drifts two additional cells
+based only on the held direction. This keeps the visible stopping cell aligned
+with the cell from which the server will accept a turn. The entire 8×5
+footprint is checked against walls and occupied cells; wizard and muzzle
+pixels are also clipped to walkable maze cells. If a wall blocks correction,
+the sprite rejoins the server's walkable target cell. Firing settles unfinished
+interpolation at the predicted shot origin.
+
+The input sampler and bounded transmitter run between Suzy batches and while
+waiting for a display swap. Clock ticks come from cc65's VBL counter, so slow
+rendering does not turn a 100 ms repeat interval into a frame-count delay.
+Host input tests cover latched taps, snapshot/press races, stop, overlapping
+turns, stalled acknowledgements, a full replay ring and clock rollover.
+
+The movement emulator mode runs a controlled peer that applies one queued
+input per 10 Hz tick and acknowledges only applied inputs:
+
+```sh
+python3 clients/lynx/tests/handy_render_smoke.py --movement-checks
+python3 clients/lynx/tests/handy_render_smoke.py --movement-checks --input-lag-ms 150
+```
+
+The final ROM passed both runs: 60/120/160 ms taps each moved one cell;
+release stopped further movement; narrow-column entry and the overlapping
+Up-to-Right turn reached their expected cells. See the
+[nominal record](tests/results/movement-nominal.json) and
+[150 ms delay record](tests/results/movement-delay150.json). Handy's host event handling and
+throttling affect short wall-clock key timing; these checks supplement the
+clock-controlled host tests and do not prove hardware or WAN latency.
+
+### Earlier timing measurements
 
 For the input pacing change, an isolated Handy/FujiNet-PC run used a local
 10 Hz server, an open test map, and six 160 ms Right presses separated by

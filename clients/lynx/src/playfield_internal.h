@@ -88,37 +88,14 @@ static uint8_t visual_footprint_clear(const struct game_state *state,
     return 1;
 }
 
-static uint16_t visual_distance(uint8_t x0, uint8_t y0,
-                                uint8_t x1, uint8_t y1)
-{
-    return (uint16_t)(x0 > x1 ? x0 - x1 : x1 - x0) +
-           (y0 > y1 ? y0 - y1 : y1 - y0);
-}
-
 static void move_visual(uint8_t i, const struct game_state *state)
 {
     const struct game_player *player = &state->players[i];
     uint8_t target_x = (uint8_t)(player->x * 8);
     uint8_t target_y = (uint8_t)(player->y * 5);
     struct overlay_position *position = &visual[i];
-    uint8_t stick = state->input_joy & 15;
     uint8_t next_x;
     uint8_t next_y;
-    uint8_t aligned;
-    uint8_t previous_target_x = authoritative[i].x;
-    uint8_t previous_target_y = authoritative[i].y;
-    uint8_t server_moved_away = 0;
-    uint8_t server_move_matches_stick;
-    if (authoritative[i].valid &&
-        (authoritative[i].x != target_x || authoritative[i].y != target_y) &&
-        visual[i].valid &&
-        visual_distance(position->x, position->y, target_x, target_y) >
-        visual_distance(position->x, position->y,
-                        authoritative[i].x, authoritative[i].y))
-        server_moved_away = 1;
-    authoritative[i].x = target_x;
-    authoritative[i].y = target_y;
-    authoritative[i].valid = 1;
     if (!position->valid || (i != state->local_pid && (
         (position->x > target_x && position->x - target_x > 48) ||
         (target_x > position->x && target_x - position->x > 48) ||
@@ -137,77 +114,9 @@ static void move_visual(uint8_t i, const struct game_state *state)
         position->y = target_y;
         return;
     }
-    /* The server is authoritative. A new position farther from the visual
-       one means prediction took the wrong route (or missed a respawn).
-       Rejoin at the server cell instead of leaving shots and sprite apart. */
-    server_move_matches_stick =
-        (stick == 7 && target_y == previous_target_y &&
-         target_x > previous_target_x) ||
-        (stick == 11 && target_y == previous_target_y &&
-         target_x < previous_target_x) ||
-        (stick == 13 && target_x == previous_target_x &&
-         target_y > previous_target_y) ||
-        (stick == 14 && target_x == previous_target_x &&
-         target_y < previous_target_y);
-    if (i == state->local_pid && server_moved_away &&
-        ((position->x > target_x ? position->x - target_x :
-          target_x - position->x) > 8 ||
-         (position->y > target_y ? position->y - target_y :
-          target_y - position->y) > 5 ||
-         (stick != 15 && !server_move_matches_stick)) &&
-        visual_footprint_clear(state, i, target_x, target_y)) {
-        position->x = target_x;
-        position->y = target_y;
-        return;
-    }
-    /* The server moves at 10 Hz and a half-duplex snapshot can arrive late.
-       Keep the local sprite moving between snapshots, at most two cells ahead
-       of the acknowledged position. Collision checks prevent drawing through
-       walls while the server catches up. */
-    if (i == state->local_pid && !state->phase && !(state->input_joy & 0x10) &&
-        stick != 15) {
-        next_x = position->x;
-        next_y = position->y;
-        /* Finish the previous cell transition before turning a corner. */
-        if ((stick == 14 || stick == 13) && (next_x & 7)) {
-            if (target_x > next_x)
-                aligned = (uint8_t)(((next_x + 7) / 8) * 8);
-            else if (target_x < next_x)
-                aligned = (uint8_t)((next_x / 8) * 8);
-            else
-                aligned = (uint8_t)(((next_x + 4) / 8) * 8);
-            if (next_x < aligned) next_x = (uint8_t)(next_x +
-                (aligned - next_x > 2 ? 2 : aligned - next_x));
-            else next_x = (uint8_t)(next_x -
-                (next_x - aligned > 2 ? 2 : next_x - aligned));
-        } else if ((stick == 7 || stick == 11) && next_y % 5) {
-            if (target_y > next_y)
-                aligned = (uint8_t)(((next_y + 4) / 5) * 5);
-            else if (target_y < next_y)
-                aligned = (uint8_t)((next_y / 5) * 5);
-            else
-                aligned = (uint8_t)(((next_y + 2) / 5) * 5);
-            if (next_y < aligned) ++next_y;
-            else --next_y;
-        } else if (stick == 7 && next_x < target_x + 16 && next_x < 152)
-            next_x = (uint8_t)(next_x + 2);
-        else if (stick == 11 && next_x + 16 > target_x && next_x >= 2)
-            next_x = (uint8_t)(next_x - 2);
-        else if (stick == 13 && next_y < target_y + 10 && next_y < 90)
-            ++next_y;
-        else if (stick == 14 && next_y + 10 > target_y && next_y > 0)
-            --next_y;
-        if (visual_footprint_clear(state, i, next_x, next_y)) {
-            position->x = next_x;
-            position->y = next_y;
-        } else if ((position->x / 8 != player->x ||
-                    position->y / 5 != player->y) &&
-                   visual_footprint_clear(state, i, target_x, target_y)) {
-            position->x = target_x;
-            position->y = target_y;
-        }
-        return;
-    }
+    /* game.players already replays the inputs actually sent. Interpolate
+       only toward that cell, then stop there. Advancing beyond it based on
+       a held button made intersections and tap distances misleading. */
     next_x = position->x;
     next_y = position->y;
     if (next_x < target_x)

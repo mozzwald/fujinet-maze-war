@@ -29,6 +29,9 @@ test: | build
 	$(CC) -std=c99 -Wall -Wextra -Werror -I src \
 		-o build/protocol_test tests/protocol_test.c src/protocol.c
 	./build/protocol_test
+	$(CC) -std=c99 -Wall -Wextra -Werror -I src \
+		-o build/input_test tests/input_test.c src/protocol.c
+	./build/input_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
 		-o build/playfield_test tests/playfield_test.c tests/suzy_host.c src/playfield.c
 	./build/playfield_test

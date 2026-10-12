@@ -94,8 +94,8 @@ int main(void)
     playfield_draw(framebuffer + 4, 0, &state, 0);
     playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(50, 25) == 10); /* reached the next cell smoothly */
-    /* Held movement advances between server snapshots without moving the
-       authoritative cell. A wall stops the visual prediction. */
+    /* Held buttons alone must not move the sprite beyond the cell predicted
+       from sent inputs. This keeps stopping and turning aligned. */
     playfield_invalidate();
     memset(&state, 0, sizeof(state));
     state.map_ready = state.snapshot_ready = 1;
@@ -107,7 +107,8 @@ int main(void)
     state.input_joy = 7;
     playfield_draw(framebuffer + 4, 0, &state, 0);
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(44, 25) == 10);
+    assert(pen(42, 25) == 10);
+    assert(pen(44, 25) == 1);
     assert(state.players[0].x == 5);
     wall(&state, 6, 5);
     for (i = 0; i < 8; ++i)
@@ -210,8 +211,8 @@ int main(void)
     assert(pen(67, 27) == 9);
     assert_walls_unchanged(&state);
 
-    /* An authoritative sideways move must also win over a held Up input;
-       otherwise a freely moving prediction can diverge indefinitely. */
+    /* Follow a sideways correction even while Up is held. A held button
+       cannot divert the sprite from the transmitted/predicted target. */
     playfield_invalidate();
     memset(&state, 0, sizeof(state));
     state.map_ready = state.snapshot_ready = 1;
@@ -222,12 +223,13 @@ int main(void)
     state.input_joy = 14;
     playfield_draw(framebuffer + 4, 0, &state, 0);
     state.players[0].x = 6;
-    playfield_draw(framebuffer + 4, 0, &state, 0);
+    for (i = 0; i < 3; ++i)
+        playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(50, 25) == 10);
     assert(pen(42, 25) == 1);
 
-    /* Firing from a predicted position must bring the sprite back to the
-       authoritative shot origin before the firing frame is drawn. */
+    /* A firing frame settles any unfinished interpolation at the actual
+       predicted cell, keeping the muzzle and shot origin together. */
     playfield_invalidate();
     memset(&state, 0, sizeof(state));
     state.map_ready = state.snapshot_ready = 1;
@@ -237,12 +239,13 @@ int main(void)
     state.players[0].y = 5;
     state.input_joy = 7;
     playfield_draw(framebuffer + 4, 0, &state, 0);
+    state.players[0].x = 6;
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(44, 25) == 10);
+    assert(pen(45, 25) == 10);
     state.input_joy = 0x17;
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(42, 25) == 10);
-    assert(pen(44, 25) == 1);
+    assert(pen(50, 25) == 10);
+    assert(pen(45, 25) == 1);
 
     /* Suzy paints the last row, feet and textured border on both pages;
        the seven HUD rows remain untouched. */

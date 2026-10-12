@@ -38,6 +38,8 @@ extern enum link_state link_state;
 uint8_t netstream_start(const char *host, uint16_t port);
 /* Drain serial and parse as many queued bytes as the bounded budget allows. */
 void netstream_poll(void);
+/* Send pending actions/ACKs between render batches, without advancing timers. */
+void netstream_service(void);
 /* Call once per displayed frame; retries HELLO until WELCOME or deadline. */
 void netstream_tick(void);
 

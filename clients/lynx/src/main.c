@@ -1,6 +1,7 @@
 #include <lynx.h>
 #include <tgi.h>
 #include <joystick.h>
+#include <time.h>
 
 #include "netstream.h"
 #include "protocol.h"
@@ -15,23 +16,20 @@
 
 typedef char port_must_fit[(SERVER_PORT > 0 && SERVER_PORT <= 65535UL) ? 1 : -1];
 
-static uint8_t read_game_joy(uint8_t buttons)
+static void sample_buttons(uint8_t buttons)
 {
-    uint8_t stick = 15;
-    /* Server movement is cardinal. Resolve simultaneous directions before
-       encoding so a diagonal never reaches the game protocol. */
-    if (JOY_UP(buttons)) stick = 14;
-    else if (JOY_RIGHT(buttons)) stick = 7;
-    else if (JOY_DOWN(buttons)) stick = 13;
-    else if (JOY_LEFT(buttons)) stick = 11;
-    if (JOY_BTN_1(buttons)) stick |= 0x10;
-    return stick;
+    uint8_t directions = 0;
+    if (JOY_UP(buttons)) directions |= 1;
+    if (JOY_RIGHT(buttons)) directions |= 2;
+    if (JOY_DOWN(buttons)) directions |= 4;
+    if (JOY_LEFT(buttons)) directions |= 8;
+    game_sample_input(directions, JOY_BTN_1(buttons) != 0, (uint16_t)clock());
 }
 
 static void pump_game(void)
 {
-    game_set_joy(read_game_joy(joy_read(JOY_1)));
-    netstream_poll();
+    sample_buttons(joy_read(JOY_1));
+    netstream_service();
 }
 
 void main(void)
@@ -47,12 +45,9 @@ void main(void)
     render_draw(0, netstream_poll);
     netstream_start(SERVER_HOST, SERVER_PORT);
     for (;;) {
-        while (tgi_busy()) {
-            game_set_joy(read_game_joy(joy_read(JOY_1)));
-            netstream_poll();
-        }
+        while (tgi_busy()) pump_game();
         buttons = joy_read(JOY_1);
-        game_set_joy(read_game_joy(buttons));
+        sample_buttons(buttons);
         netstream_tick();
         diagnostics = JOY_BTN_2(buttons) != 0;
         render_draw(diagnostics, pump_game);

@@ -1,0 +1,472 @@
+{
+  "endpoint": "fujinet.online",
+  "port": 5025,
+  "input_lag_ms": 150.0,
+  "movement_results": [
+    {
+      "tap_ms": 60,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        4,
+        17
+      ]
+    },
+    {
+      "tap_ms": 120,
+      "before": [
+        4,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "tap_ms": 160,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        6,
+        17
+      ]
+    },
+    {
+      "turn": "Up then Right while Up held",
+      "after": [
+        7,
+        15
+      ]
+    }
+  ],
+  "applied_moves": [
+    {
+      "seq": 3,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 4,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 5,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 7,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 8,
+      "joy": 7,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        4,
+        17
+      ]
+    },
+    {
+      "seq": 9,
+      "joy": 15,
+      "before": [
+        4,
+        17
+      ],
+      "after": [
+        4,
+        17
+      ]
+    },
+    {
+      "seq": 10,
+      "joy": 15,
+      "before": [
+        4,
+        17
+      ],
+      "after": [
+        4,
+        17
+      ]
+    },
+    {
+      "seq": 11,
+      "joy": 7,
+      "before": [
+        4,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 12,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 13,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 14,
+      "joy": 7,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        6,
+        17
+      ]
+    },
+    {
+      "seq": 15,
+      "joy": 15,
+      "before": [
+        6,
+        17
+      ],
+      "after": [
+        6,
+        17
+      ]
+    },
+    {
+      "seq": 16,
+      "joy": 15,
+      "before": [
+        6,
+        17
+      ],
+      "after": [
+        6,
+        17
+      ]
+    },
+    {
+      "seq": 17,
+      "joy": 14,
+      "before": [
+        6,
+        17
+      ],
+      "after": [
+        6,
+        16
+      ]
+    },
+    {
+      "seq": 18,
+      "joy": 15,
+      "before": [
+        6,
+        16
+      ],
+      "after": [
+        6,
+        16
+      ]
+    },
+    {
+      "seq": 19,
+      "joy": 15,
+      "before": [
+        6,
+        16
+      ],
+      "after": [
+        6,
+        16
+      ]
+    },
+    {
+      "seq": 20,
+      "joy": 14,
+      "before": [
+        6,
+        16
+      ],
+      "after": [
+        6,
+        15
+      ]
+    },
+    {
+      "seq": 21,
+      "joy": 7,
+      "before": [
+        6,
+        15
+      ],
+      "after": [
+        7,
+        15
+      ]
+    },
+    {
+      "seq": 22,
+      "joy": 15,
+      "before": [
+        7,
+        15
+      ],
+      "after": [
+        7,
+        15
+      ]
+    },
+    {
+      "seq": 23,
+      "joy": 15,
+      "before": [
+        7,
+        15
+      ],
+      "after": [
+        7,
+        15
+      ]
+    },
+    {
+      "seq": 24,
+      "joy": 31,
+      "before": [
+        7,
+        15
+      ],
+      "after": [
+        7,
+        15
+      ]
+    },
+    {
+      "seq": 25,
+      "joy": 15,
+      "before": [
+        7,
+        15
+      ],
+      "after": [
+        7,
+        15
+      ]
+    },
+    {
+      "seq": 26,
+      "joy": 7,
+      "before": [
+        7,
+        15
+      ],
+      "after": [
+        8,
+        15
+      ]
+    },
+    {
+      "seq": 27,
+      "joy": 7,
+      "before": [
+        8,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    },
+    {
+      "seq": 28,
+      "joy": 15,
+      "before": [
+        9,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    },
+    {
+      "seq": 29,
+      "joy": 15,
+      "before": [
+        9,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    },
+    {
+      "seq": 30,
+      "joy": 15,
+      "before": [
+        9,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    },
+    {
+      "seq": 31,
+      "joy": 15,
+      "before": [
+        9,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    },
+    {
+      "seq": 32,
+      "joy": 15,
+      "before": [
+        9,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    },
+    {
+      "seq": 34,
+      "joy": 15,
+      "before": [
+        9,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    },
+    {
+      "seq": 36,
+      "joy": 15,
+      "before": [
+        9,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    },
+    {
+      "seq": 37,
+      "joy": 15,
+      "before": [
+        9,
+        15
+      ],
+      "after": [
+        9,
+        15
+      ]
+    }
+  ],
+  "rom_sha256": "4efc1284e38cf0f8664230326bf6a3b42a6e80555d41f707859f5c91e8470c83",
+  "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+  "received": {
+    "0x43": 1,
+    "0x45": 5,
+    "0x41": 32
+  },
+  "acknowledged": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "checks": [
+    "brick removal",
+    "bottom feet",
+    "border texture",
+    "fire input",
+    "movement input",
+    "diagnostics restoration",
+    "new round",
+    "60/120/160 ms taps each one cell",
+    "stop after release",
+    "narrow column entry",
+    "overlapping Up-to-Right turn"
+  ],
+  "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN",
+  "emulator_options": [
+    "-nosound",
+    "-nofullscreen",
+    "-noautoskip",
+    "-frameskip",
+    "0",
+    "-throttle"
+  ],
+  "initial_repeat_delay_ms": 250,
+  "held_repeat_period_ms": 100,
+  "limitations": "Controlled direct peer, no firmware/WAN/electrical half-duplex validation; host key timing is affected by Handy throttling."
+}

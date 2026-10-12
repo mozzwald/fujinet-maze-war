@@ -245,22 +245,28 @@ uint8_t netstream_start(const char *host, uint16_t port)
     return 1;
 }
 
-void netstream_tick(void)
+void netstream_service(void)
 {
     uint8_t payload[11];
     uint8_t len;
     uint8_t i;
     netstream_poll();
+    if (link_state != LINK_WELCOME) return;
+    for (i = 0; i < 2; ++i) {
+        len = game_next_outbound(payload, sizeof(payload));
+        if (!len) break;
+        if (!send_payload(payload, len)) {
+            link_state = LINK_TX_ERROR;
+            break;
+        }
+    }
+}
+
+void netstream_tick(void)
+{
+    netstream_service();
     if (link_state == LINK_WELCOME) {
         game_step();
-        for (i = 0; i < 2; ++i) {
-            len = game_next_outbound(payload, sizeof(payload));
-            if (!len) break;
-            if (!send_payload(payload, len)) {
-                link_state = LINK_TX_ERROR;
-                break;
-            }
-        }
         return;
     }
     if (link_state != LINK_WAIT_WELCOME)
