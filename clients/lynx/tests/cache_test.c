@@ -113,6 +113,9 @@ int main(void)
     for (frame = 0; frame < FRAMES; ++frame) {
         page = frame & 1;
         update(&state, frame);
+        /* Compare exact settled poses; interpolation timing has dedicated
+           path tests and intentionally differs from the frozen CPU renderer. */
+        cpu_playfield_invalidate();
         cpu_playfield_draw(pages[page], page, &state, 0);
         if (!page)
             for (y = 89; y < 95; ++y)

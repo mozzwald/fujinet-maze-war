@@ -2,6 +2,10 @@
 #define MAZE_LYNX_RENDER_H
 
 #include <stdint.h>
+struct render_timing {
+    uint16_t frame_ticks, draw_ticks, max_frame_ticks, max_draw_ticks;
+};
+extern struct render_timing render_timing;
 
 /* Identify the current cc65 TGI back page before direct framebuffer drawing. */
 void render_init(void (*pump)(void));

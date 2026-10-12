@@ -96,14 +96,16 @@ int main(void)
     for (frame = 0; frame < 4; ++frame) {
         draw(0); draw(1);
     }
+    game_input_tick(game.input_clock + GAME_MOVE_TICKS);
+    draw(0); draw(1);
     assert(pen(0, 50, 25) == 10 && pen(1, 50, 25) == 10);
-    game_sample_input(0, 0, 125);
+    game_sample_input(0, 0, 130);
     assert(game_next_outbound(out, sizeof(out)) == 5);
-    game_sample_input(2, 0, 126);
+    game_sample_input(2, 0, 131);
     assert(game_next_outbound(out, sizeof(out)) == 5);
     assert(game.players[0].x == 7);
     for (frame = 0; frame < 4; ++frame) { draw(0); draw(1); }
-    game_input_tick(132);
+    game_input_tick(137);
     assert(!game.deaths[1].active && game.players[1].respawning);
     cpu_playfield_invalidate();
     cpu_playfield_draw(expected, 1, &game, 0);

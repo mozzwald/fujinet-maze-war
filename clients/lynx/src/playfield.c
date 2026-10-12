@@ -443,3 +443,9 @@ void playfield_invalidate_page(uint8_t page_index)
 {
     if (page_index < 2) cached_valid[page_index] = 0;
 }
+#ifdef LYNX_RENDER_HOST
+void playfield_visual_position(uint8_t slot, uint8_t *x, uint8_t *y)
+{
+    *x = visual[slot].x; *y = visual[slot].y;
+}
+#endif

@@ -11,6 +11,15 @@
 #define GAME_REPEAT_DELAY 15 /* 250 ms at the configured 60 Hz display */
 #define GAME_REPEAT_PERIOD 6 /* 10 steps/second */
 #define GAME_REPEAT_PENDING 2
+#define GAME_REPEAT_MAX 4 /* Leave server queue room for turns and release. */
+#define GAME_MOTION_POINTS 8
+#define GAME_MOVE_TICKS 6
+struct game_motion {
+    uint16_t serial;
+    uint16_t at[GAME_MOTION_POINTS];
+    uint8_t epoch;
+    uint8_t x[GAME_MOTION_POINTS], y[GAME_MOTION_POINTS];
+};
 #define GAME_DEATH_FRAME_TICKS 8
 #define GAME_DEATH_TICKS (4 * GAME_DEATH_FRAME_TICKS)
 #define GAME_WINNER_DANCE_TICKS 300 /* Atari's five-second celebration */
@@ -87,6 +96,11 @@ struct game_state {
     uint8_t pending_count;
     uint8_t pending_seq[GAME_PENDING_INPUTS];
     uint8_t pending_joy[GAME_PENDING_INPUTS];
+    uint16_t pending_at[GAME_PENDING_INPUTS];
+    uint16_t ack_delay, ack_last, ack_samples, repeat_stalls, stall_at;
+    uint16_t intent_dropped;
+    uint8_t repeat_window, pending_highwater;
+    struct game_motion motion[GAME_PLAYERS];
     uint8_t fire_cue_frames;
     uint16_t input_clock;
     uint16_t repeat_at;

@@ -15,5 +15,8 @@ void playfield_invalidate_page(uint8_t page_index);
 /* Returns nonzero when this page's complete maze was repainted. */
 uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
                        const struct game_state *state, void (*pump)(void));
+#ifdef LYNX_RENDER_HOST
+void playfield_visual_position(uint8_t slot, uint8_t *x, uint8_t *y);
+#endif
 
 #endif

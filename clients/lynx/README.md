@@ -247,17 +247,23 @@ polling sends one repeat, never a burst to catch up. A new direction is sent
 without waiting for the repeat timer. If D-pad directions overlap, the newly
 pressed direction wins instead of a fixed Up/Right priority.
 
-Snapshot arrival no longer grants another movement input. Held repeats stop
-when two movement inputs are awaiting server acknowledgement, bounding the
-old-direction backlog on a slow connection. Explicit taps/turns retain their
-order. A full eight-entry replay ring waits for acknowledgements instead of
+Snapshot arrival no longer grants another movement input. Held repeats use
+a window of two to four outstanding movement inputs. The window grows with
+measured send-to-applied-ACK delay, including server tick and queue time,
+and returns to two after one second without ACK progress. Repeats also stop
+when four total inputs are pending, leaving replay capacity for explicit
+turns and release. Explicit taps/turns retain their order. A full eight-entry
+replay ring waits for acknowledgements instead of
 clearing prediction history. A released button cancels future held repeats;
 inputs already transmitted still have to be applied by the server.
 
-The local sprite interpolates only toward the cell predicted by transmitted
-inputs, then settles on that cell. It no longer drifts two additional cells
-based only on the held direction. This keeps the visible stopping cell aligned
-with the cell from which the server will accept a turn. The entire 8×5
+The local sprite retains the cell path predicted by transmitted inputs and
+traverses each step in six VBL ticks (100 ms), independently of render count.
+Queued turns begin at the shared cell boundary; drawing cannot substitute a
+diagonal shortcut. ACK replay preserves an unchanged predicted path, while an
+authoritative correction rejoins the corrected cell. The sprite settles at
+the last transmitted step, keeping its stopping cell aligned with the cell
+from which the server will accept a turn. The entire 8×5
 footprint is checked against walls and occupied cells; wizard and muzzle
 pixels are also clipped to walkable maze cells. If a wall blocks correction,
 the sprite rejoins the server's walkable target cell. Firing settles unfinished
@@ -268,6 +274,14 @@ waiting for a display swap. Clock ticks come from cc65's VBL counter, so slow
 rendering does not turn a 100 ms repeat interval into a frame-count delay.
 Host input tests cover latched taps, snapshot/press races, stop, overlapping
 turns, stalled acknowledgements, a full replay ring and clock rollover.
+Motion tests compare identical paths at 20 and 60 renders per second and
+check repeated same-tick draws, inside corners, corrections and shot origins.
+
+The final diagnostics line shows hexadecimal `W` (repeat window), `D`
+(filtered applied-ACK age), `Q` (pending input count), and `F` (last frame
+interval). `D` and `F` are in 60 Hz VBL ticks. Frame/draw timing maxima and
+repeat-stall/intent-overflow counters are also available in debugger state.
+The earlier `F` field remains the serial frame-error code.
 
 The movement emulator mode runs a controlled peer that applies one queued
 input per 10 Hz tick and acknowledges only applied inputs:
@@ -284,6 +298,20 @@ Up-to-Right turn reached their expected cells. See the
 [150 ms delay record](tests/results/movement-delay150.json). Handy's host event handling and
 throttling affect short wall-clock key timing; these checks supplement the
 clock-controlled host tests and do not prove hardware or WAN latency.
+
+For a repeatable held-movement comparison, run this separately from the
+movement checks, optionally selecting an older ROM with `--rom`:
+
+```sh
+python3 clients/lynx/tests/handy_render_smoke.py --latency-checks --input-lag-ms 300
+python3 clients/lynx/tests/handy_render_smoke.py --movement-checks --input-lag-ms 300
+```
+
+The peer delays input application, records transmitted and applied steps,
+and samples visible sprite positions. The 300 ms comparison improved from
+six to ten steps during a roughly 1.2-second hold; short taps and turns also
+passed. See [the measurement report](tests/LATENCY-RESULTS.md) for conditions
+and limits. These changes preserve the existing wire protocol.
 
 ### Death animation
 

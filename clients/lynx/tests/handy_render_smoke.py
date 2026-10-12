@@ -37,9 +37,10 @@ def main():
     parser.add_argument("--round-checks", action="store_true")
     parser.add_argument("--sound-checks", action="store_true", help="capture Handy SDL audio using a test-only preload")
     parser.add_argument("--input-lag-ms", type=float, default=0)
+    parser.add_argument("--latency-checks", action="store_true", help="measure held movement and visible pixel cadence in an empty corridor")
     args = parser.parse_args()
-    if sum((args.movement_checks, args.death_checks, args.round_checks)) > 1:
-        parser.error('run movement, death and round checks separately')
+    if sum((args.movement_checks, args.death_checks, args.round_checks, args.latency_checks)) > 1:
+        parser.error('run movement, death, round and latency checks separately')
     rom = args.rom.resolve()
     pc = Path.home() / 'lynx-pc'
     output = Path(tempfile.mkdtemp(prefix='maze-suzy-game-'))
@@ -59,9 +60,10 @@ def main():
     last_delta = 0
     input_queue = deque()
     local = [3,17]
-    dead_slots = set()
+    dead_slots = {1,2,3} if args.latency_checks else set()
     remote_positions = [[7,17],[11,17],[15,17]]
-    simulate_moves = args.movement_checks or args.death_checks
+    simulate_moves = args.movement_checks or args.death_checks or args.latency_checks
+    latency_results = {}
     death_results = []
     round_results = []
     applied_moves = []
@@ -119,7 +121,7 @@ def main():
                                    for slot,pos in enumerate(remote_positions,1))
                     if not occupied and not (maze()[cell//8] & (1 << (cell%8))):
                         local[:] = [x,y]
-                applied_moves.append(dict(seq=p[1], joy=p[3], before=before_cell, after=list(local)))
+                applied_moves.append(dict(seq=p[1], joy=p[3], before=before_cell, after=list(local), at=time.monotonic()))
             sequence = (sequence + 1) & 255
             coords = list(local)
             for slot,pos in enumerate(remote_positions,1):
@@ -217,6 +219,36 @@ def main():
             key_events.append(dict(key=name, down=down, at=time.monotonic()))
             xtest.fake_input(d,X.KeyPress if down else X.KeyRelease,d.keysym_to_keycode(string_to_keysym(name)))
             d.sync()
+        if args.latency_checks:
+            local[:] = [1,17]
+            input_queue.clear()
+            send([0x52,53,0,1,17,3,round_id])
+            service(.8,True)
+            initial = capture('latency-before')
+            robe = initial.getpixel((10,85))
+            samples = []
+            first_event = len(events)
+            held_at = time.monotonic()
+            key('Right',True)
+            while time.monotonic()-held_at < 1.2:
+                service(.02,True)
+                image = capture('latency-walking')
+                xs = [x for y in range(85,90) for x in range(8,152) if image.getpixel((x,y)) == robe]
+                samples.append(dict(ms=round((time.monotonic()-held_at)*1000,1),left=min(xs) if xs else None))
+            key('Right',False)
+            released_at = time.monotonic()
+            service(1.5,True)
+            stopped=list(local); service(.4,True)
+            assert local==stopped,'continued moving after release drain'
+            moves=[e for e in events[first_event:] if e['at']<=released_at and e['delta'][3]==7]
+            gaps=[round((b['at']-a['at'])*1000,1) for a,b in zip(moves[1:],moves[2:])]
+            visible=[s['left'] for s in samples if s['left'] is not None]
+            latency_results=dict(input_delay_ms=args.input_lag_ms,held_ms=round((released_at-held_at)*1000),
+                                 sent_steps=len(moves),applied_steps=local[0]-1,
+                                 largest_repeat_gap_ms=max(gaps,default=0),
+                                 distinct_visual_positions=len(set(visible)),samples=samples)
+            assert latency_results['sent_steps']==latency_results['applied_steps'],'prediction/server step count differs'
+            capture('latency-stopped')
         if args.death_checks:
             local[:] = [6,17]
             send([0x52,54,0,6,17,3,round_id])
@@ -385,7 +417,7 @@ def main():
         restarted = capture('new-round')
         assert restarted.getpixel((80,50)) == before.getpixel((80,50)), 'new round did not restore brick'
         result = dict(endpoint=endpoint, port=endpoint_port, input_lag_ms=args.input_lag_ms,
-                      movement_results=movement_results, death_results=death_results, round_results=round_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
+                      movement_results=movement_results, death_results=death_results, round_results=round_results, latency_results=latency_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
                       handy_sha256=hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),
                       received=dict(received), acknowledged=sorted(acked),
                       checks=['brick removal','bottom feet','border texture','fire input','movement input','diagnostics restoration','new round'],
@@ -412,7 +444,8 @@ def main():
             result['audio_checks']=checks
         (output/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps(dict(output=str(output), endpoint=endpoint, port=endpoint_port,
-                              movement_results=movement_results, death_results=death_results, round_results=round_results, rom_sha256=result['rom_sha256'],
+                              movement_results=movement_results, death_results=death_results, round_results=round_results,
+                              latency_results={k:v for k,v in latency_results.items() if k != 'samples'}, rom_sha256=result['rom_sha256'],
                               acknowledged=sorted(acked)),indent=2))
     finally:
         (output/'input-events.json').write_text(json.dumps(dict(received=events, applied=applied_moves, keys=key_events),indent=2)+'\n')

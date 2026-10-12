@@ -88,61 +88,64 @@ static uint8_t visual_footprint_clear(const struct game_state *state,
     return 1;
 }
 
+/* Consumed path index and fractional cell progress are independent of the
+   two cached display pages and of how often a render is called. */
+struct visual_motion {
+    uint16_t next, tick;
+    uint8_t epoch, progress, from_x, from_y;
+};
+static struct visual_motion motion[GAME_PLAYERS];
+
 static void move_visual(uint8_t i, const struct game_state *state)
 {
     const struct game_player *player = &state->players[i];
-    uint8_t target_x = (uint8_t)(player->x * 8);
-    uint8_t target_y = (uint8_t)(player->y * 5);
+    const struct game_motion *path = &state->motion[i];
     struct overlay_position *position = &visual[i];
-    uint8_t next_x;
-    uint8_t next_y;
-    if (!position->valid || (i != state->local_pid && (
-        (position->x > target_x && position->x - target_x > 48) ||
-        (target_x > position->x && target_x - position->x > 48) ||
-        (position->y > target_y && position->y - target_y > 30) ||
-        (target_y > position->y && target_y - position->y > 30)))) {
-        position->x = target_x;
-        position->y = target_y;
-        position->valid = 1;
+    struct visual_motion *m = &motion[i];
+    uint8_t target_x = player->x * 8, target_y = player->y * 5;
+    uint8_t index, x, y, take, progress, distance;
+    uint16_t elapsed, event_at;
+    if (!position->valid || m->epoch != path->epoch ||
+        (uint16_t)(path->serial - m->next) > GAME_MOTION_POINTS ||
+        (i == state->local_pid && (state->input_joy & 0x10))) {
+        /* Spawn/correction/history overflow/fire are explicit rejoin points.
+           A muzzle must originate at the same cell as its server shot. */
+        position->x = target_x; position->y = target_y; position->valid = 1;
+        m->next = path->serial; m->epoch = path->epoch;
+        m->progress = 0; m->tick = state->input_clock;
         return;
     }
-    /* Shots originate at the server cell. Rejoin before drawing the local
-       firing frame so the muzzle and authoritative shot agree. */
-    if (i == state->local_pid && (state->input_joy & 0x10) &&
-        visual_footprint_clear(state, i, target_x, target_y)) {
-        position->x = target_x;
-        position->y = target_y;
-        return;
+    while (m->next != path->serial) {
+        index = m->next % GAME_MOTION_POINTS;
+        x = path->x[index] * 8; y = path->y[index] * 5;
+        if (!m->progress) {
+            m->from_x = position->x; m->from_y = position->y;
+            distance = (x > position->x ? x-position->x : position->x-x);
+            distance += (y > position->y ? y-position->y : position->y-y);
+            if (!((distance == 8 && y == position->y) ||
+                  (distance == 5 && x == position->x))) break;
+            event_at = path->at[index];
+            if ((uint16_t)(event_at - m->tick) < 0x8000u) m->tick = event_at;
+        }
+        elapsed = (uint16_t)(state->input_clock - m->tick);
+        if (!elapsed || elapsed >= 0x8000u) return;
+        take = GAME_MOVE_TICKS - m->progress;
+        if (elapsed < take) take = (uint8_t)elapsed;
+        progress = m->progress + take;
+        x = x >= m->from_x ? m->from_x + (x-m->from_x)*progress/GAME_MOVE_TICKS :
+                            m->from_x - (m->from_x-x)*progress/GAME_MOVE_TICKS;
+        y = y >= m->from_y ? m->from_y + (y-m->from_y)*progress/GAME_MOVE_TICKS :
+                            m->from_y - (m->from_y-y)*progress/GAME_MOVE_TICKS;
+        if (!visual_footprint_clear(state,i,x,y)) break;
+        position->x = x; position->y = y;
+        m->tick += take; m->progress = progress;
+        if (progress != GAME_MOVE_TICKS) return;
+        ++m->next; m->progress = 0;
     }
-    /* game.players already replays the inputs actually sent. Interpolate
-       only toward that cell, then stop there. Advancing beyond it based on
-       a held button made intersections and tap distances misleading. */
-    next_x = position->x;
-    next_y = position->y;
-    if (next_x < target_x)
-        next_x = (uint8_t)(next_x +
-                 (target_x - next_x > 3 ? 3 : target_x - next_x));
-    else if (next_x > target_x)
-        next_x = (uint8_t)(next_x -
-                 (next_x - target_x > 3 ? 3 : next_x - target_x));
-    if (visual_footprint_clear(state, i, next_x, position->y))
-        position->x = next_x;
-    else if (visual_footprint_clear(state, i, target_x, target_y)) {
-        position->x = target_x;
-        position->y = target_y;
-        return;
+    /* No recorded route means an authoritative placement, never guessed
+       X-then-Y movement around a corner. Clipping remains a final safeguard. */
+    if (visual_footprint_clear(state,i,target_x,target_y)) {
+        position->x = target_x; position->y = target_y;
     }
-    if (next_y < target_y)
-        next_y = (uint8_t)(next_y +
-                 (target_y - next_y > 2 ? 2 : target_y - next_y));
-    else if (next_y > target_y)
-        next_y = (uint8_t)(next_y -
-                 (next_y - target_y > 2 ? 2 : next_y - target_y));
-    if (visual_footprint_clear(state, i, position->x, next_y))
-        position->y = next_y;
-    else if (visual_footprint_clear(state, i, target_x, target_y)) {
-        position->x = target_x;
-        position->y = target_y;
-    }
+    m->next = path->serial; m->progress = 0; m->tick = state->input_clock;
 }
-

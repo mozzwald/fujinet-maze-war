@@ -13,6 +13,9 @@
 #define BOARD_Y 13
 #define CELL 4
 #define HUD_X 86
+struct render_timing render_timing;
+static uint16_t last_render_at;
+static uint8_t timing_ready;
 
 /* TGI alternates these pages after each completed VBL swap. Suzy draws
    the full maze on each page, including memory across hardware registers. */
@@ -66,6 +69,7 @@ static const char *link_message(void)
 
 static void draw_diagnostics(void)
 {
+    char latency[24] = "W0000 D0000 Q0000 F0000";
     tgi_setcolor(COLOR_YELLOW);
     tgi_outtextxy(4, 2, "MAZE WAR LYNX");
     tgi_setcolor(link_state == LINK_WELCOME ? COLOR_LIGHTGREEN : COLOR_WHITE);
@@ -86,6 +90,13 @@ static void draw_diagnostics(void)
                          (game.map_ready << 1) | game.snapshot_ready));
     if (link_state == LINK_COMMAND_ERROR)
         render_small_text(4,98,command_error_text());
+    else {
+        hex_word(latency+1,game.repeat_window); latency[5]=' ';
+        hex_word(latency+7,game.ack_delay); latency[11]=' ';
+        hex_word(latency+13,game.pending_count); latency[17]=' ';
+        hex_word(latency+19,render_timing.frame_ticks);
+        render_small_text(4,98,latency);
+    }
 }
 
 static uint8_t brick_at(uint8_t x, uint8_t y)
@@ -407,6 +418,8 @@ void render_init(void (*pump)(void))
     uint8_t i;
     uint8_t changed0;
     uint8_t changed1;
+    memset(&render_timing,0,sizeof(render_timing));
+    timing_ready = 0;
     while (tgi_busy()) if (pump) pump();
     playfield_invalidate();
     hud_valid[0] = hud_valid[1] = 0;
@@ -429,6 +442,13 @@ void render_init(void (*pump)(void))
 
 void render_draw(uint8_t diagnostics, void (*pump)(void))
 {
+    uint16_t started = command_clock();
+    if (timing_ready) {
+        render_timing.frame_ticks = (uint16_t)(started-last_render_at);
+        if (render_timing.frame_ticks > render_timing.max_frame_ticks)
+            render_timing.max_frame_ticks = render_timing.frame_ticks;
+    }
+    last_render_at = started; timing_ready = 1;
     tgi_setbgcolor(COLOR_BLACK);
     if (diagnostics || !direct_page_ok) {
         playfield_invalidate();
@@ -444,4 +464,7 @@ void render_draw(uint8_t diagnostics, void (*pump)(void))
     tgi_updatedisplay();
     draw_page ^= 1;
     if (game.fire_cue_frames) --game.fire_cue_frames;
+    render_timing.draw_ticks = (uint16_t)(command_clock()-started);
+    if (render_timing.draw_ticks > render_timing.max_draw_ticks)
+        render_timing.max_draw_ticks = render_timing.draw_ticks;
 }

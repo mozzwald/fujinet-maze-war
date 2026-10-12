@@ -122,6 +122,25 @@ int main(void)
     assert(!game_next_outbound(out, sizeof(out)));
     game_input_tick(9);
     assert(game_next_outbound(out, sizeof(out)) == 5);
+    /* Slow applied ACKs expand only the held-repeat allowance. Four steps
+       still leave space for an explicit turn and neutral release. */
+    setup(); seq=out[1];
+    game_input_tick(18); snapshot(5,5,seq);
+    assert(game.ack_delay==18 && game.repeat_window==4);
+    game_sample_input(2,0,19);
+    assert(game_next_outbound(out,sizeof(out))==5);
+    for (i=0;i<3;++i) {
+        game_input_tick(34+i*6);
+        assert(game_next_outbound(out,sizeof(out))==5 && out[3]==7);
+    }
+    game_input_tick(52); assert(!game_next_outbound(out,sizeof(out)));
+    game_sample_input(1,0,53);
+    assert(game_next_outbound(out,sizeof(out))==5 && out[3]==14);
+    game_sample_input(0,0,54);
+    assert(game_next_outbound(out,sizeof(out))==5 && out[3]==15);
+    assert(game.pending_count==6 && game.pending_highwater==6);
+    game_input_tick(80); assert(game.repeat_window==2);
+    assert(!game_next_outbound(out,sizeof(out)));
     puts("input tests passed: taps, snapshot races, bounded repeats, stop, turns, clock wrap");
     return 0;
 }

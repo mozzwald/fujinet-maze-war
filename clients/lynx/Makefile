@@ -43,6 +43,9 @@ test: | build
 		-o build/input_test tests/input_test.c src/protocol.c
 	./build/input_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
+		-o build/motion_test tests/motion_test.c tests/suzy_host.c src/playfield.c src/protocol.c
+	./build/motion_test
+	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
 		-o build/playfield_test tests/playfield_test.c tests/suzy_host.c src/playfield.c src/protocol.c
 	./build/playfield_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \

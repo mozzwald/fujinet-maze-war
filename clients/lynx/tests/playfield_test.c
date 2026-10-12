@@ -111,7 +111,7 @@ int main(void)
     state.players[0].x = 6;
     playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(42, 25) == 1);  /* previous sprite was restored */
-    assert(pen(45, 25) == 10); /* only three pixels this frame */
+    assert(pen(50, 25) == 10); /* unrecorded placements rejoin directly */
     playfield_draw(framebuffer + 4, 0, &state, 0);
     playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(50, 25) == 10); /* reached the next cell smoothly */
@@ -262,7 +262,7 @@ int main(void)
     playfield_draw(framebuffer + 4, 0, &state, 0);
     state.players[0].x = 6;
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(45, 25) == 10);
+    assert(pen(50, 25) == 10);
     state.input_joy = 0x17;
     playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(50, 25) == 10);

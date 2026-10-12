@@ -92,6 +92,18 @@ static uint8_t round_newer(uint8_t candidate, uint8_t current)
     return delta != 0 && delta < 128;
 }
 
+static void motion_reset(uint8_t id)
+{
+    ++game.motion[id].epoch;
+    game.motion[id].serial = 0;
+}
+static void motion_append(uint8_t id, uint8_t x, uint8_t y)
+{
+    struct game_motion *m = &game.motion[id];
+    uint8_t n = m->serial % GAME_MOTION_POINTS;
+    m->x[n] = x; m->y[n] = y; m->at[n] = game.input_clock;
+    ++m->serial;
+}
 static void predict_input(uint8_t joy)
 {
     struct game_player *local;
@@ -134,13 +146,28 @@ static void replay_pending(void)
 static void discard_applied(uint8_t ack_seq)
 {
     uint8_t n = 0;
+    uint16_t sample;
     while (n < game.pending_count &&
            (uint8_t)(ack_seq - game.pending_seq[n]) < 128)
         ++n;
     if (!n) return;
+    /* Sample the newest applied input, avoiding an old input's queue time
+       when a snapshot acknowledges several entries at once. This measures
+       the whole feedback loop, including server tick phase, not just RTT. */
+    sample = (uint16_t)(game.input_clock - game.pending_at[n-1]);
+    if (sample < 120) {
+        if (!game.ack_samples || sample > game.ack_delay) game.ack_delay = sample;
+        else game.ack_delay = (game.ack_delay * 7 + sample) / 8;
+        ++game.ack_samples;
+        game.ack_last = game.input_clock;
+        game.repeat_window = game.ack_delay / GAME_REPEAT_PERIOD + 1;
+        if (game.repeat_window < GAME_REPEAT_PENDING) game.repeat_window = GAME_REPEAT_PENDING;
+        if (game.repeat_window > GAME_REPEAT_MAX) game.repeat_window = GAME_REPEAT_MAX;
+    }
     game.pending_count -= n;
     memmove(game.pending_seq, game.pending_seq + n, game.pending_count);
     memmove(game.pending_joy, game.pending_joy + n, game.pending_count);
+    memmove(game.pending_at, game.pending_at + n, game.pending_count * sizeof(uint16_t));
 }
 
 static void start_death(uint8_t id)
@@ -159,6 +186,7 @@ static void start_death(uint8_t id)
         game.sound_events[id] |= GAME_SOUND_DEATH;
     }
     player->respawning = 1;
+    motion_reset(id);
     player->x = player->y = 255;
     if (id == game.local_pid) {
         game.pending_count = 0;
@@ -170,6 +198,10 @@ static void start_death(uint8_t id)
 static void snapshot_apply(const uint8_t *p)
 {
     uint8_t i;
+    uint8_t old_x[GAME_PLAYERS], old_y[GAME_PLAYERS];
+    for (i=0; i<GAME_PLAYERS; ++i) {
+        old_x[i] = game.players[i].x; old_y[i] = game.players[i].y;
+    }
     game.local_pid = (p[2] >> 1) & 3;
     game.zombie_mask = (p[2] >> 3) & 15;
     for (i = 0; i < GAME_PLAYERS; ++i) {
@@ -191,6 +223,22 @@ static void snapshot_apply(const uint8_t *p)
     }
     if (p[2] & 0x80) discard_applied(p[19]);
     replay_pending();
+    for (i=0; i<GAME_PLAYERS; ++i) {
+        if (old_x[i] == game.players[i].x && old_y[i] == game.players[i].y) continue;
+        if (i == game.local_pid || !game.snapshot_ready ||
+            game.players[i].respawning || old_x[i] >= 20 || old_y[i] >= 19 ||
+            (old_x[i] != game.players[i].x && old_y[i] != game.players[i].y))
+            motion_reset(i); /* correction/teleport: never invent a corner */
+        else {
+            while (old_x[i] != game.players[i].x || old_y[i] != game.players[i].y) {
+                if (old_x[i] < game.players[i].x) ++old_x[i];
+                else if (old_x[i] > game.players[i].x) --old_x[i];
+                else if (old_y[i] < game.players[i].y) ++old_y[i];
+                else --old_y[i];
+                motion_append(i,old_x[i],old_y[i]);
+            }
+        }
+    }
     if (memcmp(game.names[game.local_pid], game.local_name, GAME_NAME_LEN) == 0)
         game.name_echoed = 1;
     game.snapshot_ready = 1;
@@ -220,6 +268,9 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
                 game.fire_cue_frames = 0;
                 game.intent_count = 0;
                 game.input_sent = 0;
+                for (i=0; i<GAME_PLAYERS; ++i) motion_reset(i);
+                game.repeat_window = GAME_REPEAT_PENDING;
+                game.ack_samples = game.ack_delay = 0;
                 memset(game.sound_events, 0, sizeof(game.sound_events));
                 game.sound_brick = 0;
             }
@@ -274,6 +325,8 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
         if ((p[5] & 1) && !(p[5] & 2)) {
             start_death(id);
         } else if (p[5] & 2) {
+            if (game.players[id].respawning || game.players[id].x != p[3] ||
+                game.players[id].y != p[4]) motion_reset(id);
             if (game.players[id].respawning || game.players[id].x != p[3] ||
                 game.players[id].y != p[4]) game.sound_events[id] |= GAME_SOUND_SPAWN;
             if (id == game.local_pid) {
@@ -342,6 +395,7 @@ void game_set_name(const char *name)
 void game_reset(void)
 {
     memset(&game, 0, sizeof(game));
+    game.repeat_window = GAME_REPEAT_PENDING;
     game.local_pid = 255;
     game.input_joy = game.sent_joy = 15;
     memcpy(game.local_name, configured_name, GAME_NAME_LEN);
@@ -415,6 +469,8 @@ void game_input_tick(uint16_t ticks)
 {
     uint8_t i;
     game.input_clock = ticks;
+    if (game.ack_samples && (uint16_t)(ticks - game.ack_last) >= 60)
+        game.repeat_window = GAME_REPEAT_PENDING;
     for (i = 0; i < GAME_PLAYERS; ++i)
         if (game.deaths[i].active &&
             (uint16_t)(ticks - game.deaths[i].started) >= GAME_DEATH_TICKS)
@@ -464,6 +520,8 @@ void game_set_joy(uint8_t joy)
             !game.players[game.local_pid].respawning && joy != 15 &&
             game.intent_count < GAME_INPUT_INTENTS)
             game.intents[game.intent_count++] = joy;
+        else if (game_ready() && joy != 15 && game.intent_count == GAME_INPUT_INTENTS)
+            ++game.intent_dropped;
         game.input_joy = joy;
         game.delta_due = 1;
     }
@@ -512,8 +570,14 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
             for (i = 0; i < game.pending_count; ++i)
                 if ((game.pending_joy[i] & 15) != 15 &&
                     !(game.pending_joy[i] & 0x10)) ++repeats_pending;
-            if (!(joy & 0x10) && repeats_pending >= GAME_REPEAT_PENDING)
+            if (!(joy & 0x10) && (repeats_pending >= game.repeat_window ||
+                                 game.pending_count >= GAME_REPEAT_MAX)) {
+                if (game.stall_at != game.input_clock) {
+                    ++game.repeat_stalls;
+                    game.stall_at = game.input_clock;
+                }
                 return 0;
+            }
         } else if ((uint16_t)(game.input_clock - game.last_input_at) < 60)
             return 0;
     }
@@ -530,12 +594,16 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
     if (game_ready()) {
         /* The replay ring also includes neutral and firing inputs. */
         game.pending_seq[game.pending_count] = out[1];
+        game.pending_at[game.pending_count] = game.input_clock;
         game.pending_joy[game.pending_count++] = joy;
+        if (game.pending_count > game.pending_highwater) game.pending_highwater = game.pending_count;
         old_x = game.players[game.local_pid].x;
         old_y = game.players[game.local_pid].y;
         predict_input(joy);
-        if (old_x != game.players[game.local_pid].x || old_y != game.players[game.local_pid].y)
+        if (old_x != game.players[game.local_pid].x || old_y != game.players[game.local_pid].y) {
+            motion_append(game.local_pid,game.players[game.local_pid].x,game.players[game.local_pid].y);
             game.sound_events[game.local_pid] |= GAME_SOUND_STEP;
+        }
         if ((joy & 0x10) && !(game.sent_joy & 0x10))
             game.sound_events[game.local_pid] |= GAME_SOUND_FIRE;
     }
