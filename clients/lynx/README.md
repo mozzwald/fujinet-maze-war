@@ -1,5 +1,9 @@
 # Maze War Lynx client (early playable view)
 
+See the [Suzy maze-cache benchmark results](bench/RESULTS.md) for measured
+renderer alternatives and the [benchmark guide](bench/README.md) to reproduce
+them. The benchmark cartridge is separate from the live client.
+
 This cartridge is an early playable view with a fixed server endpoint and
 name. It initializes the cc65 ComLynx serial driver at 62500 baud, 8 data bits, odd
 parity, one stop bit; sends FujiNet device `$70` command `$F0` with raw TCP

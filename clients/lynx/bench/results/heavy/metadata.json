@@ -1,0 +1,9 @@
+{
+  "traffic_hz": 100.0,
+  "offered_bytes_per_second": 1100.0,
+  "rom": "/home/mozzwald/fujicode/fujinet-maze-war/clients/lynx/build/render-bench.lnx",
+  "rom_sha256": "6084cb426e95cf20ea470022c009bc69010161e0f530bcbde96678da603bc9bc",
+  "handy": "/home/mozzwald/lynx-pc/handy_sdl",
+  "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+  "method": "Mikey timers 1/3/5, 24-bit microseconds; 60 Hz display"
+}
