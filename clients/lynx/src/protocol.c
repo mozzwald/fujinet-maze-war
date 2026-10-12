@@ -143,15 +143,43 @@ static void discard_applied(uint8_t ack_seq)
     memmove(game.pending_joy, game.pending_joy + n, game.pending_count);
 }
 
+static void start_death(uint8_t id)
+{
+    struct game_player *player = &game.players[id];
+    struct game_death *death = &game.deaths[id];
+    /* Pending respawn packets carry 0,0, not the death cell. Capture the
+       last live location before hiding the actor. Echoes never restart it. */
+    if (player->respawning) return;
+    if (game.snapshot_ready && player->x < 20 && player->y < 18 &&
+        ((game.seat_mask | game.zombie_mask) & (1u << id))) {
+        death->x = player->x;
+        death->y = player->y;
+        death->started = game.input_clock;
+        death->active = 1;
+    }
+    player->respawning = 1;
+    player->x = player->y = 255;
+    if (id == game.local_pid) {
+        game.pending_count = 0;
+        game.intent_count = 0;
+        game.fire_cue_frames = 0;
+    }
+}
+
 static void snapshot_apply(const uint8_t *p)
 {
     uint8_t i;
     game.local_pid = (p[2] >> 1) & 3;
     game.zombie_mask = (p[2] >> 3) & 15;
     for (i = 0; i < GAME_PLAYERS; ++i) {
-        game.players[i].x = p[3 + 2 * i];
-        game.players[i].y = p[4 + 2 * i];
-        game.players[i].respawning = p[3 + 2 * i] == 255;
+        if (p[3 + 2 * i] == 255) {
+            start_death(i);
+        } else if (!game.players[i].respawning) {
+            /* After a death, only explicit final placement can restore
+               occupancy. A stale live snapshot must not revive the body. */
+            game.players[i].x = p[3 + 2 * i];
+            game.players[i].y = p[4 + 2 * i];
+        }
         game.players[i].joy = p[11 + i];
         game.players[i].score = p[15 + i];
     }
@@ -167,6 +195,7 @@ static void snapshot_apply(const uint8_t *p)
 static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
 {
     uint8_t id;
+    uint8_t i;
     uint16_t index;
     (void)len;
     switch (p[0]) {
@@ -175,6 +204,10 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
         if (id == game.round_id || round_newer(id, game.round_id)) {
             if (id != game.round_id || !game.round_authorized) {
                 memset(game.shots, 0, sizeof(game.shots));
+                memset(game.deaths, 0, sizeof(game.deaths));
+                /* A new round can use snapshots for its initial placement. */
+                for (i = 0; i < GAME_PLAYERS; ++i)
+                    game.players[i].respawning = 0;
                 game.map_ready = 0;
                 game.snapshot_ready = 0;
                 game.pending_count = 0;
@@ -207,6 +240,7 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
             game.players[id].score = p[6 + id];
         memcpy(game.names, p + 11, sizeof(game.names));
         memset(game.shots, 0, sizeof(game.shots));
+        memset(game.deaths, 0, sizeof(game.deaths));
         break;
     case PKT_BRICK_FULL:
         if (p[51] == game.round_id) {
@@ -223,15 +257,16 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
     case PKT_RESPAWN:
         if (p[6] != game.round_id || game.phase != 0) break;
         id = p[2];
-        if (id == game.local_pid) {
-            game.pending_count = 0;
-            game.fire_cue_frames = 0;
-        }
-        game.players[id].respawning = (p[5] & 1) && !(p[5] & 2);
-        if (game.players[id].respawning) {
-            game.players[id].x = 255;
-            game.players[id].y = 255;
+        if ((p[5] & 1) && !(p[5] & 2)) {
+            start_death(id);
         } else if (p[5] & 2) {
+            if (id == game.local_pid) {
+                game.pending_count = 0;
+                game.intent_count = 0;
+                game.fire_cue_frames = 0;
+            }
+            game.deaths[id].active = 0;
+            game.players[id].respawning = 0;
             game.players[id].x = p[3];
             game.players[id].y = p[4];
         }
@@ -346,7 +381,12 @@ void game_step(void)
 
 void game_input_tick(uint16_t ticks)
 {
+    uint8_t i;
     game.input_clock = ticks;
+    for (i = 0; i < GAME_PLAYERS; ++i)
+        if (game.deaths[i].active &&
+            (uint16_t)(ticks - game.deaths[i].started) >= GAME_DEATH_TICKS)
+            game.deaths[i].active = 0;
 }
 
 void game_sample_input(uint8_t directions, uint8_t fire, uint16_t ticks)
@@ -374,7 +414,8 @@ void game_set_joy(uint8_t joy)
             game.fire_cue_frames = 3;
         /* Preserve sampled presses across a release during a render. Each
            intent is one discrete action, not a level-triggered repeat. */
-        if (game_ready() && joy != 15 &&
+        if (game_ready() && game.local_pid < GAME_PLAYERS &&
+            !game.players[game.local_pid].respawning && joy != 15 &&
             game.intent_count < GAME_INPUT_INTENTS)
             game.intents[game.intent_count++] = joy;
         game.input_joy = joy;
@@ -409,7 +450,8 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
         return 11;
     }
     if (game.local_pid >= 4 || game.leave_requested) return 0;
-    joy = game_ready() ? game.input_joy : 15;
+    joy = game_ready() && !game.players[game.local_pid].respawning ?
+        game.input_joy : 15;
     if (game_ready() && game.intent_count) {
         joy = game.intents[0];
         explicit_intent = 1;

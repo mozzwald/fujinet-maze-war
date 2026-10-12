@@ -1,0 +1,280 @@
+{
+  "endpoint": "fujinet.online",
+  "port": 5025,
+  "input_lag_ms": 0,
+  "movement_results": [],
+  "death_results": [
+    "explosion/smoke visible",
+    "walked through active cloud",
+    "living player drawn over cloud",
+    "cloud cleanup",
+    "echo did not restart animation",
+    "final respawn visible"
+  ],
+  "applied_moves": [
+    {
+      "seq": 3,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 4,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 5,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 7,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 8,
+      "joy": 15,
+      "before": [
+        6,
+        17
+      ],
+      "after": [
+        6,
+        17
+      ]
+    },
+    {
+      "seq": 9,
+      "joy": 7,
+      "before": [
+        6,
+        17
+      ],
+      "after": [
+        7,
+        17
+      ]
+    },
+    {
+      "seq": 10,
+      "joy": 15,
+      "before": [
+        7,
+        17
+      ],
+      "after": [
+        7,
+        17
+      ]
+    },
+    {
+      "seq": 11,
+      "joy": 15,
+      "before": [
+        7,
+        17
+      ],
+      "after": [
+        7,
+        17
+      ]
+    },
+    {
+      "seq": 12,
+      "joy": 31,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 13,
+      "joy": 15,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        3,
+        17
+      ]
+    },
+    {
+      "seq": 14,
+      "joy": 7,
+      "before": [
+        3,
+        17
+      ],
+      "after": [
+        4,
+        17
+      ]
+    },
+    {
+      "seq": 15,
+      "joy": 7,
+      "before": [
+        4,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 16,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 17,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 18,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 19,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 20,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 22,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 24,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    },
+    {
+      "seq": 25,
+      "joy": 15,
+      "before": [
+        5,
+        17
+      ],
+      "after": [
+        5,
+        17
+      ]
+    }
+  ],
+  "rom_sha256": "5e3dc4440545b9325664e9be7d4b54e1da1e88928e90e6b6e9e42d5b4bd774f5",
+  "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+  "received": {
+    "0x43": 1,
+    "0x45": 5,
+    "0x41": 20
+  },
+  "acknowledged": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "checks": [
+    "brick removal",
+    "bottom feet",
+    "border texture",
+    "fire input",
+    "movement input",
+    "diagnostics restoration",
+    "new round"
+  ],
+  "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+}

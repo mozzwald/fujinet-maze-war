@@ -31,6 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rom', type=Path, default=Path(__file__).resolve().parents[1] / 'build/maze-war-lynx.lnx')
     parser.add_argument("--movement-checks", action="store_true")
+    parser.add_argument("--death-checks", action="store_true")
     parser.add_argument("--input-lag-ms", type=float, default=0)
     args = parser.parse_args()
     rom = args.rom.resolve()
@@ -52,6 +53,10 @@ def main():
     last_delta = 0
     input_queue = deque()
     local = [3,17]
+    dead_slots = set()
+    remote_positions = [[7,17],[11,17],[15,17]]
+    simulate_moves = args.movement_checks or args.death_checks
+    death_results = []
     applied_moves = []
     next_snapshot = time.monotonic()
     movement_results = []
@@ -88,7 +93,7 @@ def main():
         def snapshot():
             nonlocal sequence
             nonlocal last_delta
-            if args.movement_checks and input_queue and time.monotonic() >= input_queue[0][1]:
+            if simulate_moves and input_queue and time.monotonic() >= input_queue[0][1]:
                 p, _ = input_queue.popleft()
                 last_delta = p[1]
                 before_cell = list(local)
@@ -98,12 +103,17 @@ def main():
                 x, y = local[0] + dx, local[1] + dy
                 if not (p[3] & 0x10) and 0 <= x < 20 and 0 <= y < 19:
                     cell = y*20+x
-                    if not (maze()[cell//8] & (1 << (cell%8))):
+                    occupied = any([x,y] == pos and slot not in dead_slots
+                                   for slot,pos in enumerate(remote_positions,1))
+                    if not occupied and not (maze()[cell//8] & (1 << (cell%8))):
                         local[:] = [x,y]
                 applied_moves.append(dict(seq=p[1], joy=p[3], before=before_cell, after=list(local)))
             sequence = (sequence + 1) & 255
-            send([0x40, sequence, 0x81, local[0],local[1],7,17,11,17,15,17,
-                  7,11,7,11,1,2,3,4,last_delta,round_id])
+            coords = list(local)
+            for slot,pos in enumerate(remote_positions,1):
+                coords.extend([255,255] if slot in dead_slots else pos)
+            send([0x40, sequence, 0x81]+coords+
+                 [7,11,7,11,1,2,3,4,last_delta,round_id])
 
         def service(seconds, snapshots=False):
             nonlocal last_delta, next_snapshot
@@ -129,7 +139,7 @@ def main():
                     if p[0] == 0x45:
                         acked.add(int.from_bytes(p[2:4], 'little'))
                     elif p[0] == 0x41:
-                        if args.movement_checks:
+                        if simulate_moves:
                             input_queue.append((p, time.monotonic() + args.input_lag_ms / 1000))
                         else:
                             last_delta = p[1]
@@ -157,7 +167,13 @@ def main():
 
         def capture(name):
             path = output / (name+'.png')
-            subprocess.run(['import', '-display', env['DISPLAY'], '-window', 'root', str(path)], check=True, timeout=10)
+            if d is None:
+                subprocess.run(['import', '-display', env['DISPLAY'], '-window', 'root', str(path)], check=True, timeout=10)
+            else:
+                root_window = d.screen().root
+                geometry = root_window.get_geometry()
+                raw = root_window.get_image(0,0,geometry.width,geometry.height,X.ZPixmap,0xffffffff)
+                Image.frombytes('RGB',(geometry.width,geometry.height),raw.data,'raw','BGRX').save(path)
             return Image.open(path).convert('RGB').crop((160,147,640,432)).resize((160,95), Image.Resampling.NEAREST)
 
         send([0x47,1,1,0,10])
@@ -187,6 +203,50 @@ def main():
             key_events.append(dict(key=name, down=down, at=time.monotonic()))
             xtest.fake_input(d,X.KeyPress if down else X.KeyRelease,d.keysym_to_keycode(string_to_keysym(name)))
             d.sync()
+        if args.death_checks:
+            local[:] = [6,17]
+            send([0x52,54,0,6,17,3,round_id])
+            service(.4,True)
+            floor = capture('death-before').getpixel((59,84))
+            dead_slots.add(1)
+            send([0x52,55,1,0,0,1,round_id])
+            for _ in range(10):
+                service(.04,True)
+                burst = capture('death-burst')
+                if burst.getpixel((59,84)) != floor:
+                    break
+            assert burst.getpixel((59,84)) != floor, 'explosion/smoke missing'
+            key('Right',True)
+            service(.1,True)
+            key('Right',False)
+            service(.2,True)
+            passing = capture('death-walk-through')
+            assert local == [7,17], f'dead cell blocked movement: {local}'
+            assert passing.getpixel((59,84)) != floor, 'cloud expired before traversal'
+            # Interpolation and facing change the occupied pixels. Look for
+            # the green robe inside the dead player's cell, over the cloud.
+            robe = {burst.getpixel((x,y)) for x in range(48,56) for y in range(85,90)
+                    if burst.getpixel((x,y))[1] > max(burst.getpixel((x,y))[::2])}
+            assert robe and any(passing.getpixel((x,y)) in robe
+                                for x in range(56,64) for y in range(85,90)), 'living player hidden by cloud'
+            service(.7,True)
+            expired = capture('death-cleared')
+            assert expired.getpixel((59,84)) == floor, 'smoke did not clear'
+            send([0x52,55,1,0,0,1,round_id])
+            service(.15,True)
+            assert capture('death-echo').getpixel((59,84)) == floor, 'duplicate restarted smoke'
+            remote_positions[0] = [10,17]
+            dead_slots.remove(1)
+            send([0x52,56,1,10,17,3,round_id])
+            service(.3,True)
+            spawned = capture('death-respawn')
+            assert spawned.crop((80,85,88,90)).tobytes() != expired.crop((80,85,88,90)).tobytes(), 'respawned wizard missing'
+            death_results = ['explosion/smoke visible', 'walked through active cloud',
+                             'living player drawn over cloud', 'cloud cleanup',
+                             'echo did not restart animation', 'final respawn visible']
+            local[:] = [3,17]
+            send([0x52,57,0,3,17,3,round_id])
+            service(.4,True)
         if args.movement_checks:
             # A real queued-step model applies one DELTA per 10 Hz tick and
             # acknowledges only that applied sequence, with optional delay.
@@ -245,14 +305,14 @@ def main():
         restarted = capture('new-round')
         assert restarted.getpixel((80,50)) == before.getpixel((80,50)), 'new round did not restore brick'
         result = dict(endpoint=endpoint, port=endpoint_port, input_lag_ms=args.input_lag_ms,
-                      movement_results=movement_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
+                      movement_results=movement_results, death_results=death_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
                       handy_sha256=hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),
                       received=dict(received), acknowledged=sorted(acked),
                       checks=['brick removal','bottom feet','border texture','fire input','movement input','diagnostics restoration','new round'],
                       method='Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN')
         (output/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps(dict(output=str(output), endpoint=endpoint, port=endpoint_port,
-                              movement_results=movement_results, rom_sha256=result['rom_sha256'],
+                              movement_results=movement_results, death_results=death_results, rom_sha256=result['rom_sha256'],
                               acknowledged=sorted(acked)),indent=2))
     finally:
         (output/'input-events.json').write_text(json.dumps(dict(received=events, applied=applied_moves, keys=key_events),indent=2)+'\n')

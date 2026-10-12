@@ -15,7 +15,7 @@ build:
 	mkdir -p build
 
 # Endpoint changes must relink even if the C sources are unchanged.
-$(TARGET): $(SOURCES) src/netstream.h src/frame.h src/protocol.h src/render.h src/playfield.h src/colors.h src/playfield_internal.h src/lynx.cfg Makefile FORCE | build
+$(TARGET): $(SOURCES) src/netstream.h src/frame.h src/protocol.h src/render.h src/playfield.h src/colors.h src/playfield_internal.h src/death_art.h src/lynx.cfg Makefile FORCE | build
 	$(CL65) -t lynx -O -I src -I $(CC65_ROOT)/include \
 		--asm-include-dir $(CC65_ROOT)/asminc -L $(CC65_ROOT)/lib \
 		-C src/lynx.cfg -m $(MAP) \
@@ -39,6 +39,10 @@ test: | build
 		-o build/cache_test tests/cache_test.c tests/suzy_host.c \
 		tests/reference_playfield.c src/playfield.c
 	./build/cache_test
+	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
+		-o build/death_test tests/death_test.c tests/suzy_host.c \
+		tests/reference_playfield.c src/protocol.c src/playfield.c
+	./build/death_test
 
 clean:
 	rm -rf build

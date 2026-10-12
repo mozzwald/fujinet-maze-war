@@ -11,6 +11,8 @@
 #define GAME_REPEAT_DELAY 15 /* 250 ms at the configured 60 Hz display */
 #define GAME_REPEAT_PERIOD 6 /* 10 steps/second */
 #define GAME_REPEAT_PENDING 2
+#define GAME_DEATH_FRAME_TICKS 8
+#define GAME_DEATH_TICKS (4 * GAME_DEATH_FRAME_TICKS)
 
 struct game_player {
     uint8_t x;
@@ -27,9 +29,16 @@ struct game_shot {
     uint8_t direction;
 };
 
+/* Presentation only: this location never participates in occupancy. */
+struct game_death {
+    uint16_t started;
+    uint8_t x, y, active;
+};
+
 struct game_state {
     struct game_player players[GAME_PLAYERS];
     struct game_shot shots[GAME_PLAYERS];
+    struct game_death deaths[GAME_PLAYERS];
     uint8_t names[GAME_PLAYERS][GAME_NAME_LEN];
     uint8_t local_name[GAME_NAME_LEN];
     uint8_t bricks[GAME_BRICK_BYTES];

@@ -8,6 +8,7 @@
 #include <tgi.h>
 #endif
 #include "playfield_internal.h"
+#include "death_art.h"
 
 /* Maze cache lives on the two display pages. Only changed cells and old
    overlay footprints are restored. CPU writes never touch video RAM. */
@@ -26,6 +27,9 @@ static uint8_t sprites_ready;
 static struct game_state frame_state;
 static uint8_t clipped_wizards[GAME_PLAYERS][26];
 static uint8_t fire_sprites[GAME_PLAYERS][3];
+static uint8_t death_sprites[4][64];
+static uint8_t clipped_deaths[GAME_PLAYERS][64];
+static struct overlay_position old_deaths[2][GAME_PLAYERS];
 static uint8_t have_round;
 static uint8_t visual_round;
 static void (*serial_pump)(void);
@@ -78,6 +82,26 @@ static void make_sprites(void)
         scbs[i].hsize = scbs[i].vsize = 0x100;
         for (x = 0; x < 8; ++x)
             scbs[i].penpal[x] = (uint8_t)(x * 0x22 + 1);
+    }
+    for (i = 0; i < 4; ++i) {
+        memset(death_sprites[i], 0, 64);
+        for (y = 0; y < 9; ++y) {
+            out = death_sprites[i] + y * 7;
+            *out++ = 7;
+            for (x = 0; x < 12; ++x) {
+                switch (death_art[i][y][x]) {
+                case 'W': pen = 15; break;
+                case 'Y': pen = 9; break;
+                case 'O': pen = 8; break;
+                case 'L': pen = 4; break;
+                case 'G': pen = 5; break;
+                case 'D': pen = 6; break;
+                default: pen = 0;
+                }
+                if (x & 1) out[x >> 1] |= pen;
+                else out[x >> 1] = pen << 4;
+            }
+        }
     }
     sprites_ready = 1;
 }
@@ -183,6 +207,53 @@ static void queue_fire(const struct game_state *state, uint8_t slot,
     queue(fire_sprites[slot], px, py, 1, 0);
 }
 
+static void draw_deaths(uint8_t page_index, const struct game_state *state)
+{
+    uint8_t i, x, y, row, col, image, cy, cx, previous_cx, clear;
+    uint16_t elapsed;
+    uint8_t *data;
+    const struct game_death *death;
+    for (i = 0; i < GAME_PLAYERS; ++i) {
+        old_deaths[page_index][i].valid = 0;
+        death = &state->deaths[i];
+        if (!death->active || state->phase ||
+            !((state->seat_mask | state->zombie_mask) & (1u << i)) ||
+            death->x >= 20 || death->y >= 18) continue;
+        elapsed = (uint16_t)(state->input_clock - death->started);
+        if (elapsed >= GAME_DEATH_TICKS) continue;
+        image = elapsed / GAME_DEATH_FRAME_TICKS;
+        x = death->x ? death->x * 8 - 2 : 0;
+        y = death->y ? death->y * 5 - 2 : 0;
+        data = clipped_deaths[i];
+        memcpy(data, death_sprites[image], 64);
+        for (row = 0; row < 9; ++row) {
+            if (y + row >= PLAYFIELD_H) {
+                memset(data + row * 7 + 1, 0, 6);
+                continue;
+            }
+            cy = (y + row) / 5;
+            previous_cx = 255;
+            clear = 0;
+            for (col = 0; col < 12; ++col) {
+                cx = (x + col) / 8;
+                if (cx != previous_cx) {
+                    clear = cx < 20 && (!state->map_ready ||
+                        !wall_at(state->bricks, cx, cy));
+                    previous_cx = cx;
+                }
+                if (!clear) {
+                    if (col & 1) data[row * 7 + 1 + col / 2] &= 0xf0;
+                    else data[row * 7 + 1 + col / 2] &= 0x0f;
+                }
+            }
+        }
+        queue(data, x, y, 1, 0);
+        old_deaths[page_index][i].x = x;
+        old_deaths[page_index][i].y = y;
+        old_deaths[page_index][i].valid = 1;
+    }
+}
+
 uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
                        const struct game_state *state, void (*pump)(void))
 {
@@ -214,12 +285,16 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
         memset(dirty, 0xff, sizeof(dirty));
         memset(old_players[page_index], 0, sizeof(old_players[page_index]));
         memset(old_shots[page_index], 0, sizeof(old_shots[page_index]));
+        memset(old_deaths[page_index], 0, sizeof(old_deaths[page_index]));
     } else {
         if (memcmp(cached_bricks[page_index], state->bricks, GAME_BRICK_BYTES)) {
             for (i = 0; i < GAME_BRICK_BYTES; ++i)
                 dirty[i] = cached_bricks[page_index][i] ^ state->bricks[i];
         } else memset(dirty, 0, sizeof(dirty));
         for (i = 0; i < GAME_PLAYERS; ++i) {
+            if (old_deaths[page_index][i].valid)
+                mark_rect(old_deaths[page_index][i].x,
+                          old_deaths[page_index][i].y, 12, 9);
             if (old_players[page_index][i].valid)
                 mark_rect(old_players[page_index][i].x,
                           old_players[page_index][i].y, 9, 5);
@@ -244,6 +319,8 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
         }
     }
     if (state->snapshot_ready) {
+        /* Clouds are scenery: live players and shots draw over them. */
+        draw_deaths(page_index, state);
         for (i = 0; i < GAME_PLAYERS; ++i) {
             shot = &state->shots[i];
             old_shots[page_index][i].valid = 0;
@@ -277,6 +354,7 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
         memset(authoritative, 0, sizeof(authoritative));
         memset(old_players[page_index], 0, sizeof(old_players[page_index]));
         memset(old_shots[page_index], 0, sizeof(old_shots[page_index]));
+        memset(old_deaths[page_index], 0, sizeof(old_deaths[page_index]));
     }
     flush();
     if (serial_pump) serial_pump();
@@ -291,6 +369,7 @@ void playfield_invalidate(void)
     memset(authoritative, 0, sizeof(authoritative));
     memset(old_players, 0, sizeof(old_players));
     memset(old_shots, 0, sizeof(old_shots));
+    memset(old_deaths, 0, sizeof(old_deaths));
     have_round = 0;
     queued = 0;
 }

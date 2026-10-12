@@ -111,6 +111,35 @@ Up-to-Right turn reached their expected cells. See the
 throttling affect short wall-clock key timing; these checks supplement the
 clock-controlled host tests and do not prove hardware or WAN latency.
 
+### Death animation
+
+A server death notice replaces the wizard at its last known cell with a
+four-stage burst, puff, smoke cloud, and fading wisps. Each stage lasts eight
+VBL ticks (about 533 ms total). The pending notice's placeholder coordinates
+are ignored. Duplicate notices do not restart the effect; a snapshot can also
+start it if the pending notice arrives late. Joining while a player is already
+dead produces no effect without a known death location.
+
+The victim immediately stops occupying its cell. Other players can walk
+through the animation and draw over it. Only the server's final respawn
+placement restores the victim; stale live snapshots cannot restore a blocking
+body during the death interval. Local pending movement is cleared on death.
+
+Clouds use the existing Suzy batches, with their previous footprint restored
+from maze tiles on each display page. Pixels are clipped around walls and the
+HUD. Host tests cover all stages, nonblocking movement, player layering,
+duplicate notices, respawn, clock rollover, and cleanup of both pages,
+including bottom-row and edge cases. Run the production ROM in Handy with:
+
+```sh
+python3 clients/lynx/tests/handy_render_smoke.py --death-checks
+```
+
+This uses a controlled local ComLynx peer to check visible effects, walking
+through an active cloud, cleanup, duplicate suppression, and final respawn.
+It does not exercise FujiNet firmware, the live server, or physical serial
+timing. See the [emulator record](tests/results/death-animation.json).
+
 ### Earlier timing measurements
 
 For the input pacing change, an isolated Handy/FujiNet-PC run used a local
