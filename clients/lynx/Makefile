@@ -42,6 +42,9 @@ test: | build
 	$(CC) -std=c99 -Wall -Wextra -Werror -I src \
 		-o build/input_test tests/input_test.c src/protocol.c
 	./build/input_test
+	$(CC) -std=c99 -Wall -Wextra -Werror -I src \
+		-o build/retry_test tests/retry_test.c src/protocol.c
+	./build/retry_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
 		-o build/motion_test tests/motion_test.c tests/suzy_host.c src/playfield.c src/protocol.c
 	./build/motion_test

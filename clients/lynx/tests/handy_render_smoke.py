@@ -38,9 +38,13 @@ def main():
     parser.add_argument("--sound-checks", action="store_true", help="capture Handy SDL audio using a test-only preload")
     parser.add_argument("--input-lag-ms", type=float, default=0)
     parser.add_argument("--latency-checks", action="store_true", help="measure held movement and visible pixel cadence in an empty corridor")
+    parser.add_argument("--recovery-checks", action="store_true", help="drop held movement until its window fills and check retry recovery without another key press")
+    parser.add_argument("--expect-stall", action="store_true", help="record an older ROM's missing recovery; requires --recovery-checks")
     args = parser.parse_args()
-    if sum((args.movement_checks, args.death_checks, args.round_checks, args.latency_checks)) > 1:
-        parser.error('run movement, death, round and latency checks separately')
+    if sum((args.movement_checks, args.death_checks, args.round_checks, args.latency_checks, args.recovery_checks)) > 1:
+        parser.error('run movement, death, round, latency and recovery checks separately')
+    if args.expect_stall and not args.recovery_checks:
+        parser.error('--expect-stall requires --recovery-checks')
     rom = args.rom.resolve()
     pc = Path.home() / 'lynx-pc'
     output = Path(tempfile.mkdtemp(prefix='maze-suzy-game-'))
@@ -60,10 +64,15 @@ def main():
     last_delta = 0
     input_queue = deque()
     local = [3,17]
-    dead_slots = {1,2,3} if args.latency_checks else set()
+    dead_slots = {1,2,3} if args.latency_checks or args.recovery_checks else set()
     remote_positions = [[7,17],[11,17],[15,17]]
-    simulate_moves = args.movement_checks or args.death_checks or args.latency_checks
+    simulate_moves = args.movement_checks or args.death_checks or args.latency_checks or args.recovery_checks
     latency_results = {}
+    recovery_results = {}
+    drop_moves = 0
+    dropped_inputs = []
+    last_admitted = None
+    duplicate_inputs = 0
     death_results = []
     round_results = []
     applied_moves = []
@@ -130,7 +139,7 @@ def main():
                  [7,11,7,11,1,2,3,4,last_delta,round_id])
 
         def service(seconds, snapshots=False):
-            nonlocal last_delta, next_snapshot
+            nonlocal last_delta, next_snapshot, last_admitted, drop_moves, duplicate_inputs
             end = time.monotonic() + seconds
             while time.monotonic() < end:
                 if snapshots and time.monotonic() >= next_snapshot:
@@ -154,7 +163,20 @@ def main():
                         acked.add(int.from_bytes(p[2:4], 'little'))
                     elif p[0] == 0x41:
                         if simulate_moves:
-                            input_queue.append((p, time.monotonic() + args.input_lag_ms / 1000))
+                            drop = False
+                            if drop_moves and p[3] == 7:
+                                if any(item[1] == p[1] for item in dropped_inputs):
+                                    drop_moves = 0 # Let the first retry recover the link.
+                                else:
+                                    dropped_inputs.append(list(p))
+                                    drop = True
+                            if drop:
+                                pass
+                            elif last_admitted is not None and not 0 < ((p[1]-last_admitted) & 255) < 128:
+                                duplicate_inputs += 1
+                            elif len(input_queue) < 6:
+                                input_queue.append((p, time.monotonic() + args.input_lag_ms / 1000))
+                                last_admitted = p[1]
                         else:
                             last_delta = p[1]
                         events.append(dict(delta=list(p), at=time.monotonic()))
@@ -219,6 +241,35 @@ def main():
             key_events.append(dict(key=name, down=down, at=time.monotonic()))
             xtest.fake_input(d,X.KeyPress if down else X.KeyRelease,d.keysym_to_keycode(string_to_keysym(name)))
             d.sync()
+        if args.recovery_checks:
+            local[:] = [1,17]
+            input_queue.clear()
+            send([0x52,53,0,1,17,3,round_id])
+            service(.8,True)
+            drop_moves = 1
+            first_event, first_applied = len(events), len(applied_moves)
+            key('Right',True)
+            service(3.4,True)
+            steps_while_held = local[0]-1
+            key('Right',False)
+            service(1.5,True)
+            stopped = list(local); service(.4,True)
+            drop_moves = 0
+            assert local == stopped, 'recovery moved again after release drain'
+            assert 2 <= len(dropped_inputs) <= 4, 'did not fill bounded movement window'
+            tail = dropped_inputs[-1][1]
+            tail_packets = [e for e in events[first_event:] if e['delta'][1]==tail]
+            tail_applied = [e for e in applied_moves[first_applied:] if e['seq']==tail]
+            recovery_results = dict(dropped_inputs=list(dropped_inputs),steps_while_held=steps_while_held,
+                                    tail_transmissions=len(tail_packets),tail_applications=len(tail_applied),
+                                    duplicates_rejected=duplicate_inputs,stopped_at=stopped,
+                                    expected_stall=args.expect_stall)
+            if args.expect_stall:
+                assert steps_while_held==0 and not tail_applied, 'older ROM unexpectedly recovered'
+            else:
+                assert steps_while_held>=3, 'held movement did not recover without a new press'
+                assert len(tail_packets)>=2 and len(tail_applied)==1, 'retry lost or applied twice'
+            capture('recovery-stopped')
         if args.latency_checks:
             local[:] = [1,17]
             input_queue.clear()
@@ -417,7 +468,7 @@ def main():
         restarted = capture('new-round')
         assert restarted.getpixel((80,50)) == before.getpixel((80,50)), 'new round did not restore brick'
         result = dict(endpoint=endpoint, port=endpoint_port, input_lag_ms=args.input_lag_ms,
-                      movement_results=movement_results, death_results=death_results, round_results=round_results, latency_results=latency_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
+                      movement_results=movement_results, death_results=death_results, round_results=round_results, latency_results=latency_results, recovery_results=recovery_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
                       handy_sha256=hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),
                       received=dict(received), acknowledged=sorted(acked),
                       checks=['brick removal','bottom feet','border texture','fire input','movement input','diagnostics restoration','new round'],
@@ -446,6 +497,7 @@ def main():
         print(json.dumps(dict(output=str(output), endpoint=endpoint, port=endpoint_port,
                               movement_results=movement_results, death_results=death_results, round_results=round_results,
                               latency_results={k:v for k,v in latency_results.items() if k != 'samples'}, rom_sha256=result['rom_sha256'],
+                              recovery_results=recovery_results,
                               acknowledged=sorted(acked)),indent=2))
     finally:
         (output/'input-events.json').write_text(json.dumps(dict(received=events, applied=applied_moves, keys=key_events),indent=2)+'\n')

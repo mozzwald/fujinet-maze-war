@@ -881,17 +881,14 @@ static const char *transport_delta_format_name(
   }
 }
 
-static int delta_seq_is_fresh(struct client_slot *c, uint8_t seq) {
+static int delta_seq_is_fresh(const struct client_slot *c, uint8_t seq) {
   if (!c->have_delta_seq) {
-    c->have_delta_seq = 1;
-    c->last_delta_seq = seq;
     return 1;
   }
   uint8_t diff = (uint8_t)(seq - c->last_delta_seq);
   if (diff == 0 || diff >= 0x80) {
     return 0;
   }
-  c->last_delta_seq = seq;
   return 1;
 }
 
@@ -1195,6 +1192,7 @@ static void reliable_tick(struct client_slot *clients, uint64_t now, int debug) 
 
 static void reliable_ack(struct client_slot *client, int slot, uint16_t ack,
                          uint64_t now, int debug) {
+  int advanced = 0;
   if ((uint16_t)(ack - client->reliable_sent_rev) < 0x8000u &&
       ack != client->reliable_sent_rev) {
     if (debug) {
@@ -1203,11 +1201,16 @@ static void reliable_ack(struct client_slot *client, int slot, uint16_t ack,
     }
     return;
   }
-  if (ack == client->reliable_acked_rev &&
-      client->reliable_count > 0 &&
-      now - client->reliable_last_fast_ms >= RELIABLE_FAST_MS) {
-    client->reliable_last_fast_ms = now;
-    reliable_send_from(client, now, "fast", slot, debug);
+  if (ack == client->reliable_acked_rev) {
+    if (client->reliable_count > 0 &&
+        now - client->reliable_last_fast_ms >= RELIABLE_FAST_MS) {
+      client->reliable_last_fast_ms = now;
+      reliable_send_from(client, now, "fast", slot, debug);
+    }
+    return;
+  }
+  if ((uint16_t)(ack - client->reliable_acked_rev) >= 0x8000u) {
+    /* A stale ACK cannot advance the queue or request a fast retransmit. */
     return;
   }
   while (client->reliable_count > 0) {
@@ -1220,11 +1223,12 @@ static void reliable_ack(struct client_slot *client, int slot, uint16_t ack,
                                       RELIABLE_QUEUE_MAX);
     client->reliable_count--;
     client->reliable_acked_rev = rev;
+    advanced = 1;
     if (debug) {
       printf("ACK reliable slot=%d rev=%u\n", slot, (unsigned)rev);
     }
   }
-  if (client->reliable_count > 0) {
+  if (advanced && client->reliable_count > 0) {
     reliable_send_from(client, now, "advance", slot, debug);
   }
 }
@@ -1450,11 +1454,6 @@ static void handle_client_packet(struct room *room, int slot,
         }
         return;
       }
-      if (debug) {
-        printf("transport accepted slot=%d format=%s seq=%u joy=%02X\n",
-               slot, transport_delta_format_name(delta.format),
-               (unsigned)delta.seq, (unsigned)delta.joy);
-      }
       {
         struct client_slot *c = &clients[slot];
         uint8_t last = (uint8_t)((c->input_head + c->input_count +
@@ -1487,16 +1486,25 @@ static void handle_client_packet(struct room *room, int slot,
           c->input_q[tail].joy = delta.joy;
           c->input_q[tail].ready_at_ms = now + (uint64_t)room->config.lag_ms;
           c->input_count++;
-        } else if (debug) {
-          /* Not acked: the client keeps it pending and replays it. */
-          printf("DROP DELTA slot=%d queue-full seq=%u\n", slot,
-                 (unsigned)delta.seq);
+        } else {
+          /* No admission means no sequence progress. The same input may be
+             retried once there is room, unless a newer input passed it. */
+          if (debug) {
+            printf("DROP DELTA slot=%d queue-full seq=%u\n", slot,
+                   (unsigned)delta.seq);
+          }
+          return;
         }
+        c->have_delta_seq = 1;
+        c->last_delta_seq = delta.seq;
       }
       room->last_input_ms[pid] = now;
       clients[slot].transport.accepted_delta++;
       global_transport->accepted_delta++;
       if (debug) {
+        printf("transport accepted slot=%d format=%s seq=%u joy=%02X\n",
+               slot, transport_delta_format_name(delta.format),
+               (unsigned)delta.seq, (unsigned)delta.joy);
         printf("DELTA slot=%d pid=%u ", slot, pid);
         debug_joy(delta.joy);
       }

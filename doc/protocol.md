@@ -183,6 +183,8 @@ Server behavior:
 - Client identity is bound to the accepted TCP connection (slot), not trusted from payload.
 - Incoming DELTA is accepted only if payload `pid` (or swapped `pid`) matches that slot.
 - DELTA seq is filtered per slot: duplicate or too-old packets are dropped.
+  Freshness advances only after queue admission or neutral folding; a
+  queue-full rejection does not consume its sequence.
 - Invalid `joy` bytes (bits 5..7 set or invalid stick nibble) are dropped.
 - A stale or future `round_id` is discarded without advancing the applied-input ACK.
 - During intermission, matching neutral DELTAs are liveness heartbeats and do
@@ -409,6 +411,10 @@ Behavior:
   copies of the stored wrapper packet.
 - Clients apply only the next expected revision. A gap is not applied; the
   client re-ACKs the highest applied revision so the server can retransmit.
+- Duplicate ACKs of the highest acknowledged revision request a fast resend
+  at most once per 75 ms. Stale ACKs and ACKs of unsent revisions are ignored.
+  Only an ACK that advances the queue sends the next event immediately;
+  the ordinary 300 ms resend timeout remains available for loss recovery.
 - Clients consume and ACK a valid old-round event to advance the reliable
   stream while suppressing its gameplay effect.
 - Direct brick/respawn repeats, name rotation, and periodic full-map repair
@@ -552,11 +558,19 @@ identity or session-resume mechanism.
   video-rate adjustment rather than pretending the shared packet sequence is a
   simulation clock.
 - The per-client input queue holds six entries. Overflow drops the arriving
-  command without applying it. Current receive freshness has already advanced,
-  and a subsequent cumulative ACK can pass the dropped sequence; clients must
-  not assume overflow is repaired by retransmitting that sequence or by local
-  pending replay. This is an outstanding contract issue recorded in
-  `planning/phases/04-render-state-separation/04-LAG-REVIEW.md`.
+  command without applying it or advancing receive freshness. Retrying the
+  same sequence may admit it once capacity is available. Already admitted
+  sequences are ignored, whether still queued or applied, so retries never
+  repeat an action. A newer admitted sequence still makes an older lost one
+  stale, and a subsequent cumulative ACK can pass it. This format cannot
+  guarantee recovery of every missing command; clients must reconcile to
+  authoritative state.
+- The Lynx retries only its newest pending input when fresh input cannot be
+  sent. It retains that input's sequence, joy and round, does not predict it
+  again, and waits between 500 ms and two seconds based on applied-ACK age.
+  Explicit turns/releases and reliable-event ACKs take priority. This repairs
+  a lost tail that would otherwise fill the movement window indefinitely;
+  it does not recover earlier inputs overtaken by a newer admitted sequence.
 - Snapshot `seq` is a shared packet sequence, not a simulation timestamp.
   The current wire format supplies no movement phase or dedicated server tick.
 

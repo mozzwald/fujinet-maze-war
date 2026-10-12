@@ -14,6 +14,8 @@
 #define GAME_REPEAT_MAX 4 /* Leave server queue room for turns and release. */
 #define GAME_MOTION_POINTS 8
 #define GAME_MOVE_TICKS 6
+#define GAME_RETRY_MIN 30 /* 500 ms; at most two retry frames/second. */
+#define GAME_RETRY_MAX 120 /* Cap recovery timeout at two seconds. */
 struct game_motion {
     uint16_t serial;
     uint16_t at[GAME_MOTION_POINTS];
@@ -99,6 +101,7 @@ struct game_state {
     uint16_t pending_at[GAME_PENDING_INPUTS];
     uint16_t ack_delay, ack_last, ack_samples, repeat_stalls, stall_at;
     uint16_t intent_dropped;
+    uint16_t retry_at, input_retries;
     uint8_t repeat_window, pending_highwater;
     struct game_motion motion[GAME_PLAYERS];
     uint8_t fire_cue_frames;

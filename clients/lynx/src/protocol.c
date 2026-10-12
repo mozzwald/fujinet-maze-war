@@ -158,7 +158,7 @@ static void discard_applied(uint8_t ack_seq)
     if (sample < 120) {
         if (!game.ack_samples || sample > game.ack_delay) game.ack_delay = sample;
         else game.ack_delay = (game.ack_delay * 7 + sample) / 8;
-        ++game.ack_samples;
+        if (game.ack_samples != 65535u) ++game.ack_samples;
         game.ack_last = game.input_clock;
         game.repeat_window = game.ack_delay / GAME_REPEAT_PERIOD + 1;
         if (game.repeat_window < GAME_REPEAT_PENDING) game.repeat_window = GAME_REPEAT_PENDING;
@@ -529,6 +529,30 @@ void game_set_joy(uint8_t joy)
         game.players[game.local_pid].joy = joy;
 }
 
+static uint8_t retry_pending(uint8_t *out)
+{
+    uint16_t timeout = game.ack_delay * 2 + 12;
+    uint8_t tail;
+    if (!game_ready() || !game.pending_count ||
+        game.players[game.local_pid].respawning) return 0;
+    if (timeout < GAME_RETRY_MIN) timeout = GAME_RETRY_MIN;
+    if (timeout > GAME_RETRY_MAX) timeout = GAME_RETRY_MAX;
+    tail = game.pending_count - 1;
+    if ((uint16_t)(game.input_clock - game.pending_at[tail]) < timeout ||
+        (uint16_t)(game.input_clock - game.retry_at) < timeout) return 0;
+    /* Only the newest pending sequence can still be admitted by the legacy
+       server's freshness filter. Retries never predict another action or
+       consume a sequence, and never overtake a fresh turn/release. */
+    out[0] = PKT_DELTA;
+    out[1] = game.pending_seq[tail];
+    out[2] = game.local_pid;
+    out[3] = game.pending_joy[tail];
+    out[4] = game.round_id;
+    game.retry_at = game.input_clock;
+    ++game.input_retries;
+    return 5;
+}
+
 uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
 {
     uint8_t joy;
@@ -566,7 +590,7 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
             /* A snapshot never grants another move. Late service sends one
                repeat and starts a new interval, with no catch-up burst. */
             if ((uint16_t)(game.input_clock - game.repeat_at) >= 0x8000u)
-                return 0;
+                return retry_pending(out);
             for (i = 0; i < game.pending_count; ++i)
                 if ((game.pending_joy[i] & 15) != 15 &&
                     !(game.pending_joy[i] & 0x10)) ++repeats_pending;
@@ -576,12 +600,13 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
                     ++game.repeat_stalls;
                     game.stall_at = game.input_clock;
                 }
-                return 0;
+                return retry_pending(out);
             }
         } else if ((uint16_t)(game.input_clock - game.last_input_at) < 60)
-            return 0;
+            return retry_pending(out);
     }
-    if (game_ready() && game.pending_count == GAME_PENDING_INPUTS) return 0;
+    if (game_ready() && game.pending_count == GAME_PENDING_INPUTS)
+        return retry_pending(out);
     out[0] = PKT_DELTA;
     out[1] = game.tx_seq++;
     out[2] = game.local_pid;
@@ -608,6 +633,7 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
             game.sound_events[game.local_pid] |= GAME_SOUND_FIRE;
     }
     game.last_input_at = game.input_clock;
+    game.retry_at = game.input_clock;
     game.sent_joy = joy;
     game.input_sent = 1;
     if ((joy & 15) != 15)

@@ -41,7 +41,8 @@ int main(void)
     assert(!game_next_outbound(out, sizeof(out)));
     snapshot(6, 5, seq);
     game_input_tick(50);
-    assert(!game_next_outbound(out, sizeof(out)));
+    assert(game_next_outbound(out, sizeof(out)) == 5 && out[3] == 15);
+    assert(out[1] == (uint8_t)(seq + 1)); /* retry pending release */
     assert(game.players[0].x == 6);
 
     /* Snapshots arriving just after the press must not create a second cell. */
@@ -60,7 +61,8 @@ int main(void)
     assert(game.players[0].x == 7);
     /* No unbounded backlog when the acknowledgement stalls. */
     game_input_tick(100);
-    assert(!game_next_outbound(out, sizeof(out)));
+    assert(game_next_outbound(out, sizeof(out)) == 5 && out[3] == 7);
+    assert(out[1] == (uint8_t)(seq + 1)); /* same pending repeat */
     assert(game.players[0].x == 7);
     snapshot(7, 5, out[1]);
     assert(game_next_outbound(out, sizeof(out)) == 5 && out[3] == 7);

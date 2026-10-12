@@ -1,0 +1,154 @@
+{
+  "date": "2026-10-12",
+  "method": "Handy SDL production cartridges, private ComLynx peer, 3.4-second hold. Drop every new directional input until the bounded window fills, then admit the first same-sequence retry. Not a physical serial or WAN test.",
+  "before": {
+    "dropped_inputs": [
+      [
+        65,
+        9,
+        0,
+        7,
+        1
+      ],
+      [
+        65,
+        10,
+        0,
+        7,
+        1
+      ],
+      [
+        65,
+        11,
+        0,
+        7,
+        1
+      ],
+      [
+        65,
+        12,
+        0,
+        7,
+        1
+      ]
+    ],
+    "steps_while_held": 0,
+    "tail_transmissions": 1,
+    "tail_applications": 0,
+    "duplicates_rejected": 0,
+    "stopped_at": [
+      1,
+      17
+    ],
+    "expected_stall": true,
+    "rom_sha256": "8dfb01beb6f90afe3a9f466166c49fe7f41c03594a75b693d21dcb7e405bcacb",
+    "checks": [
+      "brick removal",
+      "bottom feet",
+      "border texture",
+      "fire input",
+      "movement input",
+      "diagnostics restoration",
+      "new round"
+    ],
+    "first_applied_move_ms": null
+  },
+  "after": {
+    "dropped_inputs": [
+      [
+        65,
+        9,
+        0,
+        7,
+        1
+      ],
+      [
+        65,
+        10,
+        0,
+        7,
+        1
+      ],
+      [
+        65,
+        11,
+        0,
+        7,
+        1
+      ],
+      [
+        65,
+        12,
+        0,
+        7,
+        1
+      ]
+    ],
+    "steps_while_held": 17,
+    "tail_transmissions": 2,
+    "tail_applications": 1,
+    "duplicates_rejected": 1,
+    "stopped_at": [
+      18,
+      17
+    ],
+    "expected_stall": false,
+    "rom_sha256": "ca0d9aacac8df2c45f7a0cd0b0bc69d1e58fa6920f92153c9c3e2903f8e95e2c",
+    "checks": [
+      "brick removal",
+      "bottom feet",
+      "border texture",
+      "fire input",
+      "movement input",
+      "diagnostics restoration",
+      "new round"
+    ],
+    "first_applied_move_ms": 1591.8
+  },
+  "delayed_movement_checks": {
+    "input_application_delay_ms": 300,
+    "results": [
+      {
+        "tap_ms": 60,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          4,
+          17
+        ]
+      },
+      {
+        "tap_ms": 120,
+        "before": [
+          4,
+          17
+        ],
+        "after": [
+          5,
+          17
+        ]
+      },
+      {
+        "tap_ms": 160,
+        "before": [
+          5,
+          17
+        ],
+        "after": [
+          6,
+          17
+        ]
+      },
+      {
+        "turn": "Up then Right while Up held",
+        "after": [
+          7,
+          15
+        ]
+      }
+    ],
+    "rom_sha256": "ca0d9aacac8df2c45f7a0cd0b0bc69d1e58fa6920f92153c9c3e2903f8e95e2c"
+  }
+}

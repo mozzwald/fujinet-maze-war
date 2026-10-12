@@ -257,6 +257,16 @@ replay ring waits for acknowledgements instead of
 clearing prediction history. A released button cancels future held repeats;
 inputs already transmitted still have to be applied by the server.
 
+When fresh input cannot be sent, the newest pending input can be retried
+after 500 ms to two seconds, based on measured ACK age. The retry keeps the
+same sequence and never predicts another move or sound. Reliable-event ACKs,
+fresh turns and release take priority. This prevents a lost tail from leaving
+held movement permanently stalled. The legacy cumulative ACK cannot recover
+an earlier lost step once a newer step has passed it; server corrections
+remain authoritative. The updated server also permits retries of queue-full
+rejections and rate-limits duplicate reliable ACK resends, without changing
+packet formats or requiring changes to other clients.
+
 The local sprite retains the cell path predicted by transmitted inputs and
 traverses each step in six VBL ticks (100 ms), independently of render count.
 Queued turns begin at the shared cell boundary; drawing cannot substitute a
@@ -281,6 +291,7 @@ The final diagnostics line shows hexadecimal `W` (repeat window), `D`
 (filtered applied-ACK age), `Q` (pending input count), and `F` (last frame
 interval). `D` and `F` are in 60 Hz VBL ticks. Frame/draw timing maxima and
 repeat-stall/intent-overflow counters are also available in debugger state.
+`game.input_retries` counts same-sequence retry transmissions.
 The earlier `F` field remains the serial frame-error code.
 
 The movement emulator mode runs a controlled peer that applies one queued
@@ -312,6 +323,20 @@ and samples visible sprite positions. The 300 ms comparison improved from
 six to ten steps during a roughly 1.2-second hold; short taps and turns also
 passed. See [the measurement report](tests/LATENCY-RESULTS.md) for conditions
 and limits. These changes preserve the existing wire protocol.
+
+The loss-recovery mode drops new held movement until the bounded window
+fills, then lets a same-sequence retry through. It verifies movement resumes
+without another key press, the retry is applied once, and release stops it:
+
+```sh
+python3 clients/lynx/tests/handy_render_smoke.py --recovery-checks
+```
+
+Use `--expect-stall --rom /path/to/older.lnx` to record the previous behavior.
+The peer models sequence filtering and six-entry admission; it is separate
+from the real-server checks in `tests/server_recovery_smoke.sh` at repo root.
+See [the recovery measurements](tests/RECOVERY-RESULTS.md). Server improvements
+take effect on live rooms only after deploying the updated game server.
 
 ### Death animation
 
