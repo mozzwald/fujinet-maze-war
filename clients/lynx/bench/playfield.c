@@ -1,4 +1,4 @@
-/* Share the shipped movement, collision, art, and CPU renderer verbatim.
+/* Share the frozen pre-integration movement, collision, art and CPU renderer.
    This file is linked only into the benchmark cartridge. */
 #ifdef LYNX_BENCH_HOST
 #include "suzy_host.h"
@@ -13,7 +13,7 @@
 #define playfield_invalidate cpu_playfield_invalidate
 #define playfield_invalidate_page cpu_playfield_invalidate_page
 #define playfield_bottom_row cpu_playfield_bottom_row
-#include "../src/playfield.c"
+#include "reference_playfield.c"
 #undef playfield_draw
 #undef playfield_invalidate
 #undef playfield_invalidate_page

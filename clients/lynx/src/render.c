@@ -13,8 +13,8 @@
 #define CELL 4
 #define HUD_X 86
 
-/* TGI alternates these pages after each completed VBL swap. The CPU paints
-   rows 0..88 on page 0; Suzy owns the strip across hardware registers. */
+/* TGI alternates these pages after each completed VBL swap. Suzy draws
+   the full maze on each page, including memory across hardware registers. */
 static uint8_t *const frame_page[2] = {
     (uint8_t *)0xe018, (uint8_t *)0xc038
 };
@@ -290,30 +290,6 @@ static void draw_score(uint8_t slot)
     }
 }
 
-static void draw_bottom_row(uint8_t y)
-{
-    const uint8_t *pixels = playfield_bottom_row(y);
-    uint8_t x;
-    uint8_t first;
-    uint8_t color;
-    uint8_t next_color;
-    if (!pixels) return;
-    x = 0;
-    while (x < PLAYFIELD_W) {
-        color = (x & 1) ? (pixels[x >> 1] & 15) :
-                          (pixels[x >> 1] >> 4);
-        first = x++;
-        while (x < PLAYFIELD_W) {
-            next_color = (x & 1) ? (pixels[x >> 1] & 15) :
-                                   (pixels[x >> 1] >> 4);
-            if (next_color != color) break;
-            ++x;
-        }
-        tgi_setcolor(color);
-        tgi_bar(first, y, x - 1, y);
-    }
-}
-
 static uint8_t status_code(void)
 {
     if (link_state != LINK_WELCOME) return (uint8_t)(link_state + 1);
@@ -347,19 +323,12 @@ static void draw_scores_if_changed(void)
 static void draw_full_map(void (*pump)(void))
 {
     uint8_t status = status_code();
-    uint8_t copied;
-    uint8_t y;
     char result[8] = "P1 WINS";
     if (status != previous_status[draw_page]) {
         playfield_invalidate_page(draw_page);
         previous_status[draw_page] = status;
     }
-    copied = playfield_draw(frame_page[draw_page], draw_page, &game, pump);
-    if (draw_page == 0) {
-        if (copied)
-            for (y = 90; y < PLAYFIELD_H; ++y) draw_bottom_row(y);
-        draw_bottom_row(89);
-    }
+    playfield_draw(frame_page[draw_page], draw_page, &game, pump);
     draw_scores_if_changed();
     if (status) {
         tgi_setcolor(COLOR_BLACK);

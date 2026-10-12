@@ -1,0 +1,28 @@
+{
+  "endpoint": "fujinet.online",
+  "port": 5025,
+  "rom_sha256": "b6865c4b1a3ec1bc2d7d8e1b34014752004c4ea8c39b7b7cce15376eadc3c6cc",
+  "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+  "received": {
+    "0x43": 1,
+    "0x45": 5,
+    "0x41": 68
+  },
+  "acknowledged": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "checks": [
+    "brick removal",
+    "bottom feet",
+    "border texture",
+    "fire input",
+    "movement input",
+    "diagnostics restoration",
+    "new round"
+  ],
+  "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+}

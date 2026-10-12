@@ -2,14 +2,16 @@
 
 This separate cartridge compares the shipped renderer with two prototypes:
 
-1. **CPU current:** unchanged `src/playfield.c` and `src/render.c`.
+1. **CPU current:** frozen pre-integration `reference_playfield.c` and
+   `reference_render.c` from game commit `312356d`.
 2. **CPU changed cells:** the same CPU bitmap renderer, patching destroyed
    cells in its background cache and on both display pages.
 3. **Native Suzy:** cached maze tiles on both display pages; restore tiles
    touched by old player/shot rectangles, patch changed bricks, and draw
    transparent native sprites. Compare batches of 4, 8, and 16 SCBs.
 
-The production ROM and firmware are unchanged. The benchmark ROM connects
+The benchmark is separate from production renderer changes. Firmware is
+unchanged. The benchmark ROM connects
 to an isolated measurement peer and is not a live-server client.
 
 ## Build and run
@@ -91,4 +93,6 @@ round/menu transitions, live input transmission, and the local firing flash
 need production integration and acceptance testing before replacing the live
 renderer.
 
-See [RESULTS.md](RESULTS.md) for the measured comparison.
+See [RESULTS.md](RESULTS.md) for the measured comparison. Captured results
+and source hashes identify the original run at commit `ae0d40d`; subsequent
+reference-source relocation can change the rebuilt cartridge hash.

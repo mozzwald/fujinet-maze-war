@@ -2,7 +2,7 @@ CL65 ?= cl65
 CC ?= cc
 CC65_ROOT ?= /usr/share/cc65
 TARGET = ../build/render-bench.lnx
-SOURCES = main.c playfield.c netstream.c clock.s ../src/frame.c ../src/protocol.c ../src/render.c
+SOURCES = main.c playfield.c netstream.c clock.s ../src/frame.c ../src/protocol.c reference_render.c
 .PHONY: all test
 all:
 	mkdir -p ../build

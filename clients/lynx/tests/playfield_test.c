@@ -1,4 +1,5 @@
 #include "playfield.h"
+#include "suzy_host.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -6,7 +7,7 @@
 static uint8_t framebuffer[PLAYFIELD_PAGE_BYTES + 8];
 static uint8_t framebuffer1[PLAYFIELD_PAGE_BYTES + 8];
 static uint8_t wall_background[PLAYFIELD_STRIDE * PLAYFIELD_H];
-static uint8_t blocked_frame[PLAYFIELD_PAGE0_CPU_ROWS * PLAYFIELD_STRIDE];
+static uint8_t blocked_frame[PLAYFIELD_H * PLAYFIELD_STRIDE];
 
 static uint8_t pen(uint8_t x, uint8_t y)
 {
@@ -243,34 +244,29 @@ int main(void)
     assert(pen(42, 25) == 10);
     assert(pen(44, 25) == 1);
 
-    /* The CPU must leave page 0's Suzy/Mikey mapped rows untouched even when
-       a player stands on the last playable maze row. Page 1 has full RAM. */
+    /* Suzy paints the last row, feet and textured border on both pages;
+       the seven HUD rows remain untouched. */
     playfield_invalidate();
     memset(&state, 0, sizeof(state));
     memset(framebuffer, 0xa5, sizeof(framebuffer));
     memset(framebuffer1, 0xa5, sizeof(framebuffer1));
     state.map_ready = state.snapshot_ready = 1;
     state.seat_mask = 1;
-    state.local_pid = 0;
     state.input_joy = 15;
     state.players[0].x = 5;
     state.players[0].y = 17;
     wall(&state, 5, 18);
     assert(playfield_draw(framebuffer + 4, 0, &state, 0));
-    {
-        const uint8_t *row = playfield_bottom_row(89);
-        const uint8_t *border = playfield_bottom_row(90);
-        assert(row && border);
-        assert((row[41 >> 1] & 15) == 10); /* bottom-row wizard foot */
-        assert((border[40 >> 1] >> 4) == 13); /* blue border base */
-        assert((border[43 >> 1] & 15) == 14); /* lighter blue dot */
-    }
-    for (offset = PLAYFIELD_PAGE0_CPU_ROWS * PLAYFIELD_STRIDE;
+    assert(pen(41, 89) == 10);
+    assert(pen(40, 90) == 13);
+    assert(pen(43, 90) == 14);
+    for (offset = PLAYFIELD_H * PLAYFIELD_STRIDE;
          offset < PLAYFIELD_PAGE_BYTES; ++offset)
         assert(framebuffer[4 + offset] == 0xa5);
     assert(playfield_draw(framebuffer1 + 4, 1, &state, 0));
     assert((framebuffer1[4 + 89 * PLAYFIELD_STRIDE + (41 >> 1)] & 15) == 10);
-    assert(framebuffer1[4 + 94 * PLAYFIELD_STRIDE + 20] != 0xa5);
-    puts("playfield tests passed");
+    assert((framebuffer1[4 + 90 * PLAYFIELD_STRIDE + (43 >> 1)] & 15) == 14);
+    assert(suzy_test_max_batch() == 8);
+    puts("playfield tests passed (native Suzy, maximum batch eight)");
     return 0;
 }

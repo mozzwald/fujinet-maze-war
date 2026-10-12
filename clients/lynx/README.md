@@ -114,21 +114,47 @@ following the Atari 8 client's composition. After the player's October 9
 screenshots showed the seven-pixel wizard crossing four-pixel maze rows, the
 rows grew to five pixels and the wizard was redrawn to fit one cell. A custom
 3×4 score font fits all eight name characters plus a two-digit score for each
-of four players on the HUD strip. The CPU tile painter writes only the safe
-top 89 pixel rows of page 0. It stages row 89, including the wizard's feet,
-for TGI to draw on that page; TGI also draws the exact textured background
-for rows 90–94. Page 1 is ordinary RAM and receives all rows directly. A
-Handy probe found that CPU writes into `$FC00` disabled TGI drawing, so the
-89-row limit is covered by a host regression test. A bottom-row Handy capture
-confirmed the wizard's foot pixels on row 89 and both blue shades in the
-border, with 19 sampled movement changes and no sprite pixels on walls. A
-later 21-second local session showed the
-textured full map, side-view wizard, score line, movement,
-and fire. It still recorded intermittent frame errors (3 bad frames, with
-the latest classified as COBS and 1 counted as CRC; no RX-ring or serial-status
-overflow), so link
-health remains an acceptance item. Physical Lynx display timing remains to be
-checked.
+of four players on the HUD strip.
+
+The production renderer now uses native Suzy SCB chains capped at eight
+sprites. Both display pages cache their maze independently; a brick change
+patches only that cell, and old player/shot footprints are restored with maze
+tiles before transparent actors are drawn. All 95 maze rows, including the
+textured bottom border and last-row feet, use the same path. The seven HUD
+rows retain their existing TGI drawing and per-page change detection.
+The CPU no longer writes the maze bitmap across hardware registers.
+
+Serial interrupts buffer bytes during Suzy drawing; foreground input and
+packet polling runs before and after each batch. Each frame copies game state
+before drawing so packets received between batches cannot mix map revisions
+or player positions within that frame. Round changes, diagnostics and status
+transitions invalidate the appropriate page caches. Movement/collision logic,
+player colors, local shoulder marker and firing flash are preserved.
+
+Run the production renderer tests with `make -C clients/lynx test`. These
+include movement/wall checks and comparison with the frozen CPU reference
+across 60 frames, both pages, destroyed bricks, cleared shots and firing
+flashes, plus serial mutation during drawing and cache lifecycle checks.
+The original benchmark's 240 pixel comparisons remain independently runnable
+with `make -C clients/lynx/bench test`.
+
+For an isolated emulator smoke test of the production live-endpoint ROM:
+
+```sh
+python3 clients/lynx/tests/handy_render_smoke.py
+```
+
+This requires the installed Handy/boot image, Xvfb, ImageMagick, Python Xlib
+and Pillow. It uses a private display, temporary config and ephemeral
+localhost ComLynx peer; it does not forward the ROM's live endpoint or use
+FujiNet credentials. It checks reliable ACKs, brick removal, feet/border
+pixels, movement/fire transmission, diagnostics restoration and new-round
+maze restoration with 10 Hz snapshots. Screenshots, hashes and results are
+written under `/tmp/maze-suzy-game-*`, and children are stopped on exit.
+The October 12 integrated production ROM passed these checks; its
+[smoke-test record](tests/results/suzy-integration.json) includes ROM/emulator
+hashes and acknowledged revisions. This is not
+physical half-duplex or WAN validation; live hardware testing remains needed.
 
 The existing firmware has no Lynx-reachable stop command once raw NetStream
 is active. This client does not claim stop/reconnect support; closing its
