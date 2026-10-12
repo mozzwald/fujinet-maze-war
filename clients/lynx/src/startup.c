@@ -116,6 +116,8 @@ static void lobby_screen(uint8_t result, uint8_t selected)
     tgi_setcolor(COLOR_WHITE);
     render_small_text(4,86,"A JOIN  B DEFAULT  LEFT RIGHT PAGE");
     render_small_text(4,93,"OPT1 REFRESH  OPT2 EDIT NAME");
+    if (result == LOBBY_ERROR || !saved)
+        render_small_text(4,80,command_error_text());
     if (!saved) { tgi_setcolor(COLOR_YELLOW); render_small_text(72,17,"NAME NOT SAVED"); }
     show();
 }

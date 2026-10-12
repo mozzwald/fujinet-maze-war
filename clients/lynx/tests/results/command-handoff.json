@@ -1,0 +1,84 @@
+{
+  "date": "2026-10-12",
+  "hardware_confirmation": "Confirmed working by user on real Lynx hardware on 2026-10-12; sprite fix also confirmed in emulation.",
+  "scope": "Client command handoff; firmware source unchanged, existing FujiNet PC binary only",
+  "host_checks": [
+    "original client fails delayed-tail regression",
+    "updated client passes delayed-tail and noisy-ACK cases",
+    "NAK remains an error",
+    "response CRC/length validation retained",
+    "silent completion and continuous noise time out",
+    "deadline handles clock wrap",
+    "all Lynx host tests pass"
+  ],
+  "live_rom_sha256": "c5b287a4e5b481e0d1aba0615b0387972ce1041da4937b09d89ca6aaab414c6a",
+  "handy_runs": [
+    {
+      "firmware": true,
+      "new_name": true,
+      "failed_save": false,
+      "http404": false,
+      "edit_checks": false,
+      "reload": false,
+      "name": "A       ",
+      "http_requests": [
+        "/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+      ],
+      "rom_sha256": "74ac84dfa245d94d573c39ebaa5a674029359a6291ef800fe0081e9e6da55cdf",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ],
+      "firmware_sha256": "fc9b517c8d7b1426815138ab9aade144f10b1a6f2928b59cdda375d4b1314689"
+    },
+    {
+      "firmware": false,
+      "ack_noise": true,
+      "new_name": true,
+      "failed_save": false,
+      "http404": false,
+      "edit_checks": false,
+      "reload": false,
+      "name": "A       ",
+      "http_requests": [
+        "N1:https://lobby.fujinet.online/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+      ],
+      "rom_sha256": "c5b287a4e5b481e0d1aba0615b0387972ce1041da4937b09d89ca6aaab414c6a",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ]
+    },
+    {
+      "firmware": true,
+      "ack_noise": false,
+      "new_name": false,
+      "failed_save": false,
+      "http404": false,
+      "edit_checks": false,
+      "reload": true,
+      "name": "A       ",
+      "http_requests": [
+        "/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+      ],
+      "rom_sha256": "af0797123be9696d259364fd191a72f2aba37f52a7668b3bea5a20433c239ae3",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ],
+      "firmware_sha256": "fc9b517c8d7b1426815138ab9aade144f10b1a6f2928b59cdda375d4b1314689"
+    }
+  ]
+}

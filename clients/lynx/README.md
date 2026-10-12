@@ -4,6 +4,23 @@ See the [Suzy maze-cache benchmark results](bench/RESULTS.md) for measured
 renderer alternatives and the [benchmark guide](bench/README.md) to reproduce
 them. The benchmark cartridge is separate from the live client.
 
+### Real Suzy sprite row encoding
+
+Opaque cached maze tiles use counted sprite packets with an explicit end marker.
+Transparent players, shots, smoke and small HUD text use a zero guard byte on
+every literal row. Suzy has an end-of-byte data bug that can omit the final
+pixel when its last meaningful bit occupies bit zero of the final byte; see
+the [original sprite-engine documentation](https://www.monlynx.de/lynx/lynx6.html).
+Unpadded floor rows left one old pixel per cell row, producing movement trails
+and remnants of startup text after a full maze repaint on hardware.
+
+Handy's literal decoder only special-cases a zero final pixel and misses the
+odd-valued final-pixel case. The host renderer now models that case, reproduces
+the old failure, and checks restored pages against the CPU reference. Opaque
+tiles have an exact eight-pixel width: padding an opaque literal would otherwise
+paint unwanted pixels into the neighboring cached cell. Rendering still uses
+Suzy batches of at most eight with serial service between batches.
+
 This cartridge includes a startup username editor and HTTP Lobby browser.
 It initializes the cc65 ComLynx serial driver at 62500 baud, 8 data bits, odd
 parity, one stop bit; sends FujiNet device `$70` command `$F0` with raw TCP
@@ -67,11 +84,29 @@ FujiNet's web configuration (or reset FujiNet) before restarting the cartridge
 to browse again; resetting only the Lynx does not guarantee command mode.
 No firmware modifications are included in this client change.
 
+Command mode follows FujiRealm's ComLynx handoff: before each command it waits
+for 1,200 consecutive empty serial polls (resetting on trailing bytes), and
+ACK phases scan until ACK or NAK instead of rejecting the first unrelated byte.
+The existing transaction deadline bounds both waits. Length, payload and XOR
+checksum parsing remain exact; the drain is disabled once NetStream owns serial.
+
+Command failures show a small diagnostic line on the Lobby/default-connection
+error screen, for example `D70 CF0 P03 E01 B00 S10`. Fields are hexadecimal:
+`D` device, `C` command, `P` phase, `E` error, `B` last received byte, and `S`
+raw cc65 Lynx serial status. Phases: 01 quiet drain, 02 transmit, 03 acceptance
+ACK, 04 completion ACK, 05 response length, 06 response data, 07 checksum,
+08 response ACK. Errors: 01 timeout, 02 NAK, 03 checksum mismatch, 04 oversized
+response. Status bits include 80 driver RX overflow, 10 parity, 08 overrun,
+04 framing and 02 break. A zero status does not rule out a lost reply.
+The line retains the most recent command failure across successful cleanup
+commands; it is diagnostic evidence, not a new game protocol message.
+
 Startup checks:
 
 ```sh
 make -C clients/lynx test
 python3 clients/lynx/tests/handy_startup_smoke.py --new-name
+python3 clients/lynx/tests/handy_startup_smoke.py --new-name --ack-noise
 python3 clients/lynx/tests/handy_startup_smoke.py --new-name --fail-save --http404
 python3 clients/lynx/tests/handy_startup_smoke.py --firmware --new-name
 python3 clients/lynx/tests/handy_startup_smoke.py --firmware --edit-checks

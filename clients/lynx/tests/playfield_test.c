@@ -40,11 +40,32 @@ static void assert_walls_unchanged(const struct game_state *state)
     }
 }
 
+static void last_pixel_regression(void)
+{
+    SCB_REHV_PAL scb;
+    uint8_t unsafe[] = {2,0x11,0};
+    uint8_t safe[] = {3,0x11,0,0};
+    uint8_t i;
+    memset(&scb, 0, sizeof(scb));
+    memset(framebuffer, 0xa5, sizeof(framebuffer));
+    scb.sprctl0 = BPP_4 | TYPE_NONCOLL;
+    scb.sprctl1 = LITERAL | REHV;
+    scb.hsize = scb.vsize = 0x100;
+    for (i=0; i<8; ++i) scb.penpal[i] = i*0x22+1;
+    suzy_test_target(framebuffer+4);
+    scb.data = unsafe; tgi_sprite(&scb);
+    assert(pen(0,0)==1 && pen(1,0)==5); /* reproduces a stale final pixel */
+    scb.data = safe; tgi_sprite(&scb);
+    assert(pen(0,0)==1 && pen(1,0)==1);
+    assert(pen(2,0)==10 && pen(3,0)==5); /* guard must not paint next cell */
+}
+
 int main(void)
 {
     struct game_state state;
     uint8_t i;
     uint16_t offset;
+    last_pixel_regression();
     memset(&state, 0, sizeof(state));
     memset(framebuffer, 0xa5, sizeof(framebuffer));
     state.map_ready = 1;

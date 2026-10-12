@@ -7,6 +7,7 @@
 #include "playfield.h"
 #include "render.h"
 #include "colors.h"
+#include "command.h"
 
 #define BOARD_X 2
 #define BOARD_Y 13
@@ -83,6 +84,8 @@ static void draw_diagnostics(void)
     diagnostic_field(4, 88, 'A', game.reliable_rev);
     diagnostic_field(84, 88, 'G', (uint16_t)((game.round_authorized << 2) |
                          (game.map_ready << 1) | game.snapshot_ready));
+    if (link_state == LINK_COMMAND_ERROR)
+        render_small_text(4,98,command_error_text());
 }
 
 static uint8_t brick_at(uint8_t x, uint8_t y)
@@ -241,7 +244,7 @@ static const uint8_t mini_font[39][4] = {
 
 void render_small_text(uint8_t x, uint8_t y, const char *line)
 {
-    static uint8_t bitmap[325];
+    static uint8_t bitmap[329];
     static SCB_REHV_PAL sprite;
     uint8_t index, row, col, bits, count, stride;
     char c;
@@ -249,7 +252,8 @@ void render_small_text(uint8_t x, uint8_t y, const char *line)
     count = (uint8_t)strlen(line);
     if (count > (160-x)/4) count = (160-x)/4;
     if (!count) return;
-    stride = count*2+1;
+    /* A zero guard byte prevents real Suzy dropping the last text pixel. */
+    stride = count*2+2;
     memset(bitmap,0,sizeof(bitmap));
     for (row = 0; row < 4; ++row) {
         bitmap[row*stride] = stride;

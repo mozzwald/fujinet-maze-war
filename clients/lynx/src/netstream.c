@@ -14,7 +14,9 @@
 #define RX_RING_CAP 128
 #define HELLO_RETRY_FRAMES 6
 #define HELLO_DEADLINE_FRAMES 600
-#define SERIAL_ERROR_MASK (SER_STATUS_PE | SER_STATUS_FE | SER_STATUS_OE)
+/* lynx-comlynx.ser returns raw Mikey bits plus software RX overflow, not
+   the generic serial.h status layout. Include RX break, exclude PARBIT. */
+#define SERIAL_ERROR_MASK 0x9e
 
 struct link_stats link_stats;
 enum link_state link_state = LINK_STARTING;

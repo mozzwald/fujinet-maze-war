@@ -46,7 +46,9 @@ def main():
     p.add_argument('--sd-from',type=Path)
     p.add_argument('--edit-checks',action='store_true')
     p.add_argument('--live-browser',action='store_true')
+    p.add_argument('--ack-noise',action='store_true',help='inject trailing bytes before command ACKs (controlled peer only)')
     args=p.parse_args()
+    assert not (args.firmware and args.ack_noise),'ACK noise uses the controlled command peer'
     root=Path(tempfile.mkdtemp(prefix='maze-lynx-startup-'))
     pc=Path.home()/'lynx-pc'; repo=Path(__file__).resolve().parents[3]
     rom=repo/'clients/lynx/build/maze-war-lynx.lnx'
@@ -87,36 +89,38 @@ def main():
         assert recv_exact(s,1)==b'\x06','response ACK'
 
     def command_peer(s):
+        def ack(value=b'\x06'):
+            s.sendall((b'\x00\xa7' if args.ack_noise else b'')+value)
         while not stop.is_set():
             h=recv_exact(s,3); n=int.from_bytes(h[1:],'big'); b=recv_exact(s,n); ck=recv_exact(s,1)[0]
             assert wire_xor(b)==ck
             commands.append({'device':h[0],'payload':list(b)})
-            s.sendall(b'\x06'); c=b[0]
+            ack(); c=b[0]
             if h[0]==0x70:
                 if c==0xdc:
                     assert b[1:5] in (b'\x22\x30\x03\x00',b'\x01\x00\x01\x00')
-                    state['mode']=b[5]; s.sendall(b'\x06')
+                    state['mode']=b[5]; ack()
                 elif c==0xdd: response(s,state['key'])
-                elif c==0xdb: s.sendall(b'\x06')
+                elif c==0xdb: ack()
                 elif c==0xde:
                     assert state['mode']==1
                     if not args.fail_save: state['key']=b[1:]
-                    s.sendall(b'\x15' if args.fail_save else b'\x06')
+                    ack(b'\x15' if args.fail_save else b'\x06')
                 elif c==0xf0:
                     assert int.from_bytes(b[1:3],'little')==port
                     assert b[3:-2].decode()==host and b[-2:]==b'\0\x01'
-                    state['raw']=True; s.sendall(b'\x06'); return
+                    state['raw']=True; ack(); return
                 else: raise AssertionError(f'Fuji command {c:x}')
             else:
                 assert h[0]==0x71
                 if c==ord('O'):
-                    assert b[1:3]==b'\x04\0'; urls.append(b[3:].rstrip(b'\0').decode()); state['offset']=0; s.sendall(b'\x06')
+                    assert b[1:3]==b'\x04\0'; urls.append(b[3:].rstrip(b'\0').decode()); state['offset']=0; ack()
                 elif c==ord('S'):
                     remaining=len(body)-state['offset']
                     response(s,remaining.to_bytes(2,'little')+bytes([int(bool(remaining)),170 if args.http404 else 1 if remaining else 136]))
                 elif c==ord('R'):
                     data=body[state['offset']:state['offset']+256]; state['offset']+=len(data); response(s,data)
-                elif c==ord('C'): s.sendall(b'\x06')
+                elif c==ord('C'): ack()
                 else: raise AssertionError('network command')
 
     def game_peer(s):
@@ -240,7 +244,7 @@ def main():
             persisted=(root/'SD/FujiNet/30220300.key').read_bytes() if args.firmware else state['key']
             assert persisted==b'ACE LYN',persisted
         capture('joined')
-        result={'firmware':args.firmware,'new_name':args.new_name,'failed_save':args.fail_save,'http404':args.http404,'edit_checks':args.edit_checks,'reload':bool(args.sd_from),
+        result={'firmware':args.firmware,'ack_noise':args.ack_noise,'new_name':args.new_name,'failed_save':args.fail_save,'http404':args.http404,'edit_checks':args.edit_checks,'reload':bool(args.sd_from),
                 'name':expected.decode(),'commands':commands,'http_requests':urls,
                 'rom_sha256':hashlib.sha256(rom.read_bytes()).hexdigest(),
                 'handy_sha256':hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),

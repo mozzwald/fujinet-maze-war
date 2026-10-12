@@ -20,15 +20,22 @@ static uint8_t dirty[GAME_BRICK_BYTES];
 static SCB_REHV_PAL scbs[8];
 static uint8_t scb_wizard[8];
 static uint8_t queued;
-static uint8_t tile_sprites[4][26];
-static uint8_t wizard_sprites[8][26];
-static const uint8_t shot_sprite[] = {2,0x9f,2,0x90,0};
+/* Opaque tiles use counted packets, so padding never paints outside a cell.
+   Transparent literals have a zero guard byte on every row for Suzy's
+   end-of-byte last-pixel bug (Handy does not emulate this). */
+#define WIZARD_ROW 6
+#define WIZARD_BYTES (5 * WIZARD_ROW + 1)
+#define DEATH_ROW 8
+#define DEATH_BYTES (9 * DEATH_ROW + 1)
+static uint8_t tile_sprites[4][36];
+static uint8_t wizard_sprites[8][WIZARD_BYTES];
+static const uint8_t shot_sprite[] = {3,0x9f,0,3,0x90,0,0};
 static uint8_t sprites_ready;
 static struct game_state frame_state;
-static uint8_t clipped_wizards[GAME_PLAYERS][26];
-static uint8_t fire_sprites[GAME_PLAYERS][3];
-static uint8_t death_sprites[4][64];
-static uint8_t clipped_deaths[GAME_PLAYERS][64];
+static uint8_t clipped_wizards[GAME_PLAYERS][WIZARD_BYTES];
+static uint8_t fire_sprites[GAME_PLAYERS][4];
+static uint8_t death_sprites[4][DEATH_BYTES];
+static uint8_t clipped_deaths[GAME_PLAYERS][DEATH_BYTES];
 static struct overlay_position old_deaths[2][GAME_PLAYERS];
 static uint8_t have_round;
 static uint8_t visual_round;
@@ -60,15 +67,22 @@ static void make_sprites(void)
     for (i = 0; i < 4; ++i) {
         out = tile_sprites[i];
         for (y = 0; y < 5; ++y) {
-            *out++ = 5;
-            memcpy(out, tiles[i] + y * 4, 4);
-            out += 4;
+            const uint8_t *row = tiles[i] + y * 4;
+            /* Literal packet: 1 + count-minus-one (0111) + eight 4-bit
+               pens + 00000 end marker + padding. Exactly eight pixels. */
+            *out++ = 7;
+            *out++ = 0xb8 | (row[0] >> 5);
+            *out++ = (row[0] << 3) | (row[1] >> 5);
+            *out++ = (row[1] << 3) | (row[2] >> 5);
+            *out++ = (row[2] << 3) | (row[3] >> 5);
+            *out++ = row[3] << 3;
+            *out++ = 0;
         }
         *out = 0;
-        memset(wizard_sprites[i], 0, 26);
+        memset(wizard_sprites[i], 0, WIZARD_BYTES);
         for (y = 0; y < 5; ++y) {
-            out = wizard_sprites[i] + y * 5;
-            *out++ = 5;
+            out = wizard_sprites[i] + y * WIZARD_ROW;
+            *out++ = WIZARD_ROW;
             for (x = 0; x < 8; ++x) {
                 source_x = (i & 1) ? 7 - x : x;
                 switch (wizard[y][source_x]) {
@@ -85,10 +99,10 @@ static void make_sprites(void)
         }
     }
     for (i = 0; i < 4; ++i) {
-        memset(wizard_sprites[4+i], 0, 26);
+        memset(wizard_sprites[4+i], 0, WIZARD_BYTES);
         for (y = 0; y < 5; ++y) {
-            out = wizard_sprites[4+i] + y*5;
-            *out++ = 5;
+            out = wizard_sprites[4+i] + y*WIZARD_ROW;
+            *out++ = WIZARD_ROW;
             for (x = 0; x < 8; ++x) {
                 switch (dance[i][y][x]) {
                 case 'C': pen = 1; break;
@@ -110,10 +124,10 @@ static void make_sprites(void)
             scbs[i].penpal[x] = (uint8_t)(x * 0x22 + 1);
     }
     for (i = 0; i < 4; ++i) {
-        memset(death_sprites[i], 0, 64);
+        memset(death_sprites[i], 0, DEATH_BYTES);
         for (y = 0; y < 9; ++y) {
-            out = death_sprites[i] + y * 7;
-            *out++ = 7;
+            out = death_sprites[i] + y * DEATH_ROW;
+            *out++ = DEATH_ROW;
             for (x = 0; x < 12; ++x) {
                 switch (death_art[i][y][x]) {
                 case 'W': pen = 15; break;
@@ -149,6 +163,7 @@ static void queue(uint8_t *data, uint8_t x, uint8_t y,
     scb->data = data;
     scb->hpos = x; scb->vpos = y;
     scb->sprctl0 = BPP_4 | (transparent ? TYPE_NONCOLL : TYPE_BACKNONCOLL);
+    scb->sprctl1 = REHV | (transparent ? LITERAL : 0);
     if (wizard_color) {
         scb->penpal[0] = wizard_color; /* transparent 0; pen 1 is robe */
         scb->penpal[1] = 0x8f;        /* face, eye/local marker */
@@ -206,12 +221,12 @@ static uint8_t *wizard_image(const struct game_state *state, uint8_t slot,
           !wall_at(state->bricks, x / 8, (y + 4) / 5) &&
           !wall_at(state->bricks, (x + 7) / 8, (y + 4) / 5))))
         return wizard_sprites[image];
-    memcpy(data, wizard_sprites[image], 26);
+    memcpy(data, wizard_sprites[image], WIZARD_BYTES);
     for (row = 0; row < 5; ++row)
         for (col = 0; col < 8; ++col)
             if (!actor_clear(state, x + col, y + row)) {
-                if (col & 1) data[row * 5 + 1 + col / 2] &= 0xf0;
-                else data[row * 5 + 1 + col / 2] &= 0x0f;
+                if (col & 1) data[row * WIZARD_ROW + 1 + col / 2] &= 0xf0;
+                else data[row * WIZARD_ROW + 1 + col / 2] &= 0x0f;
             }
     return data;
 }
@@ -226,10 +241,11 @@ static void queue_fire(const struct game_state *state, uint8_t slot,
     else if (facing == 11) px = x;
     else if (facing == 14) py = y;
     else if (facing == 13) py = y + 4;
-    fire_sprites[slot][0] = 2;
+    fire_sprites[slot][0] = 3;
     fire_sprites[slot][1] = (actor_clear(state, px, py) ? 0x90 : 0) |
         (actor_clear(state, px + 1, py) ? 0x0f : 0);
     fire_sprites[slot][2] = 0;
+    fire_sprites[slot][3] = 0;
     queue(fire_sprites[slot], px, py, 1, 0);
 }
 
@@ -251,10 +267,10 @@ static void draw_deaths(uint8_t page_index, const struct game_state *state)
         x = death->x ? death->x * 8 - 2 : 0;
         y = death->y ? death->y * 5 - 2 : 0;
         data = clipped_deaths[i];
-        memcpy(data, death_sprites[image], 64);
+        memcpy(data, death_sprites[image], DEATH_BYTES);
         for (row = 0; row < 9; ++row) {
             if (y + row >= PLAYFIELD_H) {
-                memset(data + row * 7 + 1, 0, 6);
+                memset(data + row * DEATH_ROW + 1, 0, 6);
                 continue;
             }
             cy = (y + row) / 5;
@@ -268,8 +284,8 @@ static void draw_deaths(uint8_t page_index, const struct game_state *state)
                     previous_cx = cx;
                 }
                 if (!clear) {
-                    if (col & 1) data[row * 7 + 1 + col / 2] &= 0xf0;
-                    else data[row * 7 + 1 + col / 2] &= 0x0f;
+                    if (col & 1) data[row * DEATH_ROW + 1 + col / 2] &= 0xf0;
+                    else data[row * DEATH_ROW + 1 + col / 2] &= 0x0f;
                 }
             }
         }
