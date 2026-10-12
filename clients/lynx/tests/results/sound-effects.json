@@ -1,0 +1,665 @@
+{
+  "date": "2026-10-12",
+  "method": "Existing Handy SDL binary; test-only SDL callback preload; dummy audio device; private localhost ComLynx fixture; no emulator/firmware changes",
+  "round_and_audio": {
+    "endpoint": "fujinet.online",
+    "port": 5025,
+    "input_lag_ms": 0,
+    "movement_results": [],
+    "death_results": [],
+    "round_results": [
+      "losers smoke",
+      "animated winner",
+      "losers disappear",
+      "ACK during animation",
+      "duplicate result does not restart",
+      "score screen",
+      "results restored after diagnostics"
+    ],
+    "applied_moves": [],
+    "rom_sha256": "dfa2f3f43fcd06f276ca2447d9e14e4a2a35fe7353fb65afd3173c24a5555202",
+    "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+    "received": {
+      "0x43": 1,
+      "0x45": 7,
+      "0x41": 32
+    },
+    "acknowledged": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "checks": [
+      "brick removal",
+      "bottom feet",
+      "border texture",
+      "fire input",
+      "movement input",
+      "diagnostics restoration",
+      "new round"
+    ],
+    "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN",
+    "audio_checks": [
+      {
+        "event": "brick",
+        "peak": 7,
+        "samples": 32768
+      },
+      {
+        "event": "local-fire",
+        "peak": 16,
+        "samples": 18432
+      },
+      {
+        "event": "movement",
+        "peak": 6,
+        "samples": 24576
+      },
+      {
+        "event": "idle",
+        "peak": 0,
+        "samples": 13312
+      },
+      {
+        "event": "shot-0",
+        "peak": 16,
+        "samples": 13312
+      },
+      {
+        "event": "impact-0",
+        "peak": 14,
+        "samples": 13312
+      },
+      {
+        "event": "shot-1",
+        "peak": 8,
+        "samples": 13312
+      },
+      {
+        "event": "impact-1",
+        "peak": 7,
+        "samples": 13312
+      },
+      {
+        "event": "death",
+        "peak": 9,
+        "samples": 22528
+      },
+      {
+        "event": "respawn",
+        "peak": 7,
+        "samples": 17408
+      },
+      {
+        "event": "results-idle",
+        "peak": 0,
+        "samples": 13312
+      }
+    ]
+  },
+  "movement_and_audio_before_impact_addition": {
+    "endpoint": "fujinet.online",
+    "port": 5025,
+    "input_lag_ms": 0,
+    "movement_results": [
+      {
+        "tap_ms": 60,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          4,
+          17
+        ]
+      },
+      {
+        "tap_ms": 120,
+        "before": [
+          4,
+          17
+        ],
+        "after": [
+          5,
+          17
+        ]
+      },
+      {
+        "tap_ms": 160,
+        "before": [
+          5,
+          17
+        ],
+        "after": [
+          6,
+          17
+        ]
+      },
+      {
+        "turn": "Up then Right while Up held",
+        "after": [
+          7,
+          15
+        ]
+      }
+    ],
+    "death_results": [],
+    "round_results": [],
+    "applied_moves": [
+      {
+        "seq": 3,
+        "joy": 15,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          3,
+          17
+        ]
+      },
+      {
+        "seq": 4,
+        "joy": 15,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          3,
+          17
+        ]
+      },
+      {
+        "seq": 5,
+        "joy": 15,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          3,
+          17
+        ]
+      },
+      {
+        "seq": 7,
+        "joy": 15,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          3,
+          17
+        ]
+      },
+      {
+        "seq": 8,
+        "joy": 7,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          4,
+          17
+        ]
+      },
+      {
+        "seq": 9,
+        "joy": 15,
+        "before": [
+          4,
+          17
+        ],
+        "after": [
+          4,
+          17
+        ]
+      },
+      {
+        "seq": 10,
+        "joy": 15,
+        "before": [
+          4,
+          17
+        ],
+        "after": [
+          4,
+          17
+        ]
+      },
+      {
+        "seq": 11,
+        "joy": 7,
+        "before": [
+          4,
+          17
+        ],
+        "after": [
+          5,
+          17
+        ]
+      },
+      {
+        "seq": 12,
+        "joy": 15,
+        "before": [
+          5,
+          17
+        ],
+        "after": [
+          5,
+          17
+        ]
+      },
+      {
+        "seq": 13,
+        "joy": 15,
+        "before": [
+          5,
+          17
+        ],
+        "after": [
+          5,
+          17
+        ]
+      },
+      {
+        "seq": 14,
+        "joy": 7,
+        "before": [
+          5,
+          17
+        ],
+        "after": [
+          6,
+          17
+        ]
+      },
+      {
+        "seq": 15,
+        "joy": 15,
+        "before": [
+          6,
+          17
+        ],
+        "after": [
+          6,
+          17
+        ]
+      },
+      {
+        "seq": 16,
+        "joy": 15,
+        "before": [
+          6,
+          17
+        ],
+        "after": [
+          6,
+          17
+        ]
+      },
+      {
+        "seq": 17,
+        "joy": 14,
+        "before": [
+          6,
+          17
+        ],
+        "after": [
+          6,
+          16
+        ]
+      },
+      {
+        "seq": 18,
+        "joy": 15,
+        "before": [
+          6,
+          16
+        ],
+        "after": [
+          6,
+          16
+        ]
+      },
+      {
+        "seq": 19,
+        "joy": 15,
+        "before": [
+          6,
+          16
+        ],
+        "after": [
+          6,
+          16
+        ]
+      },
+      {
+        "seq": 20,
+        "joy": 14,
+        "before": [
+          6,
+          16
+        ],
+        "after": [
+          6,
+          15
+        ]
+      },
+      {
+        "seq": 21,
+        "joy": 7,
+        "before": [
+          6,
+          15
+        ],
+        "after": [
+          7,
+          15
+        ]
+      },
+      {
+        "seq": 22,
+        "joy": 15,
+        "before": [
+          7,
+          15
+        ],
+        "after": [
+          7,
+          15
+        ]
+      },
+      {
+        "seq": 23,
+        "joy": 15,
+        "before": [
+          7,
+          15
+        ],
+        "after": [
+          7,
+          15
+        ]
+      },
+      {
+        "seq": 24,
+        "joy": 31,
+        "before": [
+          7,
+          15
+        ],
+        "after": [
+          7,
+          15
+        ]
+      },
+      {
+        "seq": 25,
+        "joy": 15,
+        "before": [
+          7,
+          15
+        ],
+        "after": [
+          7,
+          15
+        ]
+      },
+      {
+        "seq": 26,
+        "joy": 7,
+        "before": [
+          7,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 27,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 28,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 29,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 30,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 31,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 32,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 33,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 34,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 35,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 36,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 37,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 39,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 41,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      },
+      {
+        "seq": 42,
+        "joy": 15,
+        "before": [
+          8,
+          15
+        ],
+        "after": [
+          8,
+          15
+        ]
+      }
+    ],
+    "rom_sha256": "41bef0f997c312371daa124ffd338211a002fc973b0b1475ff07404df15c0f42",
+    "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+    "received": {
+      "0x43": 1,
+      "0x45": 5,
+      "0x41": 37
+    },
+    "acknowledged": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "checks": [
+      "brick removal",
+      "bottom feet",
+      "border texture",
+      "fire input",
+      "movement input",
+      "diagnostics restoration",
+      "new round"
+    ],
+    "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN",
+    "audio_checks": [
+      {
+        "event": "brick",
+        "peak": 7,
+        "samples": 32768
+      },
+      {
+        "event": "local-fire",
+        "peak": 16,
+        "samples": 17408
+      },
+      {
+        "event": "movement",
+        "peak": 6,
+        "samples": 24576
+      },
+      {
+        "event": "idle",
+        "peak": 0,
+        "samples": 13312
+      },
+      {
+        "event": "shot-0",
+        "peak": 16,
+        "samples": 22528
+      },
+      {
+        "event": "shot-1",
+        "peak": 8,
+        "samples": 22528
+      },
+      {
+        "event": "death",
+        "peak": 9,
+        "samples": 22528
+      },
+      {
+        "event": "respawn",
+        "peak": 7,
+        "samples": 17408
+      }
+    ]
+  }
+}

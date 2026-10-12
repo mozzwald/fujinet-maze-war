@@ -15,8 +15,10 @@ import select
 import shutil
 import socket
 import subprocess
+import struct
 import tempfile
 import time
+import wave
 
 spec = importlib.util.spec_from_file_location('wire', Path(__file__).resolve().parents[1] / 'bench/run.py')
 wire = importlib.util.module_from_spec(spec)
@@ -32,8 +34,12 @@ def main():
     parser.add_argument('--rom', type=Path, default=Path(__file__).resolve().parents[1] / 'build/maze-war-lynx.lnx')
     parser.add_argument("--movement-checks", action="store_true")
     parser.add_argument("--death-checks", action="store_true")
+    parser.add_argument("--round-checks", action="store_true")
+    parser.add_argument("--sound-checks", action="store_true", help="capture Handy SDL audio using a test-only preload")
     parser.add_argument("--input-lag-ms", type=float, default=0)
     args = parser.parse_args()
+    if sum((args.movement_checks, args.death_checks, args.round_checks)) > 1:
+        parser.error('run movement, death and round checks separately')
     rom = args.rom.resolve()
     pc = Path.home() / 'lynx-pc'
     output = Path(tempfile.mkdtemp(prefix='maze-suzy-game-'))
@@ -57,28 +63,34 @@ def main():
     remote_positions = [[7,17],[11,17],[15,17]]
     simulate_moves = args.movement_checks or args.death_checks
     death_results = []
+    round_results = []
     applied_moves = []
     next_snapshot = time.monotonic()
     movement_results = []
     events = []
     key_events = []
+    audio_windows = []
     try:
         env = dict(os.environ, SDL_AUDIODRIVER='dummy', XDG_CONFIG_HOME=str(output / 'config'))
         xvfb = subprocess.Popen(['Xvfb', '-displayfd', '1', '-screen', '0', '800x600x24', '-nolisten', 'tcp'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         processes.append(xvfb)
         assert select.select([xvfb.stdout], [], [], 10)[0], 'display startup'
         env['DISPLAY'] = ':' + xvfb.stdout.readline().strip()
+        if args.sound_checks:
+            capture_lib = output / 'audio-capture.so'
+            flags = subprocess.check_output(['pkg-config','--cflags','sdl2'],text=True).split()
+            subprocess.run(['cc','-shared','-fPIC','-Wall','-Wextra','-Werror',*flags,
+                            str(Path(__file__).with_name('handy_audio_capture.c')),'-ldl','-o',str(capture_lib)],check=True)
+            env['LD_PRELOAD'] = str(capture_lib)
+            env['HANDY_AUDIO_CAPTURE'] = str(output / 'audio.bin')
         with (output / 'handy.log').open('w') as log:
-            handy = subprocess.Popen([str(pc / 'handy_sdl'), str(rom), '-nosound', '-nofullscreen', '-noautoskip', '-frameskip', '0', '-throttle', '-comlynx', f'connect:127.0.0.1:{listener.getsockname()[1]}'], cwd=output, env=env, stdout=log, stderr=log)
+            handy = subprocess.Popen([str(pc / 'handy_sdl'), str(rom), '-sound' if args.sound_checks else '-nosound', '-nofullscreen', '-noautoskip', '-frameskip', '0', '-throttle', '-comlynx', f'connect:127.0.0.1:{listener.getsockname()[1]}'], cwd=output, env=env, stdout=log, stderr=log)
         processes.append(handy)
         peer, _ = listener.accept()
         peer.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         peer.settimeout(10)
-        command = bytearray()
-        while len(command) < 3 or len(command) < 4 + command[2]:
-            chunk = peer.recv(1)
-            assert chunk, 'setup disconnected'
-            command.extend(chunk)
+        from handy_command_bootstrap import bootstrap
+        command = bootstrap(peer, env)
         assert command[0] == 0x70 and command[3] == 0xf0
         endpoint = command[6:command.index(0,6)].decode('ascii')
         endpoint_port = int.from_bytes(command[4:6], 'little')
@@ -186,8 +198,10 @@ def main():
             service(.15)
         service(2,True)
         before = capture('before')
+        start_audio = time.monotonic()
         reliable(3,[0x51,0,10,10,1])
         service(1,True)
+        if args.sound_checks: audio_windows.append(('brick',start_audio,time.monotonic()))
         destroyed = capture('destroyed')
         assert before.getpixel((80,50)) != destroyed.getpixel((80,50)), 'brick did not disappear'
         assert destroyed.getpixel((25,89)) != destroyed.getpixel((24,89)), 'last-row feet missing'
@@ -278,15 +292,19 @@ def main():
             assert local == [7,15], f'overlapping corner turn: {local}'
             movement_results.append(dict(turn='Up then Right while Up held', after=list(local)))
             capture('movement-corner')
+        start_audio = time.monotonic()
         key('z',True)
         service(.4,True)
         key('z',False)
         service(.4,True)
+        if args.sound_checks: audio_windows.append(('local-fire',start_audio,time.monotonic()))
         assert any(e['delta'][3] & 0x10 for e in events), 'A/fire input not transmitted'
+        start_audio = time.monotonic()
         key('Right',True)
         service(.3,True)
         key('Right',False)
         service(.8,True)
+        if args.sound_checks: audio_windows.append(('movement',start_audio,time.monotonic()))
         assert any(e['delta'][3] & 15 == 7 for e in events), 'movement input not transmitted'
         # Return to one stable scene before checking diagnostics cache invalidation.
         service(1,True)
@@ -298,21 +316,103 @@ def main():
         service(2,True)
         restored = capture('restored')
         assert stable.tobytes() == restored.tobytes(), 'diagnostics left stale maze pixels'
+        if args.sound_checks:
+            # Allow the callback's 3 KB cushion and all envelopes to drain.
+            service(1,True)
+            start_audio = time.monotonic()
+            service(.6,True)
+            audio_windows.append(('idle',start_audio,time.monotonic()))
+            for slot in (0,1):
+                start_audio = time.monotonic()
+                send([0x42,70+slot,slot,5+slot,17,1,round_id])
+                service(.6,True)
+                audio_windows.append((f'shot-{slot}',start_audio,time.monotonic()))
+                start_audio = time.monotonic()
+                send([0x42,72+slot,slot,5+slot,17,0,round_id])
+                service(.6,True)
+                audio_windows.append((f'impact-{slot}',start_audio,time.monotonic()))
+            start_audio=time.monotonic()
+            dead_slots.add(1)
+            send([0x52,75,1,0,0,1,round_id])
+            service(1,True)
+            audio_windows.append(('death',start_audio,time.monotonic()))
+            start_audio=time.monotonic()
+            dead_slots.remove(1)
+            send([0x52,76,1,7,17,3,round_id])
+            service(.8,True)
+            audio_windows.append(('respawn',start_audio,time.monotonic()))
+        next_revision = 4
+        if args.round_checks:
+            names = b'LYNX    ATARI8  PLAYER3 PLAYER4 '
+            match = [0x54,round_id,0,15,8,10,10,7,4,2,8]+list(names)
+            send([0x53,0,4,0]+match)
+            for _ in range(30):
+                service(.04)
+                smoke = capture('round-losers-smoke')
+                if smoke.crop((54,83,66,90)).tobytes() != stable.crop((54,83,66,90)).tobytes():
+                    break
+            assert smoke.crop((54,83,66,90)).tobytes() != stable.crop((54,83,66,90)).tobytes(), 'loser smoke missing'
+            service(.65)
+            assert 4 in acked, 'MATCH_END not acknowledged during animation'
+            poses = []
+            for i in range(4):
+                poses.append(capture(f'round-dance-{i}').crop((24,85,32,90)).tobytes())
+                service(.14)
+            assert len(set(poses)) >= 2, 'winner dance did not animate'
+            danced = capture('round-dance')
+            floor = danced.getpixel((8,85))
+            assert all(danced.getpixel((x,y)) == floor for x in range(56,64) for y in range(85,90)), 'loser remained after smoke'
+            # A new reliable revision carrying the same frozen result must
+            # ACK without restarting either animation or changing the scores.
+            reliable(5,match)
+            service(5.5)
+            scores = capture('round-scores')
+            assert scores.getpixel((0,0)) == floor, 'results screen not displayed'
+            assert any(scores.getpixel((x,y)) != floor for x in range(24,108) for y in range(45,49)), 'score row missing'
+            key('x',True); service(.6); key('x',False); service(1)
+            assert capture('round-scores-restored').tobytes() == scores.tobytes(), 'diagnostics lost frozen results'
+            if args.sound_checks:
+                start_audio=time.monotonic(); service(.6)
+                audio_windows.append(('results-idle',start_audio,time.monotonic()))
+            round_results = ['losers smoke', 'animated winner', 'losers disappear',
+                             'ACK during animation', 'duplicate result does not restart',
+                             'score screen', 'results restored after diagnostics']
+            next_revision = 6
         round_id = 2
-        reliable(4,[0x55,2,10])
-        reliable(5,[0x50,0,1]+maze()+[2])
+        reliable(next_revision,[0x55,2,10])
+        reliable(next_revision+1,[0x50,0,1]+maze()+[2])
         service(2,True)
         restarted = capture('new-round')
         assert restarted.getpixel((80,50)) == before.getpixel((80,50)), 'new round did not restore brick'
         result = dict(endpoint=endpoint, port=endpoint_port, input_lag_ms=args.input_lag_ms,
-                      movement_results=movement_results, death_results=death_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
+                      movement_results=movement_results, death_results=death_results, round_results=round_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
                       handy_sha256=hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),
                       received=dict(received), acknowledged=sorted(acked),
                       checks=['brick removal','bottom feet','border texture','fire input','movement input','diagnostics restoration','new round'],
                       method='Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN')
+        if args.sound_checks:
+            data=(output/'audio.bin').read_bytes()
+            freq,fmt,channels=struct.unpack_from('=III',data)
+            assert (freq,fmt,channels)==(22050,8,1), 'unexpected capture format'
+            records=[]; offset=12
+            while offset+12<=len(data):
+                ns,count=struct.unpack_from('=QI',data,offset); offset+=12
+                if offset+count>len(data): break
+                records.append((ns/1e9,data[offset:offset+count])); offset+=count
+            checks=[]
+            for name,begin,end in audio_windows:
+                samples=b''.join(pcm for stamp,pcm in records if begin<=stamp<=end)
+                peak=max((abs(v-128) for v in samples),default=0)
+                assert samples, f'no audio callbacks during {name}'
+                assert (peak==0 if name.endswith('idle') else peak>0), f'{name} audio peak {peak}'
+                checks.append(dict(event=name,peak=peak,samples=len(samples)))
+            with wave.open(str(output/'sound-preview.wav'),'wb') as wav:
+                wav.setparams((1,1,freq,0,'NONE','not compressed'))
+                wav.writeframes(b''.join(pcm for _,pcm in records))
+            result['audio_checks']=checks
         (output/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps(dict(output=str(output), endpoint=endpoint, port=endpoint_port,
-                              movement_results=movement_results, death_results=death_results, rom_sha256=result['rom_sha256'],
+                              movement_results=movement_results, death_results=death_results, round_results=round_results, rom_sha256=result['rom_sha256'],
                               acknowledged=sorted(acked)),indent=2))
     finally:
         (output/'input-events.json').write_text(json.dumps(dict(received=events, applied=applied_moves, keys=key_events),indent=2)+'\n')

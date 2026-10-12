@@ -220,19 +220,12 @@ static void draw_game(void (*pump)(void))
         tgi_outtextxy(HUD_X, 91, "SYNCING");
     else
         tgi_outtextxy(HUD_X, 91, "PLAYING");
-    if (game.phase && game.winner_pid < GAME_PLAYERS) {
-        line[0] = 'P'; line[1] = (char)('1' + game.winner_pid);
-        line[2] = ' '; line[3] = 'W'; line[4] = 'I';
-        line[5] = 'N'; line[6] = 'S'; line[7] = 0;
-        tgi_setcolor(player_colors[game.winner_pid]);
-        tgi_outtextxy(2, 91, line);
-    }
     tgi_setcolor(COLOR_LIGHTBLUE);
     tgi_outtextxy(151, 2, "B");
 }
 
 /* Ten four-pixel pitches fit each 40-pixel player slot: name[8] + score[2]. */
-static const uint8_t mini_font[38][4] = {
+static const uint8_t mini_font[39][4] = {
     {2,5,7,5}, {6,5,6,7}, {3,4,4,3}, {6,5,5,6},
     {7,6,4,7}, {7,6,4,4}, {3,4,5,3}, {5,7,5,5},
     {7,2,2,7}, {1,1,5,2}, {5,6,6,5}, {4,4,4,7},
@@ -243,29 +236,47 @@ static const uint8_t mini_font[38][4] = {
     {7,5,5,7}, {2,6,2,7}, {7,1,6,7}, {7,1,3,7},
     {5,5,7,1}, {7,4,3,6}, {3,4,7,7}, {7,1,1,1},
     {7,5,7,7}, {7,5,7,1},
-    {0,0,7,0}, {0,0,0,2}
+    {0,0,7,0}, {0,0,0,2}, {1,1,2,4}
 };
 
-static void mini_text(uint8_t x, uint8_t y, const char *line)
+void render_small_text(uint8_t x, uint8_t y, const char *line)
 {
-    uint8_t index;
-    uint8_t row;
-    uint8_t col;
-    uint8_t bits;
-    while (*line) {
-        if (*line >= 'A' && *line <= 'Z') index = (uint8_t)(*line - 'A');
-        else if (*line >= '0' && *line <= '9') index = (uint8_t)(*line - '0' + 26);
-        else if (*line == '-') index = 36;
-        else if (*line == '.') index = 37;
-        else { ++line; x += 4; continue; }
-        for (row = 0; row < 4; ++row) {
+    static uint8_t bitmap[325];
+    static SCB_REHV_PAL sprite;
+    uint8_t index, row, col, bits, count, stride;
+    char c;
+    if (x >= 160 || y > 98) return;
+    count = (uint8_t)strlen(line);
+    if (count > (160-x)/4) count = (160-x)/4;
+    if (!count) return;
+    stride = count*2+1;
+    memset(bitmap,0,sizeof(bitmap));
+    for (row = 0; row < 4; ++row) {
+        bitmap[row*stride] = stride;
+        for (col = 0; col < count; ++col) {
+            c = line[col];
+            if (c >= 'a' && c <= 'z') c -= 'a'-'A';
+            if (c >= 'A' && c <= 'Z') index = c-'A';
+            else if (c >= '0' && c <= '9') index = c-'0'+26;
+            else if (c == '-') index = 36;
+            else if (c == '.') index = 37;
+            else if (c == '/') index = 38;
+            else continue;
             bits = mini_font[index][row];
-            for (col = 0; col < 3; ++col)
-                if (bits & (4 >> col)) tgi_setpixel(x + col, y + row);
+            bitmap[row*stride+1+col*2] = (bits & 4 ? 0x10 : 0) | (bits & 2 ? 1 : 0);
+            bitmap[row*stride+2+col*2] = bits & 1 ? 0x10 : 0;
         }
-        ++line;
-        x += 4;
     }
+    /* One synchronous Suzy sprite per line, rather than hundreds of
+       individual pixel sprites. Transparent pen zero preserves the HUD. */
+    memset(&sprite,0,sizeof(sprite));
+    sprite.sprctl0 = BPP_4 | TYPE_NONCOLL;
+    sprite.sprctl1 = LITERAL | REHV;
+    sprite.sprcoll = NO_COLLIDE;
+    sprite.data = bitmap; sprite.hpos = x; sprite.vpos = y;
+    sprite.hsize = sprite.vsize = 0x100;
+    sprite.penpal[0] = tgi_getcolor();
+    tgi_sprite(&sprite);
 }
 
 static void draw_score(uint8_t slot)
@@ -283,7 +294,7 @@ static void draw_score(uint8_t slot)
     line[9] = occupied ? (char)('0' + score % 10) : '-';
     line[10] = 0;
     tgi_setcolor(occupied ? player_colors[slot] : COLOR_LIGHTGREY);
-    mini_text((uint8_t)(slot * 40), 97, line);
+    render_small_text((uint8_t)(slot * 40), 97, line);
     if (slot == game.local_pid) {
         tgi_setcolor(COLOR_WHITE);
         tgi_bar(slot * 40, 101, slot * 40 + 3, 101);
@@ -293,9 +304,47 @@ static void draw_score(uint8_t slot)
 static uint8_t status_code(void)
 {
     if (link_state != LINK_WELCOME) return (uint8_t)(link_state + 1);
+    if (game_round_stage(&game) == ROUND_RESULTS) return 18;
     if (game.phase) return 16;
     if (!game_ready()) return 17;
     return 0;
+}
+
+static void draw_round_results(void (*pump)(void))
+{
+    char line[32];
+    uint8_t names[GAME_PLAYERS][GAME_NAME_LEN], scores[GAME_PLAYERS];
+    uint8_t i, j, points, mask = game.seat_mask | game.zombie_mask;
+    memcpy(names, game.names, sizeof(names));
+    for (i = 0; i < GAME_PLAYERS; ++i) scores[i] = game.players[i].score;
+    tgi_clear();
+    tgi_setcolor(COLOR_YELLOW);
+    tgi_outtextxy(40, 5, "ROUND OVER");
+    i = game.winner_pid;
+    for (j = 0; j < GAME_NAME_LEN; ++j) line[j] = game.names[i][j];
+    line[8] = 0;
+    strcat(line, !(game.zombie_mask & (1u << i)) && game.result_zombie_history ?
+           " BEATS ZOMBIES" : " WINS");
+    tgi_setcolor(player_colors[i]);
+    render_small_text((160-strlen(line)*4)/2, 22, line);
+    tgi_setcolor(COLOR_LIGHTGREY);
+    render_small_text(24, 34, "PLAYER          SCORE");
+    if (pump) pump();
+    for (i = 0; i < GAME_PLAYERS; ++i) {
+        if (!(mask & (1u << i))) continue;
+        memset(line, ' ', 21);
+        line[0] = '1'+i;
+        for (j = 0; j < GAME_NAME_LEN; ++j) line[3+j] = names[i][j];
+        points = scores[i];
+        line[18] = '0'+(points/10)%10;
+        line[19] = '0'+points%10;
+        line[20] = 0;
+        tgi_setcolor(player_colors[i]);
+        render_small_text(24, 45+i*10, line);
+        if (pump) pump();
+    }
+    tgi_setcolor(COLOR_WHITE);
+    render_small_text(60, 94, "NEXT ROUND");
 }
 
 static void draw_scores_if_changed(void)
@@ -323,23 +372,28 @@ static void draw_scores_if_changed(void)
 static void draw_full_map(void (*pump)(void))
 {
     uint8_t status = status_code();
-    char result[8] = "P1 WINS";
+    if (status == 18) {
+        if (previous_status[draw_page] != status) {
+            playfield_invalidate_page(draw_page);
+            hud_valid[draw_page] = 0;
+            draw_round_results(pump);
+            previous_status[draw_page] = status;
+        }
+        return;
+    }
     if (status != previous_status[draw_page]) {
         playfield_invalidate_page(draw_page);
         previous_status[draw_page] = status;
     }
     playfield_draw(frame_page[draw_page], draw_page, &game, pump);
     draw_scores_if_changed();
-    if (status) {
+    if (status && status != 16) {
         tgi_setcolor(COLOR_BLACK);
         tgi_bar(37, 30, 123, 44);
         tgi_setcolor(COLOR_WHITE);
         if (link_state != LINK_WELCOME)
             tgi_outtextxy(44, 33, link_message());
-        else if (game.phase && game.winner_pid < GAME_PLAYERS) {
-            result[1] = (char)('1' + game.winner_pid);
-            tgi_outtextxy(52, 33, result);
-        } else
+        else
             tgi_outtextxy(52, 33, "SYNCING");
     }
 }
@@ -378,6 +432,7 @@ void render_draw(uint8_t diagnostics, void (*pump)(void))
         previous_status[0] = previous_status[1] = 255;
         tgi_clear();
         if (diagnostics) draw_diagnostics();
+        else if (game_round_stage(&game) == ROUND_RESULTS) draw_round_results(pump);
         else draw_game(pump);
     } else {
         draw_full_map(pump);

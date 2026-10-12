@@ -152,6 +152,12 @@ int main(void)
     assert(game_receive(leave_ack, sizeof(leave_ack)) == 1);
     assert(game.leave_acked);
     prediction_test();
+    game_set_name("ACE LYNX");
+    game_reset();
+    assert(!memcmp(game.local_name, "ACE LYNX", GAME_NAME_LEN));
+    assert(game_receive(welcome, sizeof(welcome)) == 1);
+    assert(game_next_outbound(out, sizeof(out)) == 11);
+    assert(out[0] == 0x43 && !memcmp(out + 3, "ACE LYNX", GAME_NAME_LEN));
     puts("protocol tests passed");
     return 0;
 }

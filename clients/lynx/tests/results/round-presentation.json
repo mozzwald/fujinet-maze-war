@@ -1,0 +1,43 @@
+{
+  "endpoint": "fujinet.online",
+  "port": 5025,
+  "input_lag_ms": 0,
+  "movement_results": [],
+  "death_results": [],
+  "round_results": [
+    "losers smoke",
+    "animated winner",
+    "losers disappear",
+    "ACK during animation",
+    "duplicate result does not restart",
+    "score screen",
+    "results restored after diagnostics"
+  ],
+  "applied_moves": [],
+  "rom_sha256": "24eb48b1403907e182e8a3d57410d158f8679b36ecc052d1371fdb3220700b66",
+  "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+  "received": {
+    "0x43": 1,
+    "0x45": 7,
+    "0x41": 25
+  },
+  "acknowledged": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "checks": [
+    "brick removal",
+    "bottom feet",
+    "border texture",
+    "fire input",
+    "movement input",
+    "diagnostics restoration",
+    "new round"
+  ],
+  "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+}

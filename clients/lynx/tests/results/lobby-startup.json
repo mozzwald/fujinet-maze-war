@@ -1,0 +1,862 @@
+{
+  "date": "2026-10-12",
+  "scope": "Handy emulator; no firmware modifications; live test browses only, game handshakes use local fixtures",
+  "cases": {
+    "modern-appkey-save": {
+      "firmware": false,
+      "new_name": true,
+      "failed_save": false,
+      "http404": false,
+      "edit_checks": false,
+      "reload": false,
+      "name": "A       ",
+      "http_requests": [
+        "N1:https://lobby.fujinet.online/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+      ],
+      "rom_sha256": "4b1e857d0f79e1707782e2e30017eec2c6d0e33b625f6ea52d14c9496eedce77",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ]
+    },
+    "firmware-new-name": {
+      "firmware": true,
+      "new_name": true,
+      "failed_save": false,
+      "http404": false,
+      "name": "A       ",
+      "http_requests": [
+        "/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+      ],
+      "rom_sha256": "fe986a79097eb2926436ff5cd7bd1363856c4efe813c193e35b04358501aa2ca",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ],
+      "firmware_sha256": "fc9b517c8d7b1426815138ab9aade144f10b1a6f2928b59cdda375d4b1314689"
+    },
+    "firmware-reload": {
+      "firmware": true,
+      "new_name": false,
+      "failed_save": false,
+      "http404": false,
+      "edit_checks": false,
+      "reload": true,
+      "name": "A       ",
+      "http_requests": [
+        "/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+      ],
+      "rom_sha256": "6b24baf6250413305e857ad4bd26e7b30f66a3b9466145b9909561f6cf11f73e",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ],
+      "firmware_sha256": "fc9b517c8d7b1426815138ab9aade144f10b1a6f2928b59cdda375d4b1314689"
+    },
+    "firmware-edit": {
+      "firmware": true,
+      "new_name": false,
+      "failed_save": false,
+      "http404": false,
+      "edit_checks": true,
+      "reload": false,
+      "name": "ACE LYN ",
+      "http_requests": [
+        "/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+      ],
+      "rom_sha256": "971f21dfff7aec833cd814d4cf0e3b7e8e7e652276aafb269049e8719f4eeef3",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ],
+      "firmware_sha256": "fc9b517c8d7b1426815138ab9aade144f10b1a6f2928b59cdda375d4b1314689"
+    },
+    "failed-save-http404": {
+      "firmware": false,
+      "new_name": true,
+      "failed_save": true,
+      "http404": true,
+      "edit_checks": false,
+      "reload": false,
+      "name": "A       ",
+      "http_requests": [
+        "N1:https://lobby.fujinet.online/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+      ],
+      "rom_sha256": "6579650ebb148e9a519b15f6d0d98b647d0a6a9b5ee0abdd724276a6b71ce61f",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ]
+    },
+    "live-https-lobby": {
+      "firmware": true,
+      "live_browser": true,
+      "rom_sha256": "4b1e857d0f79e1707782e2e30017eec2c6d0e33b625f6ea52d14c9496eedce77",
+      "firmware_sha256": "fc9b517c8d7b1426815138ab9aade144f10b1a6f2928b59cdda375d4b1314689",
+      "checks": [
+        "saved name loaded",
+        "real production HTTPS HTTP 200",
+        "HTTP channel closed",
+        "no NetStream before selection"
+      ]
+    },
+    "movement-regression": {
+      "endpoint": "fujinet.online",
+      "port": 5025,
+      "input_lag_ms": 0,
+      "movement_results": [
+        {
+          "tap_ms": 60,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            4,
+            17
+          ]
+        },
+        {
+          "tap_ms": 120,
+          "before": [
+            4,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "tap_ms": 160,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            6,
+            17
+          ]
+        },
+        {
+          "turn": "Up then Right while Up held",
+          "after": [
+            7,
+            15
+          ]
+        }
+      ],
+      "death_results": [],
+      "applied_moves": [
+        {
+          "seq": 3,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 4,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 5,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 7,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 8,
+          "joy": 7,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            4,
+            17
+          ]
+        },
+        {
+          "seq": 9,
+          "joy": 15,
+          "before": [
+            4,
+            17
+          ],
+          "after": [
+            4,
+            17
+          ]
+        },
+        {
+          "seq": 10,
+          "joy": 15,
+          "before": [
+            4,
+            17
+          ],
+          "after": [
+            4,
+            17
+          ]
+        },
+        {
+          "seq": 11,
+          "joy": 7,
+          "before": [
+            4,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 12,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 13,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 14,
+          "joy": 7,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            6,
+            17
+          ]
+        },
+        {
+          "seq": 15,
+          "joy": 15,
+          "before": [
+            6,
+            17
+          ],
+          "after": [
+            6,
+            17
+          ]
+        },
+        {
+          "seq": 16,
+          "joy": 15,
+          "before": [
+            6,
+            17
+          ],
+          "after": [
+            6,
+            17
+          ]
+        },
+        {
+          "seq": 17,
+          "joy": 14,
+          "before": [
+            6,
+            17
+          ],
+          "after": [
+            6,
+            16
+          ]
+        },
+        {
+          "seq": 18,
+          "joy": 15,
+          "before": [
+            6,
+            16
+          ],
+          "after": [
+            6,
+            16
+          ]
+        },
+        {
+          "seq": 19,
+          "joy": 15,
+          "before": [
+            6,
+            16
+          ],
+          "after": [
+            6,
+            16
+          ]
+        },
+        {
+          "seq": 20,
+          "joy": 14,
+          "before": [
+            6,
+            16
+          ],
+          "after": [
+            6,
+            15
+          ]
+        },
+        {
+          "seq": 21,
+          "joy": 7,
+          "before": [
+            6,
+            15
+          ],
+          "after": [
+            7,
+            15
+          ]
+        },
+        {
+          "seq": 22,
+          "joy": 15,
+          "before": [
+            7,
+            15
+          ],
+          "after": [
+            7,
+            15
+          ]
+        },
+        {
+          "seq": 23,
+          "joy": 15,
+          "before": [
+            7,
+            15
+          ],
+          "after": [
+            7,
+            15
+          ]
+        },
+        {
+          "seq": 24,
+          "joy": 31,
+          "before": [
+            7,
+            15
+          ],
+          "after": [
+            7,
+            15
+          ]
+        },
+        {
+          "seq": 25,
+          "joy": 15,
+          "before": [
+            7,
+            15
+          ],
+          "after": [
+            7,
+            15
+          ]
+        },
+        {
+          "seq": 26,
+          "joy": 7,
+          "before": [
+            7,
+            15
+          ],
+          "after": [
+            8,
+            15
+          ]
+        },
+        {
+          "seq": 27,
+          "joy": 7,
+          "before": [
+            8,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        },
+        {
+          "seq": 28,
+          "joy": 15,
+          "before": [
+            9,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        },
+        {
+          "seq": 29,
+          "joy": 15,
+          "before": [
+            9,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        },
+        {
+          "seq": 30,
+          "joy": 15,
+          "before": [
+            9,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        },
+        {
+          "seq": 31,
+          "joy": 15,
+          "before": [
+            9,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        },
+        {
+          "seq": 32,
+          "joy": 15,
+          "before": [
+            9,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        },
+        {
+          "seq": 34,
+          "joy": 15,
+          "before": [
+            9,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        },
+        {
+          "seq": 36,
+          "joy": 15,
+          "before": [
+            9,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        },
+        {
+          "seq": 37,
+          "joy": 15,
+          "before": [
+            9,
+            15
+          ],
+          "after": [
+            9,
+            15
+          ]
+        }
+      ],
+      "rom_sha256": "4b1e857d0f79e1707782e2e30017eec2c6d0e33b625f6ea52d14c9496eedce77",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "received": {
+        "0x43": 1,
+        "0x45": 5,
+        "0x41": 32
+      },
+      "acknowledged": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "checks": [
+        "brick removal",
+        "bottom feet",
+        "border texture",
+        "fire input",
+        "movement input",
+        "diagnostics restoration",
+        "new round"
+      ],
+      "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+    },
+    "death-regression": {
+      "endpoint": "fujinet.online",
+      "port": 5025,
+      "input_lag_ms": 0,
+      "movement_results": [],
+      "death_results": [
+        "explosion/smoke visible",
+        "walked through active cloud",
+        "living player drawn over cloud",
+        "cloud cleanup",
+        "echo did not restart animation",
+        "final respawn visible"
+      ],
+      "applied_moves": [
+        {
+          "seq": 3,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 4,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 5,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 7,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 8,
+          "joy": 15,
+          "before": [
+            6,
+            17
+          ],
+          "after": [
+            6,
+            17
+          ]
+        },
+        {
+          "seq": 9,
+          "joy": 7,
+          "before": [
+            6,
+            17
+          ],
+          "after": [
+            7,
+            17
+          ]
+        },
+        {
+          "seq": 10,
+          "joy": 15,
+          "before": [
+            7,
+            17
+          ],
+          "after": [
+            7,
+            17
+          ]
+        },
+        {
+          "seq": 11,
+          "joy": 15,
+          "before": [
+            7,
+            17
+          ],
+          "after": [
+            7,
+            17
+          ]
+        },
+        {
+          "seq": 12,
+          "joy": 31,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 13,
+          "joy": 15,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            3,
+            17
+          ]
+        },
+        {
+          "seq": 14,
+          "joy": 7,
+          "before": [
+            3,
+            17
+          ],
+          "after": [
+            4,
+            17
+          ]
+        },
+        {
+          "seq": 15,
+          "joy": 7,
+          "before": [
+            4,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 16,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 17,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 18,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 19,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 20,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 22,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 24,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        },
+        {
+          "seq": 25,
+          "joy": 15,
+          "before": [
+            5,
+            17
+          ],
+          "after": [
+            5,
+            17
+          ]
+        }
+      ],
+      "rom_sha256": "4b1e857d0f79e1707782e2e30017eec2c6d0e33b625f6ea52d14c9496eedce77",
+      "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+      "received": {
+        "0x43": 1,
+        "0x45": 5,
+        "0x41": 20
+      },
+      "acknowledged": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "checks": [
+        "brick removal",
+        "bottom feet",
+        "border texture",
+        "fire input",
+        "movement input",
+        "diagnostics restoration",
+        "new round"
+      ],
+      "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+    }
+  }
+}

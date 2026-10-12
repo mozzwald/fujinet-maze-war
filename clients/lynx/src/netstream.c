@@ -1,6 +1,7 @@
 #include "netstream.h"
 #include "frame.h"
 #include "protocol.h"
+#include "command.h"
 
 #include <lynx.h>
 #include <serial.h>
@@ -26,59 +27,19 @@ static uint8_t rx_count;
 static uint16_t handshake_frames;
 static uint8_t hello_cooldown;
 
-static uint8_t command_put(uint8_t byte)
-{
-    uint16_t attempts = 4000;
-    while (attempts--) {
-        if (ser_put((char)byte) == SER_ERR_OK)
-            return 1;
-    }
-    return 0;
-}
-
-static int command_ack(void)
-{
-    uint16_t attempts = 30000;
-    char byte;
-    while (attempts--) {
-        if (ser_get(&byte) == SER_ERR_OK) {
-            if ((uint8_t)byte == FUJI_ACK)
-                return 1;
-            if ((uint8_t)byte == FUJI_NAK)
-                return 0;
-        }
-    }
-    return -1;
-}
-
 static uint8_t enable_raw_tcp(const char *host, uint16_t port)
 {
     uint8_t payload[68];
     uint8_t len = 0;
-    uint8_t checksum = 0;
-    uint8_t i;
-    char stale;
-    /* Only stale command-mode bytes are discarded. Never drain after raw
-       mode starts: that can eat the server's first reply. */
-    for (i = 0; i < 128 && ser_get(&stale) == SER_ERR_OK; ++i) {}
     payload[len++] = FUJI_NETSTREAM;
     payload[len++] = (uint8_t)port;
     payload[len++] = (uint8_t)(port >> 8);
-    while (*host)
-        payload[len++] = (uint8_t)*host++;
+    while (*host) payload[len++] = (uint8_t)*host++;
     payload[len++] = 0;
     payload[len++] = 0x01;
-    if (!command_put(FUJI_DEVICE) || !command_put(0) ||
-        !command_put(len))
-        return 0;
-    for (i = 0; i < len; ++i) {
-        checksum ^= payload[i];
-        if (!command_put(payload[i]))
-            return 0;
-    }
-    if (!command_put(checksum))
-        return 0;
-    return command_ack() == 1 && command_ack() == 1;
+    if (!command_complete(FUJI_DEVICE, payload, len)) return 0;
+    command_enter_raw();
+    return 1;
 }
 
 static void handle_frame(const uint8_t *payload, uint8_t len)
@@ -199,9 +160,6 @@ static uint8_t send_hello(void)
 
 uint8_t netstream_start(const char *host, uint16_t port)
 {
-    const struct ser_params params = {
-        SER_BAUD_62500, SER_BITS_8, SER_STOP_1, SER_PAR_ODD, SER_HS_NONE
-    };
     size_t host_len;
     size_t host_index;
     memset(&link_stats, 0, sizeof(link_stats));
@@ -228,12 +186,7 @@ uint8_t netstream_start(const char *host, uint16_t port)
             return 0;
         }
     }
-    if (ser_install(lynx_comlynx_ser) != SER_ERR_OK) {
-        link_state = LINK_SERIAL_ERROR;
-        return 0;
-    }
-    if (ser_open(&params) != SER_ERR_OK) {
-        ser_uninstall();
+    if (!command_open()) {
         link_state = LINK_SERIAL_ERROR;
         return 0;
     }

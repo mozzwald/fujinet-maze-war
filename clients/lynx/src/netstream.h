@@ -34,7 +34,7 @@ struct link_stats {
 extern struct link_stats link_stats;
 extern enum link_state link_state;
 
-/* Opens serial and issues $70/$F0 with TCP, no REGISTER, no Redeye. */
+/* Reuses command-mode serial and issues $70/$F0 with raw TCP flags. */
 uint8_t netstream_start(const char *host, uint16_t port);
 /* Drain serial and parse as many queued bytes as the bounded budget allows. */
 void netstream_poll(void);

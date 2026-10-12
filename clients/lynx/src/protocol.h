@@ -13,6 +13,15 @@
 #define GAME_REPEAT_PENDING 2
 #define GAME_DEATH_FRAME_TICKS 8
 #define GAME_DEATH_TICKS (4 * GAME_DEATH_FRAME_TICKS)
+#define GAME_WINNER_DANCE_TICKS 300 /* Atari's five-second celebration */
+enum { ROUND_NONE, ROUND_LOSERS, ROUND_DANCE, ROUND_WINNER_SMOKE, ROUND_RESULTS };
+/* Latched presentation events; the sound service consumes them between batches. */
+#define GAME_SOUND_STEP 1
+#define GAME_SOUND_SHOT 2
+#define GAME_SOUND_DEATH 4
+#define GAME_SOUND_SPAWN 8
+#define GAME_SOUND_FIRE 16
+#define GAME_SOUND_IMPACT 32
 
 struct game_player {
     uint8_t x;
@@ -56,6 +65,11 @@ struct game_state {
     uint8_t seat_mask;
     uint8_t zombie_mask;
     uint8_t winner_pid;
+    uint8_t result_valid;
+    uint8_t result_zombie_history;
+    uint16_t result_started;
+    uint8_t sound_events[GAME_PLAYERS];
+    uint8_t sound_brick;
     uint8_t round_authorized;
     uint8_t map_ready;
     uint8_t snapshot_ready;
@@ -87,12 +101,14 @@ struct game_state {
 extern struct game_state game;
 
 void game_reset(void);
+void game_set_name(const char *name);
 /* Returns 1 for structurally valid payload, 0 for rejected payload. */
 uint8_t game_receive(const uint8_t *packet, uint8_t len);
 uint8_t game_ready(void);
 void game_step(void);
 /* Feed the 60 Hz VBL clock before sampling buttons; elapsed render time counts. */
 void game_input_tick(uint16_t ticks);
+uint8_t game_round_stage(const struct game_state *state);
 /* Direction bits: Up=1, Right=2, Down=4, Left=8; newly pressed axis wins. */
 void game_sample_input(uint8_t directions, uint8_t fire, uint16_t ticks);
 void game_set_joy(uint8_t joy);

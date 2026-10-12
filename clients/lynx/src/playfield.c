@@ -21,7 +21,7 @@ static SCB_REHV_PAL scbs[8];
 static uint8_t scb_wizard[8];
 static uint8_t queued;
 static uint8_t tile_sprites[4][26];
-static uint8_t wizard_sprites[4][26];
+static uint8_t wizard_sprites[8][26];
 static const uint8_t shot_sprite[] = {2,0x9f,2,0x90,0};
 static uint8_t sprites_ready;
 static struct game_state frame_state;
@@ -33,6 +33,14 @@ static struct overlay_position old_deaths[2][GAME_PLAYERS];
 static uint8_t have_round;
 static uint8_t visual_round;
 static void (*serial_pump)(void);
+
+/* Alternate raised arms, feet and facing without leaving the walking cell. */
+static const char *const dance[4][5] = {
+    {"..CC....", ".CCCCCC.", "C.PPWC.C", "..CCCCC.", ".CSS.C.."},
+    {"....CC..", ".CCCCCC.", ".CWPP.C.", "CCCCCC.C", "..C.SSC."},
+    {"..CC....", ".CCCCCC.", ".CPPWC..", "C.CCCCC.", "..C.SSC."},
+    {"....CC..", ".CCCCCC.", "C.CWPP.C", ".CCCCC..", "..CSS.C."}
+};
 
 static const uint8_t *cell_tile(const struct game_state *state,
                                uint8_t x, uint8_t y)
@@ -73,6 +81,24 @@ static void make_sprites(void)
                 if ((i & 2) && x == 0 && y == 2) pen = 3;
                 if (x & 1) out[x >> 1] |= pen;
                 else out[x >> 1] = (uint8_t)(pen << 4);
+            }
+        }
+    }
+    for (i = 0; i < 4; ++i) {
+        memset(wizard_sprites[4+i], 0, 26);
+        for (y = 0; y < 5; ++y) {
+            out = wizard_sprites[4+i] + y*5;
+            *out++ = 5;
+            for (x = 0; x < 8; ++x) {
+                switch (dance[i][y][x]) {
+                case 'C': pen = 1; break;
+                case 'P': pen = 2; break;
+                case 'W': pen = 3; break;
+                case 'S': pen = 4; break;
+                default: pen = 0;
+                }
+                if (x & 1) out[x >> 1] |= pen;
+                else out[x >> 1] = pen << 4;
             }
         }
     }
@@ -216,7 +242,7 @@ static void draw_deaths(uint8_t page_index, const struct game_state *state)
     for (i = 0; i < GAME_PLAYERS; ++i) {
         old_deaths[page_index][i].valid = 0;
         death = &state->deaths[i];
-        if (!death->active || state->phase ||
+        if (!death->active ||
             !((state->seat_mask | state->zombie_mask) & (1u << i)) ||
             death->x >= 20 || death->y >= 18) continue;
         elapsed = (uint16_t)(state->input_clock - death->started);
@@ -257,7 +283,7 @@ static void draw_deaths(uint8_t page_index, const struct game_state *state)
 uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
                        const struct game_state *state, void (*pump)(void))
 {
-    uint8_t i, bit, mask, x, y, facing, image, repaint;
+    uint8_t i, bit, mask, x, y, facing, image, repaint, round_stage;
     uint16_t cell;
     const struct game_player *player;
     struct overlay_position *position;
@@ -270,6 +296,26 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
        frame on one immutable revision while those callbacks run. */
     memcpy(&frame_state, state, sizeof(frame_state));
     state = &frame_state;
+    round_stage = game_round_stage(state);
+    if (round_stage) {
+        /* Presentation belongs to this immutable frame, never occupancy. */
+        memset(frame_state.deaths, 0, sizeof(frame_state.deaths));
+        memset(frame_state.shots, 0, sizeof(frame_state.shots));
+        for (i = 0; i < GAME_PLAYERS; ++i) {
+            if ((i != state->winner_pid && round_stage == ROUND_LOSERS) ||
+                (i == state->winner_pid && round_stage == ROUND_WINNER_SMOKE)) {
+                if (!state->players[i].respawning) {
+                    frame_state.deaths[i].x = state->players[i].x;
+                    frame_state.deaths[i].y = state->players[i].y;
+                    frame_state.deaths[i].active = 1;
+                    frame_state.deaths[i].started = state->result_started +
+                        (i == state->winner_pid ? GAME_DEATH_TICKS + GAME_WINNER_DANCE_TICKS : 0);
+                }
+            }
+            if (i != state->winner_pid || round_stage >= ROUND_WINNER_SMOKE)
+                frame_state.players[i].respawning = 1;
+        }
+    }
     serial_pump = pump;
     if (!have_round || visual_round != state->round_id) {
         memset(visual, 0, sizeof(visual));
@@ -343,6 +389,9 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
             position = &visual[i];
             facing = player->joy & 15;
             image = (facing == 11 ? 1 : 0) | (i == state->local_pid ? 2 : 0);
+            if (round_stage == ROUND_DANCE && i == state->winner_pid)
+                image = 4 + ((uint16_t)(state->input_clock - state->result_started -
+                            GAME_DEATH_TICKS) / 8) % 4;
             queue(wizard_image(state, i, image, position->x, position->y),
                   position->x, position->y, 1, player_colors[i]);
             if (i == state->local_pid && state->fire_cue_frames)

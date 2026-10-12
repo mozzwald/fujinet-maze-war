@@ -6,6 +6,9 @@
 #include "netstream.h"
 #include "protocol.h"
 #include "render.h"
+#include "startup.h"
+#include "setup.h"
+#include "sound.h"
 
 #ifndef SERVER_HOST
 #define SERVER_HOST "127.0.0.1"
@@ -30,6 +33,7 @@ static void pump_game(void)
 {
     sample_buttons(joy_read(JOY_1));
     netstream_service();
+    sound_update();
 }
 
 void main(void)
@@ -38,17 +42,25 @@ void main(void)
     uint8_t diagnostics;
     tgi_install(lynx_160_102_16_tgi);
     tgi_init();
+    /* RAM below the video pages is game data, not a collision bitmap. */
+    tgi_setcollisiondetection(0);
     while (tgi_busy()) netstream_poll();
     tgi_setframerate(60);
     joy_install(lynx_stdjoy_joy);
+    sound_init();
+    if (!startup_run()) {
+        link_state = LINK_SERIAL_ERROR;
+    } else {
+        netstream_start(client_setup.host, client_setup.port);
+        game_set_name(client_setup.name);
+    }
     render_init(netstream_poll);
-    render_draw(0, netstream_poll);
-    netstream_start(SERVER_HOST, SERVER_PORT);
     for (;;) {
         while (tgi_busy()) pump_game();
         buttons = joy_read(JOY_1);
         sample_buttons(buttons);
         netstream_tick();
+        sound_update();
         diagnostics = JOY_BTN_2(buttons) != 0;
         render_draw(diagnostics, pump_game);
     }

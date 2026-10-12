@@ -4,8 +4,8 @@ See the [Suzy maze-cache benchmark results](bench/RESULTS.md) for measured
 renderer alternatives and the [benchmark guide](bench/README.md) to reproduce
 them. The benchmark cartridge is separate from the live client.
 
-This cartridge is an early playable view with a fixed server endpoint and
-name. It initializes the cc65 ComLynx serial driver at 62500 baud, 8 data bits, odd
+This cartridge includes a startup username editor and HTTP Lobby browser.
+It initializes the cc65 ComLynx serial driver at 62500 baud, 8 data bits, odd
 parity, one stop bit; sends FujiNet device `$70` command `$F0` with raw TCP
 flag `$01`; and retries the Maze War v1 `HELLO` until it receives `WELCOME`,
 `REJECT`, or a bounded timeout. After `WELCOME`, it sends `NAME`, cumulative
@@ -23,8 +23,74 @@ entries). Hold B for serial and protocol diagnostics. In that view, `A` is the
 applied reliable revision
 and `G:0007` means round authorization, reliable map, and fresh snapshot are
 all present. `B` counts rejected frames, `C` counts CRC failures, and `F`
-shows the last frame-error code (3 means malformed COBS). There is no setup
-menu, editable name, lobby, or leave flow yet.
+shows the last frame-error code (3 means malformed COBS). Return to Lobby
+after gameplay awaits a future firmware NetStream STOP mechanism.
+
+### Username and Lobby startup
+
+The client reads its username before displaying Lobby: Maze War creator
+`$3022`, application `$03`, key `$00`, with a read-only fallback to the old
+Lobby name at `$0001/$01/key $00`. Missing/invalid names open an eight-character
+editor. Up/Left advances the character; Down/Right reverses it; A appends,
+B deletes, and A on DONE confirms. A separate SPACE choice allows spaces.
+Names use uppercase letters, digits, space, hyphen and period. Option 2 cancels
+an edit when a previous valid name exists. This interaction follows
+[Battleship's Lynx selector](https://github.com/shawnjefferson22/fujinet-battleship/blob/41286cf973bce1032530a20d9f8ca861b0aa2b03/src/lynx/input.c);
+the implementation uses Maze War's renderer and input handling.
+
+Confirmed names save only to Maze War's key. Saves are read back and verified.
+The client supports the older Lynx WRITE format with a little-endian length
+and the newer AppKeyMixin raw-value format. It first sends the older safe
+shape; if the newer firmware stores that exact prefix literally, it rewrites
+the raw name and verifies again. A failed save shows NAME NOT SAVED and keeps
+the chosen name usable for this session. Edit/confirm retries saving. Names
+survive game initialization and the WELCOME reset.
+
+Lobby uses FujiNet network device `$71` over HTTPS before raw NetStream starts.
+It fetches four compact binary records per page, with bounded reads and eight
+pages maximum. The default filter is `platform=atari&appkey=3`, since the live
+Maze War rooms currently have Atari registrations; the client ignores their
+Atari download URLs and connects to the shared game protocol. Build settings
+`LOBBY_BASE`, `LOBBY_PLATFORM`, `ROOM_PORT_BASE` and `ROOM_COUNT` control the
+query and allowed endpoint range. Live hardware builds use
+`https://lobby.fujinet.online` and `fujinet.online:5025..5028`.
+
+Lobby controls: Up/Down selects a room, Left/Right changes pages, A joins,
+B joins the configured default room, Option 1 refreshes, Option 2 edits the
+name. Full rooms are unavailable for selection. Missing/invalid listings and
+HTTP failures allow refresh or default-room fallback. HTTP closes before
+`$F0` activates raw TCP. No HTTP or AppKey commands run during gameplay.
+
+Until firmware provides an in-band STOP mechanism, a failed raw connection
+cannot return to this browser or change endpoints. Stop NetStream using
+FujiNet's web configuration (or reset FujiNet) before restarting the cartridge
+to browse again; resetting only the Lynx does not guarantee command mode.
+No firmware modifications are included in this client change.
+
+Startup checks:
+
+```sh
+make -C clients/lynx test
+python3 clients/lynx/tests/handy_startup_smoke.py --new-name
+python3 clients/lynx/tests/handy_startup_smoke.py --new-name --fail-save --http404
+python3 clients/lynx/tests/handy_startup_smoke.py --firmware --new-name
+python3 clients/lynx/tests/handy_startup_smoke.py --firmware --edit-checks
+python3 clients/lynx/tests/handy_startup_smoke.py --firmware --live-browser
+```
+
+The default harness uses a controlled command peer and production ROM. Firmware
+mode uses the existing FujiNet PC binary, private SD/config and local HTTP/game
+fixtures with a separate localhost ROM under `/tmp`. `--sd-from <prior-run>/SD`
+copies private test storage to verify a later boot reloads the saved name.
+Live-browser mode reads the real production HTTPS Lobby with the hardware ROM
+but does not join a live room. These checks supplement physical serial and
+SD-card testing; the emulator cannot prove one-wire electrical timing.
+
+The October 12 build passed the [startup test matrix](tests/results/lobby-startup.json),
+including actual FujiNet PC AppKey save/reload and the live HTTPS Lobby.
+See the [Lobby screenshot](art/handy-lobby-preview.png). On hardware, check
+first-time name entry, persistence after restarting with FujiNet back in command
+mode, room selection and the chosen name appearing in the game's score line.
 
 The current Handy preview is [art/handy-full-map-preview.png](art/handy-full-map-preview.png).
 It is an art iteration for hardware review, not final graphics approval.
@@ -62,6 +128,79 @@ second under redraw. A 21-second sample reached reliable revision 24 with
 one malformed COBS frame, no CRC failures, no RX-ring overflows, and no
 serial status errors. The cause of the occasional malformed frame needs
 investigation before calling the display path reliable.
+
+### Sound effects
+
+Mikey supplies four independent voices, one per player, with remote effects at
+half the local player's volume. The effects follow the Atari client's purposes:
+
+- Quiet, brief shuffle noise for a successful movement step.
+- A descending shot zip, with immediate feedback for a transmitted local fire
+  press and suppression of its subsequent network echo.
+- A short noisy impact when an active shot is cleared, plus a burst for a
+  destroyed brick. The wire protocol does not identify the cause of a shot
+  clear, so shot impacts use one generic sound.
+- A swelling/fading noise envelope during death and round-end smoke.
+- An alternating high/low warble for respawning and initial placement.
+
+Death and respawn effects take priority over footsteps and shots. Repeated
+state packets, snapshot prediction replay and duplicate brick removals do not
+restart sounds. The winner dance itself is quiet, as in the Atari sequence;
+the score screen and Lobby are silent. Use the Lynx volume control to adjust
+the mix.
+
+Envelopes use elapsed VBL ticks and skip missed steps rather than delaying the
+game. The foreground service runs alongside serial polling between Suzy batches;
+audio uses only Mikey's four audio channels, with independent 8us clocks, and
+does not change serial/display timers or install an interrupt. Collision
+detection is explicitly disabled: this client uses that RAM for game data,
+and all production sprites use non-colliding Suzy drawing.
+
+`make -C clients/lynx test` includes sound event, envelope, priority, duplicate,
+clock-wrap and delayed-service checks. To capture the existing Handy binary's
+audio while checking movement or round transitions:
+
+```sh
+python3 clients/lynx/tests/handy_render_smoke.py --movement-checks --sound-checks
+python3 clients/lynx/tests/handy_render_smoke.py --round-checks --sound-checks
+```
+
+Sound capture additionally needs a host C compiler, SDL2 development headers and
+pkg-config. The harness compiles a test-only SDL callback preload under `/tmp`,
+uses the dummy audio device and records the exact emulator output as unsigned
+8-bit mono PCM at 22050 Hz. It verifies nonzero samples during effects and zero
+samples during idle play/results, and writes `sound-preview.wav` plus a JSON
+record. No emulator or firmware modifications are required. Speaker character
+and the final volume balance still need physical Lynx listening.
+See the [audio test record](tests/results/sound-effects.json) and
+[compact Handy recording](art/handy-sound-preview.wav). The preview removes
+long silent gaps from the captured fixture run.
+
+### Round-end presentation
+
+The accepted MATCH_END freezes the names, occupied slots, roles and final scores.
+Losers go up in the existing four-stage smoke effect, and the winner dances
+through four poses for five seconds, then disappears in smoke. A separate
+ROUND OVER screen shows the winner's full name, four colored score rows and
+NEXT ROUND, following the Atari client's wording. A human victory in a round
+with Zombies reads BEATS ZOMBIES. Late intermission joins show scores directly
+when no playable board was received.
+
+The VBL clock drives the sequence; input/link polling and reliable ACKs continue
+between Suzy batches and while the scores are displayed. Duplicate results do
+not restart the animation or replace final scores. ROUND_START can interrupt
+the sequence, invalidates both pages and restores normal play after the usual
+map/snapshot barrier. B diagnostics can still be opened during intermission.
+
+```sh
+python3 clients/lynx/tests/handy_render_smoke.py --round-checks
+```
+
+This uses a controlled local ComLynx peer with the live-endpoint ROM, including
+animation, ACKs, duplicate results, diagnostics and the following round.
+The host round test additionally checks clock wrap and an interrupted dance.
+See the [Handy test record](tests/results/round-presentation.json) and
+[score-screen preview](art/handy-round-scores-preview.png).
 
 ### Movement and turn control
 
@@ -170,7 +309,7 @@ sprites. Both display pages cache their maze independently; a brick change
 patches only that cell, and old player/shot footprints are restored with maze
 tiles before transparent actors are drawn. All 95 maze rows, including the
 textured bottom border and last-row feet, use the same path. The seven HUD
-rows retain their existing TGI drawing and per-page change detection.
+rows retain per-page change detection; compact text uses native Suzy sprites.
 The CPU no longer writes the maze bitmap across hardware registers.
 
 Serial interrupts buffer bytes during Suzy drawing; foreground input and

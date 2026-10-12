@@ -156,6 +156,7 @@ static void start_death(uint8_t id)
         death->y = player->y;
         death->started = game.input_clock;
         death->active = 1;
+        game.sound_events[id] |= GAME_SOUND_DEATH;
     }
     player->respawning = 1;
     player->x = player->y = 255;
@@ -177,6 +178,11 @@ static void snapshot_apply(const uint8_t *p)
         } else if (!game.players[i].respawning) {
             /* After a death, only explicit final placement can restore
                occupancy. A stale live snapshot must not revive the body. */
+            if (!game.snapshot_ready)
+                game.sound_events[i] |= GAME_SOUND_SPAWN;
+            else if (i != game.local_pid &&
+                     (game.players[i].x != p[3 + 2*i] || game.players[i].y != p[4 + 2*i]))
+                game.sound_events[i] |= GAME_SOUND_STEP;
             game.players[i].x = p[3 + 2 * i];
             game.players[i].y = p[4 + 2 * i];
         }
@@ -214,10 +220,13 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
                 game.fire_cue_frames = 0;
                 game.intent_count = 0;
                 game.input_sent = 0;
+                memset(game.sound_events, 0, sizeof(game.sound_events));
+                game.sound_brick = 0;
             }
             game.round_id = id;
             game.kill_limit = p[2];
             game.phase = 0;
+            game.result_valid = 0;
             game.round_authorized = 1;
             if (game.pending_snapshot_valid &&
                 game.pending_snapshot[20] == id) {
@@ -227,7 +236,11 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
         }
         break;
     case PKT_MATCH_END:
-        if (p[1] != game.round_id) break;
+        /* A later reliable revision must not restart or replace the result. */
+        if (p[1] != game.round_id || game.result_valid) break;
+        game.result_valid = 1;
+        game.result_started = game.input_clock;
+        game.result_zombie_history = p[10];
         game.phase = 1;
         game.pending_count = 0;
         game.fire_cue_frames = 0;
@@ -251,6 +264,7 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
     case PKT_BRICK_DELTA:
         if (p[4] == game.round_id && game.phase == 0) {
             index = (uint16_t)p[3] * 20 + p[2];
+            if (game.bricks[index >> 3] & (1u << (index & 7))) game.sound_brick = 1;
             game.bricks[index >> 3] &= (uint8_t)~(1u << (index & 7));
         }
         break;
@@ -260,6 +274,8 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
         if ((p[5] & 1) && !(p[5] & 2)) {
             start_death(id);
         } else if (p[5] & 2) {
+            if (game.players[id].respawning || game.players[id].x != p[3] ||
+                game.players[id].y != p[4]) game.sound_events[id] |= GAME_SOUND_SPAWN;
             if (id == game.local_pid) {
                 game.pending_count = 0;
                 game.intent_count = 0;
@@ -285,6 +301,10 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
     case PKT_SHOT:
         if (p[6] != game.round_id || game.phase != 0) break;
         id = p[2];
+        if ((p[5] & 1) && !game.shots[id].active)
+            game.sound_events[id] |= GAME_SOUND_SHOT;
+        if (!(p[5] & 1) && game.shots[id].active)
+            game.sound_events[id] |= GAME_SOUND_IMPACT;
         game.shots[id].active = p[5] & 1;
         if (game.shots[id].active) {
             game.shots[id].x = p[3];
@@ -307,12 +327,24 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
     }
 }
 
+/* Identity survives both connection initialization and WELCOME resets. */
+static char configured_name[GAME_NAME_LEN] = "LYNX    ";
+
+void game_set_name(const char *name)
+{
+    uint8_t i;
+    memset(configured_name, ' ', GAME_NAME_LEN);
+    for (i = 0; i < GAME_NAME_LEN && name[i]; ++i)
+        configured_name[i] = name[i];
+    memcpy(game.local_name, configured_name, GAME_NAME_LEN);
+}
+
 void game_reset(void)
 {
     memset(&game, 0, sizeof(game));
     game.local_pid = 255;
     game.input_joy = game.sent_joy = 15;
-    memcpy(game.local_name, "LYNX    ", GAME_NAME_LEN);
+    memcpy(game.local_name, configured_name, GAME_NAME_LEN);
     game.name_age = 60;
 }
 
@@ -389,6 +421,20 @@ void game_input_tick(uint16_t ticks)
             game.deaths[i].active = 0;
 }
 
+uint8_t game_round_stage(const struct game_state *state)
+{
+    uint16_t elapsed;
+    if (!state->phase || !state->result_valid) return ROUND_NONE;
+    /* A late join has no board positions to animate. */
+    if (!state->snapshot_ready || !state->map_ready) return ROUND_RESULTS;
+    elapsed = (uint16_t)(state->input_clock - state->result_started);
+    if (elapsed < GAME_DEATH_TICKS) return ROUND_LOSERS;
+    if (elapsed < GAME_DEATH_TICKS + GAME_WINNER_DANCE_TICKS) return ROUND_DANCE;
+    if (elapsed < 2 * GAME_DEATH_TICKS + GAME_WINNER_DANCE_TICKS)
+        return ROUND_WINNER_SMOKE;
+    return ROUND_RESULTS;
+}
+
 void game_sample_input(uint8_t directions, uint8_t fire, uint16_t ticks)
 {
     uint8_t fresh = directions & (uint8_t)~game.direction_mask;
@@ -428,6 +474,7 @@ void game_set_joy(uint8_t joy)
 uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
 {
     uint8_t joy;
+    uint8_t old_x, old_y;
     uint8_t explicit_intent = 0;
     uint8_t repeats_pending = 0;
     uint8_t i;
@@ -484,7 +531,13 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
         /* The replay ring also includes neutral and firing inputs. */
         game.pending_seq[game.pending_count] = out[1];
         game.pending_joy[game.pending_count++] = joy;
+        old_x = game.players[game.local_pid].x;
+        old_y = game.players[game.local_pid].y;
         predict_input(joy);
+        if (old_x != game.players[game.local_pid].x || old_y != game.players[game.local_pid].y)
+            game.sound_events[game.local_pid] |= GAME_SOUND_STEP;
+        if ((joy & 0x10) && !(game.sent_joy & 0x10))
+            game.sound_events[game.local_pid] |= GAME_SOUND_FIRE;
     }
     game.last_input_at = game.input_clock;
     game.sent_joy = joy;
