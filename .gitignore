@@ -14,3 +14,7 @@ clients/atari/map.asm
 clients/atari/map1.txt
 clients/atari/map2.asm
 tests/__pycache__
+
+# Lynx cartridge outputs and local endpoint overrides.
+clients/lynx/build/
+clients/lynx/config.mk
