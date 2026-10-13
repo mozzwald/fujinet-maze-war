@@ -587,7 +587,7 @@ frame names, animation previews, generated files and tests.
 
 ### Imported 4×6 HUD font
 
-The editable tileset now uses Shawn Jefferson's 4×6 Lynx font (project version 2).
+The editable tileset now uses [Shawn Jefferson's 4×6 Lynx font](https://github.com/shawnjefferson22/lynx-4x6-4x8-font) (project version 2).
 Names and single-digit scores still fit four 40-pixel slots beneath the complete
 maze. Glyphs occupy y=95–100; the local marker remains at y=101. Edit **HUD O**
 and **HUD 0** separately in Charsetter; both initially retain the supplied shape.
