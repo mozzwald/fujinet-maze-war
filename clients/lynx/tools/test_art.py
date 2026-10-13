@@ -21,12 +21,12 @@ class ArtTests(unittest.TestCase):
         expected = []
         for e in self.project['entries']:
             rows = images[e['id']]
-            if e['mode']=='font': expected.append([sum(v<<(2-x) for x,v in enumerate(row)) for row in rows])
+            if e['mode']=='font': expected.append([sum(v<<(3-x) for x,v in enumerate(row)) for row in rows])
             else: expected.append((art.counted if e['kind']=='terrain' else art.literal)(rows))
         self.assertEqual(actual, expected)
 
     def test_validation(self):
-        changes = [lambda p:p.update(version=2),lambda p:p['entries'].reverse(),
+        changes = [lambda p:p.update(version=3),lambda p:p['entries'].reverse(),
                    lambda p:p['entries'][0].update(width=9),lambda p:p['entries'][0]['rows'].pop(),
                    lambda p:p['entries'][4]['rows'].__setitem__(0,'FFFF0000'),
                    lambda p:p['entries'][18]['rows'].__setitem__(0,'222'),

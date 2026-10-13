@@ -34,7 +34,7 @@ static void setup(struct game_state *state)
     for (i = 0; i < 4; ++i) {
         state->players[i].x = 3 + i;
         state->players[i].y = i == 3 ? 17 : 3 + i * 4;
-        state->players[i].joy = i & 1 ? 11 : 7;
+        state->players[i].joy = state->facing_joy[i] = i & 1 ? 11 : 7;
     }
 }
 

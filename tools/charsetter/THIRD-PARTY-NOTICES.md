@@ -34,3 +34,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+## Shawn Jefferson 4×6 Lynx font
+
+HUD glyphs are imported from Shawn Jefferson's
+https://github.com/shawnjefferson22/lynx-4x6-4x8-font
+revision `f1dbdd4eb80c9913ab014126c0b6ca8cf3004407`, directory `4x6`.
+Black bitmap pixels are converted to pen 1; all 4×6 pixels are preserved.
+The original O and 0 shapes are imported unchanged as independently editable
+entries. Provenance is also recorded in the editable JSON's `fontSource` block.

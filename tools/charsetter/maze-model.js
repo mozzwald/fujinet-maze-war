@@ -16,9 +16,9 @@
     for(let i=1;i<=4;i++) spec(`dance_${i}`,8,5,'player','dance');
     for(let i=1;i<=4;i++) spec(`explosion_${i}`,12,9,'palette','explosion');
     spec('projectile',2,2,'palette','effect'); spec('muzzle',2,1,'palette','effect');
-    for(const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./') spec(`glyph_${c.charCodeAt(0)}`,3,4,'font','font');
+    for(const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./') spec(`glyph_${c.charCodeAt(0)}`,4,6,'font','font');
     function validateTileset(project) {
-        if(!project || project.projectType !== 'maze-war-lynx-tiles' || project.version !== 1) throw Error('Expected Maze War Lynx tiles version 1');
+        if(!project || project.projectType !== 'maze-war-lynx-tiles' || project.version !== 2) throw Error('Expected Maze War Lynx tiles version 2');
         if(JSON.stringify(project.palette) !== JSON.stringify(PALETTE)) throw Error('Palette must match the game palette');
         if(!Array.isArray(project.entries) || project.entries.length !== specs.length) throw Error(`Expected ${specs.length} images`);
         project.entries.forEach((e,i) => {

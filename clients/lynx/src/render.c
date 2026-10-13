@@ -8,6 +8,7 @@
 #include "render.h"
 #include "colors.h"
 #include "command.h"
+#include "phase_scratch.h"
 
 
 extern SCB_REHV_PAL maze_text_scb;
@@ -91,13 +92,13 @@ static void draw_diagnostics(void)
         state[field*5] = labels[field];
         hex_word(state+field*5+1,reconcile_trace[field]);
     }
-    render_small_text(4,88,state);
+    render_small_text(4,84,state);
     hex_word(waits+1,link_stats.quiet_ticks); waits[5]=' ';
     hex_word(waits+7,game.repeat_stalls); waits[11]=' ';
     hex_word(waits+13,game.input_history);
-    render_small_text(4,93,waits);
+    render_small_text(4,90,waits);
     if (link_state == LINK_COMMAND_ERROR)
-        render_small_text(4,98,command_error_text());
+        render_small_text(4,96,command_error_text());
     else {
         hex_word(latency+1,game.repeat_window); latency[5]=' ';
         hex_word(latency+7,game.ack_delay); latency[11]=' ';
@@ -105,7 +106,7 @@ static void draw_diagnostics(void)
         hex_word(latency+19,render_timing.frame_ticks);
         latency[23]=' '; hex_word(latency+25,game.local_corrections);
         latency[29]=' '; hex_word(latency+31,game.input_retries);
-        render_small_text(4,98,latency);
+        render_small_text(4,96,latency);
     }
 }
 
@@ -114,17 +115,18 @@ static void draw_diagnostics(void)
 
 void render_small_text(uint8_t x, uint8_t y, const char *line)
 {
-    static uint8_t bitmap[329];
+    /* Text packing and maze/command scratch have disjoint lifetimes. */
+#define bitmap phase_scratch.text
     uint8_t index, row, col, bits, count, stride;
     char c;
-    if (x >= 160 || y > 98) return;
+    if (x >= 160 || y > 96) return;
     count = (uint8_t)strlen(line);
     if (count > (160-x)/4) count = (160-x)/4;
     if (!count) return;
     /* A zero guard byte prevents real Suzy dropping the last text pixel. */
     stride = count*2+2;
     memset(bitmap,0,sizeof(bitmap));
-    for (row = 0; row < 4; ++row) {
+    for (row = 0; row < 6; ++row) {
         bitmap[row*stride] = stride;
         for (col = 0; col < count; ++col) {
             c = line[col];
@@ -136,8 +138,8 @@ void render_small_text(uint8_t x, uint8_t y, const char *line)
             else if (c == '/') index = 38;
             else continue;
             bits = mini_font[index][row];
-            bitmap[row*stride+1+col*2] = (bits & 4 ? 0x10 : 0) | (bits & 2 ? 1 : 0);
-            bitmap[row*stride+2+col*2] = bits & 1 ? 0x10 : 0;
+            bitmap[row*stride+1+col*2] = (bits & 8 ? 0x10 : 0) | (bits & 4 ? 1 : 0);
+            bitmap[row*stride+2+col*2] = (bits & 2 ? 0x10 : 0) | (bits & 1 ? 1 : 0);
         }
     }
     /* One synchronous Suzy sprite per line, rather than hundreds of
@@ -150,6 +152,7 @@ void render_small_text(uint8_t x, uint8_t y, const char *line)
     maze_text_scb.hsize = maze_text_scb.vsize = 0x100;
     maze_text_scb.penpal[0] = tgi_getcolor();
     tgi_sprite(&maze_text_scb);
+#undef bitmap
 }
 
 static void draw_score(uint8_t slot)
@@ -166,10 +169,10 @@ static void draw_score(uint8_t slot)
     line[8] = occupied ? (char)('0' + score % 10) : '-';
     line[9] = 0;
     tgi_setcolor(occupied ? player_colors[slot] : COLOR_LIGHTGREY);
-    render_small_text((uint8_t)(slot * 40), 97, line);
+    render_small_text((uint8_t)(slot * 40), 95, line);
     if (slot == game.local_pid) {
         tgi_setcolor(COLOR_WHITE);
-        tgi_bar(slot * 40, 101, slot * 40 + 3, 101);
+        tgi_bar(slot * 40, 101, slot * 40 + 35, 101);
     }
 }
 
@@ -315,7 +318,7 @@ void render_draw(uint8_t diagnostics, void (*pump)(void))
         draw_diagnostics();
         if (!direct_page_ok) {
             tgi_setcolor(COLOR_YELLOW);
-            render_small_text(4,98,"VIDEO PAGE ERROR");
+            render_small_text(4,96,"VIDEO PAGE ERROR");
         }
     } else {
         draw_full_map(pump);

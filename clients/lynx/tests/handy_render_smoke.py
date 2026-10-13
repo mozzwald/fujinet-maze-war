@@ -26,26 +26,26 @@ spec.loader.exec_module(wire)
 
 
 def diagnostic_values(image, trace=False):
-    # Decode the actual ROM's 3x4 hexadecimal text from screen pixels.
-    glyphs = [(7,5,5,7),(2,6,2,7),(7,1,6,7),(7,1,3,7),(5,5,7,1),
-              (7,4,3,6),(3,4,7,7),(7,1,1,1),(7,5,7,7),(7,5,7,1),
-              (2,5,7,5),(6,5,6,7),(3,4,4,3),(6,5,5,6),(7,6,4,7),(7,6,4,4)]
+    # Decode the editable 4x6 font used by the production cartridge.
+    art = json.loads((Path(__file__).resolve().parents[1] / 'art/maze-war-tiles.json').read_text())
+    rows = {e['id']: tuple(int(row,2) for row in e['rows']) for e in art['entries'] if e['kind']=='font'}
+    glyphs = [rows['glyph_'+str(ord(c))] for c in '0123456789ABCDEF']
     alphabet = {pattern: digit for digit,pattern in enumerate(glyphs)}
     def number(column, row):
         value = 0
         background = image.getpixel((3,row))
         for offset in range(4):
-            pattern = tuple(sum((1 << (2-x)) for x in range(3)
+            pattern = tuple(sum((1 << (3-x)) for x in range(4)
                                 if image.getpixel((4+(column+offset)*4+x,row+y)) != background)
-                            for y in range(4))
+                            for y in range(6))
             assert pattern in alphabet, ('diagnostic glyph',pattern)
             value = value*16 + alphabet[pattern]
         return value
-    values = dict(quiet_vbl_samples=number(1,93),window_stall_vbl_samples=number(7,93),input_history=number(13,93),
-                window=number(1,98),ack_age_ticks=number(7,98),pending=number(13,98),
-                diagnostic_frame_ticks=number(19,98),corrections=number(25,98),retries=number(31,98))
+    values = dict(quiet_vbl_samples=number(1,90),window_stall_vbl_samples=number(7,90),input_history=number(13,90),
+                window=number(1,96),ack_age_ticks=number(7,96),pending=number(13,96),
+                diagnostic_frame_ticks=number(19,96),corrections=number(25,96),retries=number(31,96))
     if trace:
-        values['reconcile'] = {name: number(1+index*5,88) for index,name in
+        values['reconcile'] = {name: number(1+index*5,84) for index,name in
                                enumerate(('before','server','expected','replayed','ack_pending','respawn_ignored','prediction_detail'))}
     return values
 
@@ -292,22 +292,24 @@ def main():
             full_names = ('ABCDEFGH','IJKLMNOP','QRSTUVWX','YZ012345')
             for slot,name in enumerate(full_names):
                 send([0x43,0,slot]+list(name.encode('ascii')))
-            digits = {0:(7,5,5,7),1:(2,6,2,7),9:(7,5,7,1)}
+            art = json.loads((Path(__file__).resolve().parents[1] / 'art/maze-war-tiles.json').read_text())
+            digits = {int(chr(int(e['id'].split('_')[1]))):tuple(int(row,2) for row in e['rows'])
+                      for e in art['entries'] if e['kind']=='font' and chr(int(e['id'].split('_')[1])).isdigit()}
             for iteration,points in enumerate(([0,9,10,11],[11,10,9,0])):
                 player_scores[:] = points
                 service(.6,True)
                 hud = capture(f'hud-rollover-{iteration}',full=True)
-                background = hud.getpixel((39,97))
+                background = hud.getpixel((39,95))
                 for slot,score in enumerate(points):
                     x=slot*40
-                    actual=tuple(sum(1<<(2-col) for col in range(3)
-                                     if hud.getpixel((x+32+col,97+row))!=background)
-                                 for row in range(4))
+                    actual=tuple(sum(1<<(3-col) for col in range(4)
+                                     if hud.getpixel((x+32+col,95+row))!=background)
+                                 for row in range(6))
                     assert actual==digits[score%10], ('HUD score',score,actual)
                     assert all(hud.getpixel((xx,yy))==background
-                               for xx in range(x+35,x+40) for yy in range(97,101)), 'HUD entry gap missing'
+                               for xx in range(x+36,x+40) for yy in range(95,101)), 'HUD entry gap missing'
                     assert any(hud.getpixel((xx,yy))!=background
-                               for xx in range(x+28,x+31) for yy in range(97,101)), 'eighth name character missing'
+                               for xx in range(x+28,x+32) for yy in range(95,101)), 'eighth name character missing'
         d = display.Display(env['DISPLAY'])
         def windows(w):
             yield w

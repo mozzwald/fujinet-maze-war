@@ -498,9 +498,11 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
             move_visual(i, state);
             position = &visual[i];
             wizard_draw(page, position->x, position->y,
-                        player_colors[i], player->joy & 15
+                        player_colors[i],
 #ifdef REFERENCE_EDITABLE_ART
-                        , i == state->local_pid
+                        state->facing_joy[i], i == state->local_pid
+#else
+                        player->joy & 15
 #endif
                         );
 #ifndef REFERENCE_EDITABLE_ART

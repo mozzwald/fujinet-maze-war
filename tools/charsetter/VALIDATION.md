@@ -44,3 +44,39 @@ rather than fixed hat/eye/brick pixels, and allow identical custom animation
 frames. The round test also supplies an actual open map when authorizing its
 post-round fixture, so it verifies restored player art rather than unknown-map
 bricks.
+
+## Shawn Jefferson 4×6 font import
+
+The version 2 tileset replaces the 39 HUD glyphs with the exact 4×6 black-pixel
+shapes from `shawnjefferson22/lynx-4x6-4x8-font`, revision
+`f1dbdd4eb80c9913ab014126c0b6ca8cf3004407`. All glyph rows, including top/spacing
+pixels, matched their source bitmaps. All non-font entries were compared against
+the local pre-import JSON and preserved, including the user's uncommitted art.
+O and 0 retain the supplied shapes in independently editable entries.
+
+- Python art tests, six JavaScript model checks and the complete Lynx host suite
+  passed. Tests cover editing O/0 independently and the fourth glyph column.
+- Chromium editor test passed with the full 4×6 grid:
+  `/tmp/maze-charsetter-2cqazdmx`.
+- Handy HUD/round checks passed: eight-character names, single-digit score
+  rollover, four-pixel slot gaps, winner/loser presentation and results restored
+  after diagnostics. Artifacts: `/tmp/maze-suzy-game-hdaof_ev`.
+- Handy startup checks with ACK noise passed: AppKey name resolution, Lobby
+  listing/selection, selected endpoint and HELLO/WELCOME/name handoff.
+  Artifacts: `/tmp/maze-lynx-startup-dc8wobod`.
+- The three diagnostic rows now use y=84/90/96; decoding the rendered 4×6 hex
+  fields was verified from Handy's screenshot.
+- Built for `fujinet.online:5025`. ROM SHA-256:
+  `1bb8dc43bf03e31995a35f7562408afbd3dd76ee3c942a624acc4975239a3521`.
+- Graphics layout passed with SCBs `$B500`, text `$B400`, and 27 bytes before
+  the unchanged full reserved 2 KB stack. Six-row text uses a 493-byte temporary
+  bitmap in the existing phase scratch union, replacing the separate 329-byte
+  buffer. Command operations finish before menu text packing; maze drawing
+  finishes before HUD packing. The resident TGI sprite call waits for Suzy to
+  finish, and text packing/drawing makes no serial callbacks, so those scratch
+  lifetimes do not overlap.
+
+The full 95-row maze is retained. HUD text now occupies y=95–100, leaving
+its local-player underline at y=101. This import intentionally changes the
+previous byte-identical migration ROM. Real-hardware font readability remains
+for the user's next test.

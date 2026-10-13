@@ -14,7 +14,7 @@ SPECS += [('player_'+str(i), 8, 5, 'player', 'player') for i in range(4)]
 SPECS += [('dance_'+str(i), 8, 5, 'player', 'dance') for i in range(1, 5)]
 SPECS += [('explosion_'+str(i), 12, 9, 'palette', 'explosion') for i in range(1, 5)]
 SPECS += [('projectile', 2, 2, 'palette', 'effect'), ('muzzle', 2, 1, 'palette', 'effect')]
-SPECS += [('glyph_'+str(ord(c)), 3, 4, 'font', 'font') for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./']
+SPECS += [('glyph_'+str(ord(c)), 4, 6, 'font', 'font') for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./']
 
 
 def default_palette():
@@ -23,8 +23,8 @@ def default_palette():
 
 
 def validate(project):
-    if not isinstance(project, dict) or project.get('projectType') != 'maze-war-lynx-tiles' or type(project.get('version')) is not int or project['version'] != 1:
-        raise ValueError('Expected Maze War Lynx tiles project version 1')
+    if not isinstance(project, dict) or project.get('projectType') != 'maze-war-lynx-tiles' or type(project.get('version')) is not int or project['version'] != 2:
+        raise ValueError('Expected Maze War Lynx tiles project version 2')
     if project.get('palette') != default_palette():
         raise ValueError('Palette must match the resident Lynx TGI palette; edit pixels, not palette metadata')
     entries = project.get('entries')
@@ -78,7 +78,7 @@ def outputs(project):
     maze += 'static const uint8_t shot_sprite[] = {'+','.join(f'0x{v:02x}' for v in literal(images['projectile']))+'};\n'
     maze += f"#define ART_MUZZLE_LEFT 0x{images['muzzle'][0][0]<<4:02x}\n#define ART_MUZZLE_RIGHT 0x{images['muzzle'][0][1]:02x}\n"
     death = banner + array('death_sprites', [literal(images['explosion_'+str(i)]) for i in range(1,5)])
-    font = banner + array('mini_font', [[sum(v << (2-x) for x,v in enumerate(row)) for row in images[key]] for key,*_ in SPECS[18:]])
+    font = banner + array('mini_font', [[sum(v << (3-x) for x,v in enumerate(row)) for row in images[key]] for key,*_ in SPECS[18:]])
     # Independent unencoded pixels for the host CPU oracle and renderer tests.
     oracle = banner + '#ifndef MAZE_ART_PIXELS_H\n#define MAZE_ART_PIXELS_H\n#include <stdint.h>\n'
     for key,*_ in SPECS:

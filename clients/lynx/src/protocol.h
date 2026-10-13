@@ -79,6 +79,7 @@ struct game_death {
     uint8_t map_ready; \
     uint8_t snapshot_ready; \
     uint8_t input_joy; \
+    uint8_t facing_joy[GAME_PLAYERS]; /* presentation: last non-neutral direction */ \
     uint8_t fire_cue_frames; \
     uint8_t winner_pid; \
     uint8_t result_valid; \

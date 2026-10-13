@@ -52,7 +52,7 @@ SCRIPT=r'''
         const colour=document.createElement('span');colour.style.background=PROJECT.palette[14];
         check(swatch.style.background===colour.style.background,'P2 robe is blue');
         choose('glyph_65');check(document.querySelectorAll('.swatch').length===2,'font pen restriction');
-        check(el('editor-canvas').width===120 && el('editor-canvas').height===160,'3×4 glyph canvas');
+        check(el('editor-canvas').width===160 && el('editor-canvas').height===240,'4×6 glyph canvas');
         choose('muzzle');check(el('editor-canvas').width===80 && el('editor-canvas').height===40,'2×1 effect canvas');
         let saved;
         URL.createObjectURL=blob=>{saved=blob;return 'blob:test';}; URL.revokeObjectURL=()=>{};

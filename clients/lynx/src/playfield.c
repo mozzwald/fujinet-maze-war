@@ -326,7 +326,7 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
             }
             move_visual(i, state);
             position = &visual[i];
-            facing = player->joy & 15;
+            facing = state->facing_joy[i];
             image = (facing == 11 ? 1 : 0) | (i == state->local_pid ? 2 : 0);
             if (round_stage == ROUND_DANCE && i == state->winner_pid)
                 image = 4 + ((uint16_t)(state->input_clock - state->result_started -

@@ -584,3 +584,21 @@ ROM byte for byte and retains the full stack and real-Suzy row guards. The edito
 and editable JSON are tracked; `ref/` remains local and ignored. See the
 [Charsetter guide](../../tools/charsetter/README.md) for pen roles, transparency,
 frame names, animation previews, generated files and tests.
+
+### Imported 4×6 HUD font
+
+The editable tileset now uses Shawn Jefferson's 4×6 Lynx font (project version 2).
+Names and single-digit scores still fit four 40-pixel slots beneath the complete
+maze. Glyphs occupy y=95–100; the local marker remains at y=101. Edit **HUD O**
+and **HUD 0** separately in Charsetter; both initially retain the supplied shape.
+The text bitmap shares scratch storage after command/maze work completes,
+preserving guarded Suzy rows and the full reserved 2 KB stack. Diagnostic text
+rows moved to y=84, 90 and 96 to fit the taller font.
+
+Sprite facing now retains each player's last non-neutral directional input.
+Local facing follows sampled controls, so release and delayed authoritative
+snapshots cannot turn a stopped left-facing player to the right. Remote facing
+survives neutral snapshots too. Facing survives display-page rebuilds and resets
+for a new round; movement/stop input and prediction still use the actual joystick
+state. The host regression checks both display pages, taps released before the
+first draw, stale/neutral snapshots, switching right, fire alone and round reset.

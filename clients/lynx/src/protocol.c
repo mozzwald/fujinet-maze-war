@@ -248,6 +248,10 @@ static void snapshot_apply(const uint8_t *p)
             game.players[i].y = p[4 + 2 * i];
         }
         game.players[i].joy = p[11 + i];
+        /* Remote neutral snapshots stop movement without changing the view.
+           Local facing belongs to sampled input, never delayed snapshots. */
+        if (i != game.local_pid && (p[11 + i] & 15) != 15)
+            game.facing_joy[i] = p[11 + i] & 15;
         game.players[i].score = p[15 + i];
     }
     if (p[2] & 0x80) expected = discard_applied(p[19]);
@@ -295,6 +299,7 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
             if (id != game.round_id || !game.round_authorized) {
                 memset(game.shots, 0, sizeof(game.shots));
                 memset(game.deaths, 0, sizeof(game.deaths));
+                memset(game.facing_joy, 0, sizeof(game.facing_joy));
                 /* A new round can use snapshots for its initial placement. */
                 for (i = 0; i < GAME_PLAYERS; ++i)
                     game.players[i].respawning = 0;
@@ -598,8 +603,10 @@ void game_set_joy(uint8_t joy)
         game.input_joy = joy;
         game.delta_due = 1;
     }
-    if (game_ready() && game.local_pid < GAME_PLAYERS)
+    if (game_ready() && game.local_pid < GAME_PLAYERS) {
         game.players[game.local_pid].joy = joy;
+        if ((joy & 15) != 15) game.facing_joy[game.local_pid] = joy & 15;
+    }
 }
 
 static uint8_t retry_pending(uint8_t *out)

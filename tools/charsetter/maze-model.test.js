@@ -11,7 +11,7 @@ test('57 fixed bindings, sizes, names and save/load round trip',()=>{
  assert.deepEqual(M.validateTileset(JSON.parse(JSON.stringify(p))),p);
 });
 test('reject incompatible art before loading it',()=>{
- for(const change of [p=>p.version=2,p=>p.palette[1]='#ffffff',p=>p.entries.reverse(),p=>p.entries[0].width=9,p=>p.entries[0].rows.pop(),p=>p.entries[4].rows[0]='FFFF0000',p=>p.entries[18].rows[0]='222']) {
+ for(const change of [p=>p.version=3,p=>p.palette[1]='#ffffff',p=>p.entries.reverse(),p=>p.entries[0].width=9,p=>p.entries[0].rows.pop(),p=>p.entries[4].rows[0]='FFFF0000',p=>p.entries[18].rows[0]='222']) {
   const p=fresh(); change(p); assert.throws(()=>M.validateTileset(p));
  }
 });
@@ -35,7 +35,7 @@ test('player recoloring, opaque terrain zero, transparent sprite zero',()=>{
 test('hardware row sizes, zero guards and animation cadence',()=>{
  for(const e of source.entries) {
   const bytes=M.spriteBytes(e);
-  if(e.mode==='font') {assert.equal(bytes.length,4);continue;}
+  if(e.mode==='font') {assert.equal(bytes.length,6);continue;}
   const stride=e.kind==='terrain'?7:e.width/2+2;
   assert.equal(bytes.length,stride*e.height+1);
   assert.equal(bytes.at(-1),0);
@@ -44,4 +44,15 @@ test('hardware row sizes, zero guards and animation cadence',()=>{
  assert.equal(M.animation(source,source.entries[8]).length,4);
  assert.equal(M.animation(source,source.entries[0]).length,0);
  assert.equal(M.FRAME_MS,1000*8/60);
+});
+
+test('4x6 O and zero are independently editable, including spacing pixels',()=>{
+ const p=fresh(), o=M.findEntry(p,'glyph_79').entry, zero=M.findEntry(p,'glyph_48').entry;
+ const original=o.rows.slice();
+ assert.equal(zero.width,4); assert.equal(zero.height,6);
+ const pen=M.getPixel(zero,3,5)===0 ? 1 : 0;
+ M.setPixel(zero,3,5,pen);
+ assert.equal(M.getPixel(zero,3,5),pen); assert.deepEqual(o.rows,original);
+ assert.equal(M.spriteBytes(zero)[5],parseInt(zero.rows[5],2));
+ M.validateTileset(p);
 });

@@ -31,7 +31,8 @@ installation or internet connection is required.
 
 ## Images and pen rules
 
-The file has 57 entries. Rows are strings of hexadecimal pixel values, with
+The version 2 file has 57 entries. Version 1 used 3×4 HUD glyphs; load the
+updated source JSON to edit the imported 4×6 font. Rows are strings of hexadecimal pixel values, with
 one digit per pixel. Image IDs, order, dimensions, modes and category bindings
 are fixed renderer contracts, validated by both the editor and build. Names
 are descriptive labels and may be changed in the JSON. Do not add/delete or
@@ -44,7 +45,7 @@ reorder frames. Pixel edits keep the same encoded size and runtime memory use.
 | Dance | 8×5 | Dance 1–4; 8 VBL ticks (133 ms) per frame |
 | Explosion | 12×9 | Explosion 1–4; same frame timing, clipped against maze walls |
 | Effects | 2×2 / 2×1 | Projectile / Muzzle flash |
-| HUD font | 3×4 | A–Z, 0–9, dash, dot, slash; blank space is implicit |
+| HUD font | 4×6 | A–Z, 0–9, dash, dot, slash; blank space is implicit |
 
 Player/dance pens are **roles**, not direct palette indices:
 
@@ -77,7 +78,21 @@ plays explosions once and repeats the dance during its winner phase.
 Sprite sizes and animation timings stay fixed. Maze collision, overlay cleanup,
 clipping and placement still belong to the game renderer. Larger sprites or
 additional frames require renderer changes, rather than just editing this file.
-The built-in menu/results text font is part of TGI and is not in this tileset.
+The 4×6 glyphs were imported from [Shawn Jefferson's font repository](https://github.com/shawnjefferson22/lynx-4x6-4x8-font),
+revision `f1dbdd4eb80c9913ab014126c0b6ca8cf3004407`, `4x6/*.bmp`.
+The source bitmaps use black foreground; these become pen 1 in our tileset.
+The blank top row and right spacing column are included and editable. **HUD O**
+and **HUD 0** are separate entries; they initially have the same supplied shape,
+so adjust either without affecting the other. Their stable IDs are `glyph_79`
+and `glyph_48`. Names and scores still advance four pixels per character.
+
+The six-row HUD starts at y=95; the local-player underline remains at y=101.
+Text is packed into one guarded Suzy sprite per line. Its temporary bitmap shares
+phase scratch memory after command processing or maze drawing has completed;
+no per-letter drawing calls or additional permanent text buffer are needed.
+The three diagnostic text rows now start at y=84, 90 and 96.
+
+The built-in large menu/results text font is part of TGI and is not in this tileset.
 
 ## Generated data and checks
 
@@ -110,7 +125,8 @@ player features and font glyphs; the host tests compare against editable pixels.
 
 See [VALIDATION.md](VALIDATION.md) for the initial test results and artifacts.
 
-The initial migration reproduces the previous ROM byte for byte. Generator
+The initial Charsetter migration reproduced the previous ROM byte for byte.
+The later 4×6 import intentionally changes text graphics. Generator
 checks compare Python and JavaScript encoding, and host tests exercise caching,
 wall clipping and cleanup against unencoded source pixels.
 

@@ -61,6 +61,54 @@ static void last_pixel_regression(void)
     assert(pen(2,0)==10 && pen(3,0)==5); /* guard must not paint next cell */
 }
 
+/* Exercise real sampled input and snapshots, then compare both display pages
+   with the selected editable frame. Release may precede the first render. */
+static void assert_facing_frames(uint8_t left)
+{
+    uint8_t page,slot,row,col,x,value,*buffer;
+    for(page=0;page<2;++page) {
+        buffer=page ? framebuffer1 : framebuffer;
+        playfield_draw(buffer+4,page,&game,0);
+        for(slot=0;slot<2;++slot) for(row=0;row<5;++row) for(col=0;col<8;++col) {
+            x=(slot ? 80 : 40)+col;
+            value=buffer[4+(25+row)*PLAYFIELD_STRIDE+x/2];
+            value=(x&1) ? value&15 : value>>4;
+            assert(value==art_player_pen(left+(slot==0 ? 2 : 0),row,col,slot));
+        }
+    }
+}
+
+static void facing_release_regression(void)
+{
+    uint8_t snapshot[21]={0x40,0,0x81,5,5,10,5,255,255,255,255,
+                          7,11,15,15,0,0,0,0,0,7};
+    uint8_t round[]={0x53,0,1,0,0x55,8,10};
+    game_reset(); playfield_invalidate();
+    game.have_welcome=game.round_authorized=game.map_ready=game.snapshot_ready=1;
+    game.local_pid=0; game.round_id=7; game.seat_mask=3;
+    game.players[0].x=5; game.players[0].y=5;
+    game.players[1].x=10; game.players[1].y=5;
+    game_sample_input(8,0,1); /* left */
+    game_sample_input(0,0,2); /* release before drawing or sending */
+    assert(game.input_joy==15 && game.players[0].joy==15 && game.facing_joy[0]==11);
+    assert(game_receive(snapshot,sizeof(snapshot))); /* delayed local right, remote left */
+    snapshot[11]=15; snapshot[12]=15;
+    assert(game_receive(snapshot,sizeof(snapshot))); /* neutral server snapshots */
+    assert(game.facing_joy[0]==11 && game.facing_joy[1]==11);
+    assert_facing_frames(1);
+    playfield_invalidate(); /* diagnostic/page rebuild must retain direction */
+    assert_facing_frames(1);
+    game_sample_input(2,0,3); game_sample_input(0,0,4); /* right then release */
+    snapshot[11]=11; snapshot[12]=7; assert(game_receive(snapshot,sizeof(snapshot)));
+    snapshot[12]=15; assert(game_receive(snapshot,sizeof(snapshot)));
+    assert(game.facing_joy[0]==7 && game.facing_joy[1]==7);
+    assert_facing_frames(0);
+    game_sample_input(0,1,5); /* fire alone has no direction */
+    assert(game.facing_joy[0]==7);
+    assert(game_receive(round,sizeof(round)));
+    assert(game.facing_joy[0]==0 && game.facing_joy[1]==0);
+}
+
 int main(void)
 {
     struct game_state state;
@@ -95,14 +143,14 @@ int main(void)
         assert(framebuffer[i] == 0xa5);
         assert(framebuffer[PLAYFIELD_PAGE_BYTES + 4 + i] == 0xa5);
     }
-    state.players[0].joy = 11;
+    state.players[0].joy = state.facing_joy[0] = 11;
     playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(43, 27) == art_player_pen(3,2,3,0)); /* mirrored left-facing eye */
     state.seat_mask = 15;
     for (i = 0; i < 4; ++i) {
         state.players[i].x = (uint8_t)(5 + i * 2);
         state.players[i].y = 5;
-        state.players[i].joy = 7;
+        state.players[i].joy = state.facing_joy[i] = 7;
     }
     playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(42, 25) == art_player_pen(2,0,2,0)); /* Atari $C8: green */
@@ -292,6 +340,7 @@ int main(void)
     assert((framebuffer1[4 + 89 * PLAYFIELD_STRIDE + (41 >> 1)] & 15) == art_player_pen(2,4,1,0));
     assert((framebuffer1[4 + 90 * PLAYFIELD_STRIDE + (43 >> 1)] & 15) == art_border_tile[0][3]);
     assert(suzy_test_max_batch() == 8);
-    puts("playfield tests passed (native Suzy, maximum batch eight)");
+    facing_release_regression();
+    puts("playfield tests passed (native Suzy, batch eight, facing retained across release/snapshots/page rebuild)");
     return 0;
 }
