@@ -1,0 +1,189 @@
+{
+  "date": "2026-10-12",
+  "crc_method": "Handy SDL; 65C02 cartridge using Mikey linked timers 1/3/5 as a 24-bit microsecond clock, same -O flags, 128 calls per packet size. The exact previous bitwise loop and production split lookup CRC run in one test ROM. Includes call/loop/volatile result overhead; not end-to-end network timing.",
+  "crc_metadata": {
+    "traffic_hz": 0.0,
+    "offered_bytes_per_second": 0.0,
+    "rom": "/home/mozzwald/fujicode/fujinet-maze-war/clients/lynx/build/crc-bench.lnx",
+    "rom_sha256": "bd346b0f3f15d5ce2780040ba84d6ff207dcd468d0d65c2582e168c53e1c1597",
+    "handy": "/home/mozzwald/lynx-pc/handy_sdl",
+    "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+    "method": "Mikey timers 1/3/5, 24-bit microseconds; 60 Hz display"
+  },
+  "crc_results": [
+    {
+      "bytes": 5,
+      "iterations": 128,
+      "bitwise_total_us": 257881,
+      "table_total_us": 82975,
+      "bitwise_us_per_packet": 2014.6953125,
+      "table_us_per_packet": 648.2421875,
+      "speedup": 3.1079361253389575
+    },
+    {
+      "bytes": 21,
+      "iterations": 128,
+      "bitwise_total_us": 1060098,
+      "table_total_us": 308644,
+      "bitwise_us_per_packet": 8282.015625,
+      "table_us_per_packet": 2411.28125,
+      "speedup": 3.434694988400876
+    },
+    {
+      "bytes": 56,
+      "iterations": 128,
+      "bitwise_total_us": 2798478,
+      "table_total_us": 802325,
+      "bitwise_us_per_packet": 21863.109375,
+      "table_us_per_packet": 6268.1640625,
+      "speedup": 3.4879606144642135
+    }
+  ],
+  "before": {
+    "rom_sha256": "ca0d9aacac8df2c45f7a0cd0b0bc69d1e58fa6920f92153c9c3e2903f8e95e2c",
+    "latency_results": {
+      "input_delay_ms": 300.0,
+      "held_ms": 1208,
+      "sent_steps": 10,
+      "applied_steps": 10,
+      "largest_repeat_gap_ms": 177.7,
+      "distinct_visual_positions": 15
+    },
+    "checks": [
+      "brick removal",
+      "bottom feet",
+      "border texture",
+      "fire input",
+      "movement input",
+      "diagnostics restoration",
+      "new round"
+    ]
+  },
+  "after": {
+    "rom_sha256": "98dd4344289543ea587e754fce4490fab5df69993504b03d5b72cdf5d70aa86a",
+    "latency_results": {
+      "input_delay_ms": 300.0,
+      "held_ms": 1202,
+      "sent_steps": 10,
+      "applied_steps": 10,
+      "largest_repeat_gap_ms": 160.1,
+      "distinct_visual_positions": 13
+    },
+    "checks": [
+      "brick removal",
+      "bottom feet",
+      "border texture",
+      "fire input",
+      "movement input",
+      "diagnostics restoration",
+      "new round"
+    ]
+  },
+  "delayed_movement_audio": {
+    "rom_sha256": "98dd4344289543ea587e754fce4490fab5df69993504b03d5b72cdf5d70aa86a",
+    "input_lag_ms": 300.0,
+    "movement_results": [
+      {
+        "tap_ms": 60,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          4,
+          17
+        ]
+      },
+      {
+        "tap_ms": 120,
+        "before": [
+          4,
+          17
+        ],
+        "after": [
+          5,
+          17
+        ]
+      },
+      {
+        "tap_ms": 160,
+        "before": [
+          5,
+          17
+        ],
+        "after": [
+          6,
+          17
+        ]
+      },
+      {
+        "turn": "Up then Right while Up held",
+        "after": [
+          7,
+          15
+        ]
+      }
+    ],
+    "audio_checks": [
+      {
+        "event": "brick",
+        "peak": 7,
+        "samples": 32768
+      },
+      {
+        "event": "bare-fire-idle",
+        "peak": 0,
+        "samples": 17408
+      },
+      {
+        "event": "movement",
+        "peak": 6,
+        "samples": 24576
+      },
+      {
+        "event": "idle",
+        "peak": 0,
+        "samples": 14336
+      },
+      {
+        "event": "shot-0",
+        "peak": 16,
+        "samples": 12288
+      },
+      {
+        "event": "impact-0",
+        "peak": 14,
+        "samples": 13312
+      },
+      {
+        "event": "shot-1",
+        "peak": 8,
+        "samples": 13312
+      },
+      {
+        "event": "impact-1",
+        "peak": 7,
+        "samples": 13312
+      },
+      {
+        "event": "death",
+        "peak": 9,
+        "samples": 22528
+      },
+      {
+        "event": "respawn",
+        "peak": 7,
+        "samples": 17408
+      }
+    ],
+    "checks": [
+      "brick removal",
+      "bottom feet",
+      "border texture",
+      "fire input",
+      "movement input",
+      "diagnostics restoration",
+      "new round"
+    ]
+  }
+}

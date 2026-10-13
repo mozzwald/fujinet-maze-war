@@ -64,8 +64,8 @@ static void prediction_test(void)
 
     /* Directional firing gives an immediate cue but does not move. */
     game_set_joy(0x17);
-    assert(game.fire_cue_frames == 3);
     assert(game_next_outbound(out, sizeof(out)) == 5);
+    assert(game.fire_cue_frames == 3);
     assert(game.players[0].x == 6);
 
     /* Wall collision must suppress local prediction. */

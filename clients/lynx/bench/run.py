@@ -81,6 +81,7 @@ def main():
     parser.add_argument('--rom', type=Path, default=Path(__file__).resolve().parent.parent /
                         'build/render-bench.lnx')
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--crc-only', action='store_true', help='run crc-bench.lnx instead of rendering scenarios')
     args = parser.parse_args()
     args.rom = args.rom.resolve()
     args.handy = args.handy.resolve()
@@ -174,6 +175,13 @@ def main():
                                           render_us=[], frame_us=[])
                             results.append(active)
                             next_injection = time.monotonic() + 0.005
+                        elif payload[0] == 0x7a and args.crc_only:
+                            count,old_us,new_us,old_crc,new_crc=struct.unpack_from('<HIIHH',payload,2)
+                            assert old_crc==new_crc, 'CRC implementations disagree'
+                            results.append(dict(bytes=payload[1],iterations=count,
+                                                bitwise_total_us=old_us,table_total_us=new_us,
+                                                bitwise_us_per_packet=old_us/count,
+                                                table_us_per_packet=new_us/count,speedup=old_us/new_us))
                         elif payload[0] == 0x7d:
                             result = results[-1]
                             assert (payload[1], payload[2]) == (result['mode'], result['scenario'])
@@ -213,6 +221,10 @@ def main():
                     process.kill()
                     process.wait()
         (output / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
+    if args.crc_only:
+        assert len(results)==3, 'incomplete CRC reports'
+        print(json.dumps(dict(output=str(output),results=results),indent=2))
+        return
     if len(results) != 25 or any(len(r['render_us']) != r['count'] for r in results):
         raise RuntimeError('incomplete timing reports')
     lines = ['| Renderer | Scenario | Full cycle mean (ms) | '

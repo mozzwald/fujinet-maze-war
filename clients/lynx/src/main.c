@@ -9,6 +9,7 @@
 #include "startup.h"
 #include "setup.h"
 #include "sound.h"
+#include "boot_guard.h"
 
 #ifndef SERVER_HOST
 #define SERVER_HOST "127.0.0.1"
@@ -40,6 +41,7 @@ void main(void)
 {
     uint8_t buttons;
     uint8_t diagnostics;
+    boot_guard(1);
     tgi_install(lynx_160_102_16_tgi);
     tgi_init();
     /* RAM below the video pages is game data, not a collision bitmap. */

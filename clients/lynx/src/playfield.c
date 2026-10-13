@@ -8,7 +8,7 @@
 #include <tgi.h>
 #endif
 #include "playfield_internal.h"
-#include "death_art.h"
+#include "death_sprites.h"
 
 /* Maze cache lives on the two display pages. Only changed cells and old
    overlay footprints are restored. CPU writes never touch video RAM. */
@@ -17,7 +17,13 @@ static uint8_t cached_valid[2];
 static uint8_t cached_round[2];
 static uint8_t cached_ready[2];
 static uint8_t dirty[GAME_BRICK_BYTES];
+#ifdef LYNX_RENDER_HOST
 static SCB_REHV_PAL scbs[8];
+#else
+extern SCB_REHV_PAL maze_scbs[8];
+#define scbs maze_scbs
+typedef char scb_size_must_match_assembly[(sizeof(SCB_REHV_PAL) == 23) ? 1 : -1];
+#endif
 static uint8_t scb_wizard[8];
 static uint8_t queued;
 /* Opaque tiles use counted packets, so padding never paints outside a cell.
@@ -34,7 +40,6 @@ static uint8_t sprites_ready;
 static struct game_state frame_state;
 static uint8_t clipped_wizards[GAME_PLAYERS][WIZARD_BYTES];
 static uint8_t fire_sprites[GAME_PLAYERS][4];
-static uint8_t death_sprites[4][DEATH_BYTES];
 static uint8_t clipped_deaths[GAME_PLAYERS][DEATH_BYTES];
 static struct overlay_position old_deaths[2][GAME_PLAYERS];
 static uint8_t have_round;
@@ -122,26 +127,6 @@ static void make_sprites(void)
         scbs[i].hsize = scbs[i].vsize = 0x100;
         for (x = 0; x < 8; ++x)
             scbs[i].penpal[x] = (uint8_t)(x * 0x22 + 1);
-    }
-    for (i = 0; i < 4; ++i) {
-        memset(death_sprites[i], 0, DEATH_BYTES);
-        for (y = 0; y < 9; ++y) {
-            out = death_sprites[i] + y * DEATH_ROW;
-            *out++ = DEATH_ROW;
-            for (x = 0; x < 12; ++x) {
-                switch (death_art[i][y][x]) {
-                case 'W': pen = 15; break;
-                case 'Y': pen = 9; break;
-                case 'O': pen = 8; break;
-                case 'L': pen = 4; break;
-                case 'G': pen = 5; break;
-                case 'D': pen = 6; break;
-                default: pen = 0;
-                }
-                if (x & 1) out[x >> 1] |= pen;
-                else out[x >> 1] = pen << 4;
-            }
-        }
     }
     sprites_ready = 1;
 }

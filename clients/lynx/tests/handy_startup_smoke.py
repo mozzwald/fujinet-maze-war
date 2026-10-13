@@ -47,11 +47,26 @@ def main():
     p.add_argument('--edit-checks',action='store_true')
     p.add_argument('--live-browser',action='store_true')
     p.add_argument('--ack-noise',action='store_true',help='inject trailing bytes before command ACKs (controlled peer only)')
+    p.add_argument('--rom',type=Path,help='test a separate cartridge, preserving the production ROM')
+    p.add_argument('--slow-menu',action='store_true',help='allow checksum diagnostic scans between menu inputs')
+    p.add_argument('--boot-guard-fault',action='store_true',help='corrupt a private copy of guarded ROM constants and verify CPU-only fault bars')
     args=p.parse_args()
     assert not (args.firmware and args.ack_noise),'ACK noise uses the controlled command peer'
+    assert not (args.firmware and args.boot_guard_fault),'fault injection uses a private ROM and controlled peer'
     root=Path(tempfile.mkdtemp(prefix='maze-lynx-startup-'))
     pc=Path.home()/'lynx-pc'; repo=Path(__file__).resolve().parents[3]
-    rom=repo/'clients/lynx/build/maze-war-lynx.lnx'
+    rom=(args.rom or repo/'clients/lynx/build/maze-war-lynx.lnx').resolve()
+    if args.boot_guard_fault:
+        seal_spec=importlib.util.spec_from_file_location('seal',repo/'clients/lynx/tools/seal_boot_guard.py')
+        seal=importlib.util.module_from_spec(seal_spec); seal_spec.loader.exec_module(seal)
+        data,first,last,field=seal.layout(rom,rom.with_suffix('.map'))
+        assert data[field:field+2]==(sum(data[first:last])&65535).to_bytes(2,'little'),'unsealed diagnostic'
+        # Changing the expected value avoids touching constructor/IRQ tables.
+        data[field]^=1
+        rom=root/'corrupted.lnx'; rom.write_bytes(data)
+    elif not args.firmware:
+        shutil.copyfile(rom,root/'cartridge.lnx')
+        rom=root/'cartridge.lnx'
     shutil.copy(pc/'lynxboot.img',root/'lynxboot.img'); (root/'config').mkdir()
     stop=threading.Event(); errors=[]; commands=[]; frames=[]; urls=[]
     state={'key':b'' if args.new_name else b'ACE LYNX','mode':0,'offset':0,'raw':False}
@@ -73,7 +88,7 @@ def main():
     thread=threading.Thread(target=http.serve_forever,daemon=True); thread.start(); threads.append(thread)
 
     def recv_exact(s,n):
-        out=bytearray(); deadline=time.monotonic()+20
+        out=bytearray(); deadline=time.monotonic()+(120 if args.slow_menu else 20)
         while len(out)<n:
             if stop.is_set() or time.monotonic()>deadline: raise TimeoutError('receive')
             try: b=s.recv(n-len(out))
@@ -163,8 +178,8 @@ def main():
 
     def key(name):
         code=d.keysym_to_keycode(string_to_keysym(name))
-        xtest.fake_input(d,X.KeyPress,code); d.sync(); time.sleep(.12)
-        xtest.fake_input(d,X.KeyRelease,code); d.sync(); time.sleep(.15)
+        xtest.fake_input(d,X.KeyPress,code); d.sync(); time.sleep(2 if args.slow_menu else .12)
+        xtest.fake_input(d,X.KeyRelease,code); d.sync(); time.sleep(2 if args.slow_menu else .15)
 
     try:
         if args.firmware:
@@ -202,6 +217,17 @@ def main():
         win=next(w for w in windows(d.screen().root) if w.get_wm_name()=='Handy/SDL')
         win.set_input_focus(X.RevertToParent,X.CurrentTime); d.sync()
         capture('initial')
+        if args.boot_guard_fault:
+            raw=win.get_image(0,0,win.get_geometry().width,win.get_geometry().height,X.ZPixmap,0xffffffff)
+            shot=Image.frombytes('RGB',(win.get_geometry().width,win.get_geometry().height),raw.data,'raw','BGRX')
+            # Handy is 160x102 scaled by three. Stage 1 is one 14-pixel
+            # white vertical bar, with a two-pixel black separator.
+            assert min(shot.getpixel((9,150)))>=230,shot.getpixel((9,150))
+            assert shot.getpixel((60,150))==(0,0,0),shot.getpixel((60,150))
+            assert not commands and not frames,'corrupt program entered command mode'
+            result={'checks':['sealed checksum fault detected before graphics/serial','CPU-only stage 1 bar displayed'],'rom_sha256':hashlib.sha256(rom.read_bytes()).hexdigest()}
+            (root/'results.json').write_text(json.dumps(result,indent=2)+'\n')
+            print(json.dumps(result,indent=2)); return
         if args.live_browser:
             assert args.firmware and not args.new_name
             def fetched():

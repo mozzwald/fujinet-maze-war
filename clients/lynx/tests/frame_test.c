@@ -3,6 +3,18 @@
 #include <stdio.h>
 #include <string.h>
 
+static uint16_t reference_crc(const uint8_t *data, uint8_t len)
+{
+    uint16_t crc=0xffff;
+    uint8_t bit;
+    while (len--) {
+        crc^=(uint16_t)*data++<<8;
+        for(bit=0;bit<8;++bit)
+            crc=(crc&0x8000) ? (uint16_t)((crc<<1)^0x1021) : (uint16_t)(crc<<1);
+    }
+    return crc;
+}
+
 static void expect_frame(const uint8_t *payload, uint8_t len)
 {
     uint8_t wire[FRAME_WIRE_MAX];
@@ -34,6 +46,16 @@ int main(void)
     uint8_t max_payload[FRAME_PAYLOAD_MAX];
     struct frame_rx rx;
     assert(frame_crc16(check, 9) == 0x29b1);
+    /* Verify the lookup implementation against the old polynomial loop
+       across every supported length and all possible first-byte values. */
+    {
+        unsigned value, n;
+        for(value=0;value<256;++value) {
+            for(n=0;n<sizeof(max_payload);++n) max_payload[n]=(uint8_t)(value+n*37);
+            for(n=0;n<=sizeof(max_payload);++n)
+                assert(frame_crc16(max_payload,(uint8_t)n)==reference_crc(max_payload,(uint8_t)n));
+        }
+    }
     expect_frame(hello, sizeof(hello));
     expect_frame(with_zero, sizeof(with_zero));
     memset(max_payload, 0xff, sizeof(max_payload));

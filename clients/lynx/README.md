@@ -27,10 +27,10 @@ parity, one stop bit; sends FujiNet device `$70` command `$F0` with raw TCP
 flag `$01`; and retries the Maze War v1 `HELLO` until it receives `WELCOME`,
 `REJECT`, or a bounded timeout. After `WELCOME`, it sends `NAME`, cumulative
 reliable ACKs, and paced `DELTA` inputs. The Lynx D-pad maps to cardinal
-movement and A fires. Sampled presses are latched and sent between Suzy
+movement; hold A and press a direction to fire. Sampled presses are latched and sent between Suzy
 batches; a 60 Hz VBL clock paces held repeats independently of snapshots. The local wizard predicts sent movements and replays
 unacknowledged inputs over each authoritative snapshot. A short muzzle cue
-appears on A press; hit and score results still come from the server. It
+appears when directional fire is transmitted; shot audio, hit and score results come from the server. It
 applies snapshots, seats, names, shots, brick maps,
 respawns, match results, and round starts. The entire 20×19 maze is visible
 at once, with 8×5 textured brick and border cells, colored side-view wizards,
@@ -170,8 +170,9 @@ Mikey supplies four independent voices, one per player, with remote effects at
 half the local player's volume. The effects follow the Atari client's purposes:
 
 - Quiet, brief shuffle noise for a successful movement step.
-- A descending shot zip, with immediate feedback for a transmitted local fire
-  press and suppression of its subsequent network echo.
+- A descending shot zip when the server creates a projectile. A alone is
+  silent; pressing a direction with A held produces a valid firing input.
+  Duplicate active-shot packets never restart the sound.
 - A short noisy impact when an active shot is cleared, plus a burst for a
   destroyed brick. The wire protocol does not identify the cause of a shot
   clear, so shot impacts use one generic sound.
@@ -267,17 +268,30 @@ remain authoritative. The updated server also permits retries of queue-full
 rejections and rate-limits duplicate reliable ACK resends, without changing
 packet formats or requiring changes to other clients.
 
-The local sprite retains the cell path predicted by transmitted inputs and
-traverses each step in six VBL ticks (100 ms), independently of render count.
-Queued turns begin at the shared cell boundary; drawing cannot substitute a
-diagonal shortcut. ACK replay preserves an unchanged predicted path, while an
-authoritative correction rejoins the corrected cell. The sprite settles at
+Sprites follow only the last legal leg toward their current destination;
+retained route points identify that leg rather than form an animation queue.
+Fresh taps/turns traverse a cell in three VBL ticks (50 ms); held repeats use
+six ticks (100 ms), independently of render count. Repeat delay and movement
+command cadence are unchanged. A slow frame catches up to the final leg, whose
+original timestamp bounds its finish, instead of playing several old cells
+after release. Queued turns rejoin their recorded shared cell boundary;
+drawing cannot substitute a diagonal shortcut. ACK replay preserves an
+unchanged destination and deadline. A correction within two clear cardinal
+cells eases for three ticks; larger corrections and diagonal placements rejoin
+immediately. This softens small corrections without delaying the actual game
+model or introducing a long correction playback queue. The sprite settles at
 the last transmitted step, keeping its stopping cell aligned with the cell
 from which the server will accept a turn. The entire 8×5
 footprint is checked against walls and occupied cells; wizard and muzzle
 pixels are also clipped to walkable maze cells. If a wall blocks correction,
 the sprite rejoins the server's walkable target cell. Firing settles unfinished
 interpolation at the predicted shot origin.
+
+Remote destinations can retarget from the currently drawn position across
+up to two clear cells, without jumping first to the previous destination.
+The intervening footprint is checked as well as each drawn position. Local
+forward prediction retains its one-cell animation bound; corrections have
+their separate three-tick deadline.
 
 The input sampler and bounded transmitter run between Suzy batches and while
 waiting for a display swap. Clock ticks come from cc65's VBL counter, so slow
@@ -288,11 +302,45 @@ Motion tests compare identical paths at 20 and 60 renders per second and
 check repeated same-tick draws, inside corners, corrections and shot origins.
 
 The final diagnostics line shows hexadecimal `W` (repeat window), `D`
-(filtered applied-ACK age), `Q` (pending input count), and `F` (last frame
-interval). `D` and `F` are in 60 Hz VBL ticks. Frame/draw timing maxima and
+(filtered applied-ACK age), `Q` (pending input count), `F` (last frame
+interval), `C` (local authoritative corrections after prediction replay),
+and `I` (same-sequence input retries). `D` and `F` are in 60 Hz VBL ticks. Frame/draw timing maxima and
 repeat-stall/intent-overflow counters are also available in debugger state.
 `game.input_retries` counts same-sequence retry transmissions.
 The earlier `F` field remains the serial frame-error code.
+
+### ComLynx processing and transmit scheduling
+
+The transmit loop queues a complete COBS frame without parsing RX between
+bytes. The cc65 ComLynx driver disables reception while transmitting; expensive
+interleaved parsing can empty its TX ring and create gaps within one frame.
+Gameplay TX waits for two VBL tick boundaries after the last received byte,
+including complete frames: roughly 17–33 ms of quiet. A COBS boundary alone
+does not mean FujiNet has finished its burst. The gate is rechecked after
+each send, including reliable ACKs, and a diagnostic byte-counter wrap cannot
+disable it. This reduces the risk of transmitting over the next incoming frame;
+actual collision reduction needs hardware validation.
+An incomplete frame idle for two VBL ticks (about 33 ms) is discarded so an
+abandoned frame cannot block uplink recovery. Diagnostic error 6 identifies
+that timeout. This is client scheduling; firmware remains unchanged.
+
+CRC-16/CCITT-FALSE uses two 256-byte lookup tables with an eight-bit inner
+loop. Polynomial, initial value and wire bytes are unchanged. To keep the
+Lynx memory layout and 2 KB stack, smoke packets are encoded ahead of time
+from the existing artwork, preserving every Suzy guard byte. Run
+`python3 clients/lynx/tools/generate_death_sprites.py` after editing the art;
+the host suite checks that the generated header is current.
+
+The CRC benchmark uses the emulated Mikey microsecond clock, comparing the
+previous bitwise function with the production lookup function in one ROM:
+
+```sh
+make -C clients/lynx/bench crc
+python3 clients/lynx/bench/run.py --crc-only --traffic-hz 0 --rom clients/lynx/build/crc-bench.lnx
+```
+
+This test cartridge uses a private peer; use `build/maze-war-lynx.lnx` for
+normal live testing. See [the transport measurements](tests/TRANSPORT-RESULTS.md).
 
 The movement emulator mode runs a controlled peer that applies one queued
 input per 10 Hz tick and acknowledges only applied inputs:
@@ -432,6 +480,12 @@ The October 12 integrated production ROM passed these checks; its
 hashes and acknowledged revisions. This is not
 physical half-duplex or WAN validation; live hardware testing remains needed.
 
+For the hardware release-drift investigation, a separate diagnostic cartridge
+`build/maze-war-lynx-stop-test.lnx` bypasses local interpolation while retaining
+the existing movement and serial paths. It intentionally moves cell by cell;
+the normal ROM retains animation. Build and test instructions and measured
+release positions are in [TRANSPORT-RESULTS.md](tests/TRANSPORT-RESULTS.md#hardware-comparison-and-diagnostic-cartridge).
+
 The existing firmware has no Lynx-reachable stop command once raw NetStream
 is active. This client does not claim stop/reconnect support; closing its
 serial driver or sending a normal `$F0 STOP` packet would leave FujiNet in
@@ -439,6 +493,37 @@ raw mode. The protocol module can build `LEAVE_ROOM` and recognize
 `LEAVE_ACK`, but the UI does not expose leave while raw-mode teardown is
 unresolved. Firmware changes are outside the user's authorization. The
 stop/reconnect requirement remains a gate before a complete client.
+
+### Hardware startup regression diagnostics
+
+The user confirms the current ROM works on real hardware without the previous
+black/corrupted frozen menu.
+[BOOT-RESULTS.md](tests/BOOT-RESULTS.md) records the previous working ROM,
+the separate startup diagnostic, checkpoint meanings, checks and limitations.
+
+The current normal ROM contains a hardware-tested graphics fix following a repeat
+hardware failure: a local cc65 TGI driver restores its text scanline fill byte,
+and assembly allocates aligned control blocks for menu and game drawing.
+The build rejects unsafe control-block placement and stack overlap. These
+placement constraints are preventive; a general page-crossing SCB failure
+has not been established. The full 2 KB stack is retained. An obsolete small
+maze fallback was removed to make space; a failed video-page probe now shows
+diagnostics with `VIDEO PAGE ERROR`. The regular full-map renderer is retained.
+The individual changes have not been isolated to identify a single root cause.
+
+Build the diagnostic without replacing the normal cartridge:
+
+```sh
+make -C clients/lynx all SERVER_HOST=fujinet.online SERVER_PORT=5025 \
+  BOOT_GUARD=1 TARGET=build/maze-war-lynx-boot-test.lnx \
+  MAP=build/maze-war-lynx-boot-test.map
+```
+
+This build intentionally pauses during menu drawing to scan program RAM.
+Hold menu buttons a little longer. Tiny white ticks along the top edge show
+the last successful checkpoint; full-height white bars indicate a checksum
+failure. Photograph either frozen screen. It still uses the live Lobby and
+`fujinet.online:5025` default room. Normal builds compile out the checks.
 
 `src/lynx.cfg` is adapted from the FujiRealm Lynx client's MIT-licensed
 linker layout. See [THIRD_PARTY.md](THIRD_PARTY.md) for its notice.

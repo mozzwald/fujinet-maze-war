@@ -1,0 +1,877 @@
+[
+  {
+    "artifact_dir": "/tmp/maze-suzy-game-zf0zglkh",
+    "rom_sha256": "98dd4344289543ea587e754fce4490fab5df69993504b03d5b72cdf5d70aa86a",
+    "latency_results": {
+      "input_delay_ms": 300.0,
+      "held_ms": 1420,
+      "sent_steps": 11,
+      "applied_steps": 12,
+      "largest_repeat_gap_ms": 166.7,
+      "distinct_visual_positions": 17,
+      "samples": [
+        {
+          "ms": 48.8,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 101.6,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 154.5,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 203.8,
+          "left": 14,
+          "server_cell": 1
+        },
+        {
+          "ms": 254.0,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 300.7,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 355.6,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 407.7,
+          "left": 18,
+          "server_cell": 1
+        },
+        {
+          "ms": 465.2,
+          "left": 22,
+          "server_cell": 2
+        },
+        {
+          "ms": 518.8,
+          "left": 25,
+          "server_cell": 2
+        },
+        {
+          "ms": 566.5,
+          "left": 31,
+          "server_cell": 2
+        },
+        {
+          "ms": 624.9,
+          "left": 34,
+          "server_cell": 2
+        },
+        {
+          "ms": 683.8,
+          "left": 38,
+          "server_cell": 3
+        },
+        {
+          "ms": 755.4,
+          "left": 47,
+          "server_cell": 3
+        },
+        {
+          "ms": 803.8,
+          "left": 50,
+          "server_cell": 4
+        },
+        {
+          "ms": 867.4,
+          "left": 50,
+          "server_cell": 4
+        },
+        {
+          "ms": 923.4,
+          "left": 59,
+          "server_cell": 5
+        },
+        {
+          "ms": 966.8,
+          "left": 62,
+          "server_cell": 5
+        },
+        {
+          "ms": 1018.9,
+          "left": 69,
+          "server_cell": 6
+        },
+        {
+          "ms": 1076.6,
+          "left": 69,
+          "server_cell": 6
+        },
+        {
+          "ms": 1151.6,
+          "left": 75,
+          "server_cell": 7
+        },
+        {
+          "ms": 1246.6,
+          "left": 81,
+          "server_cell": 7
+        },
+        {
+          "ms": 1317.6,
+          "left": 89,
+          "server_cell": 8
+        },
+        {
+          "ms": 1364.3,
+          "left": 89,
+          "server_cell": 8
+        },
+        {
+          "ms": 1419.2,
+          "left": 89,
+          "server_cell": 9
+        }
+      ],
+      "server_at_release": 9,
+      "server_after_stop": 13,
+      "release_samples": [
+        {
+          "ms": 60.7,
+          "left": 95,
+          "server_cell": 9
+        },
+        {
+          "ms": 106.8,
+          "left": 102,
+          "server_cell": 10
+        },
+        {
+          "ms": 155.7,
+          "left": 105,
+          "server_cell": 10
+        },
+        {
+          "ms": 248.6,
+          "left": 105,
+          "server_cell": 11
+        },
+        {
+          "ms": 302.8,
+          "left": 105,
+          "server_cell": 11
+        },
+        {
+          "ms": 361.8,
+          "left": 105,
+          "server_cell": 12
+        },
+        {
+          "ms": 413.1,
+          "left": 105,
+          "server_cell": 12
+        },
+        {
+          "ms": 470.0,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 527.9,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 585.4,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 634.9,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 680.4,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 737.4,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 781.8,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 826.4,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 880.9,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 926.2,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 974.2,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1098.6,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1159.9,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1203.2,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1251.8,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1305.0,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1365.8,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1421.2,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1491.9,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1548.3,
+          "left": 105,
+          "server_cell": 13
+        }
+      ],
+      "post_release_moves": [
+        {
+          "delta": [
+            65,
+            20,
+            0,
+            7,
+            1
+          ],
+          "at": 2788485.315980203
+        }
+      ],
+      "neutral_delay_ms": 61.0
+    }
+  },
+  {
+    "artifact_dir": "/tmp/maze-suzy-game-b9lmd06o",
+    "rom_sha256": "98dd4344289543ea587e754fce4490fab5df69993504b03d5b72cdf5d70aa86a",
+    "latency_results": {
+      "input_delay_ms": 900.0,
+      "held_ms": 1420,
+      "sent_steps": 6,
+      "applied_steps": 6,
+      "largest_repeat_gap_ms": 494.0,
+      "distinct_visual_positions": 10,
+      "samples": [
+        {
+          "ms": 52.2,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 108.0,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 176.6,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 256.6,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 321.6,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 423.8,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 474.6,
+          "left": 22,
+          "server_cell": 1
+        },
+        {
+          "ms": 522.3,
+          "left": 25,
+          "server_cell": 1
+        },
+        {
+          "ms": 578.3,
+          "left": 30,
+          "server_cell": 1
+        },
+        {
+          "ms": 628.2,
+          "left": 33,
+          "server_cell": 1
+        },
+        {
+          "ms": 687.8,
+          "left": 33,
+          "server_cell": 1
+        },
+        {
+          "ms": 740.1,
+          "left": 39,
+          "server_cell": 1
+        },
+        {
+          "ms": 804.7,
+          "left": 41,
+          "server_cell": 1
+        },
+        {
+          "ms": 850.1,
+          "left": 41,
+          "server_cell": 1
+        },
+        {
+          "ms": 903.0,
+          "left": 41,
+          "server_cell": 1
+        },
+        {
+          "ms": 962.5,
+          "left": 41,
+          "server_cell": 1
+        },
+        {
+          "ms": 1011.7,
+          "left": 41,
+          "server_cell": 2
+        },
+        {
+          "ms": 1060.3,
+          "left": 41,
+          "server_cell": 2
+        },
+        {
+          "ms": 1111.0,
+          "left": 41,
+          "server_cell": 2
+        },
+        {
+          "ms": 1158.7,
+          "left": 46,
+          "server_cell": 2
+        },
+        {
+          "ms": 1208.0,
+          "left": 49,
+          "server_cell": 2
+        },
+        {
+          "ms": 1263.2,
+          "left": 49,
+          "server_cell": 2
+        },
+        {
+          "ms": 1326.0,
+          "left": 49,
+          "server_cell": 2
+        },
+        {
+          "ms": 1375.8,
+          "left": 49,
+          "server_cell": 3
+        },
+        {
+          "ms": 1419.6,
+          "left": 49,
+          "server_cell": 3
+        }
+      ],
+      "server_at_release": 3,
+      "server_after_stop": 7,
+      "visual_at_release_left": 49,
+      "visual_stopped_left": 57,
+      "visual_travel_after_release_cells": 1.0,
+      "last_unsettled_sample_ms": 128.5,
+      "release_samples": [
+        {
+          "ms": 54.4,
+          "left": 49,
+          "server_cell": 4
+        },
+        {
+          "ms": 128.5,
+          "left": 51,
+          "server_cell": 4
+        },
+        {
+          "ms": 207.5,
+          "left": 57,
+          "server_cell": 5
+        },
+        {
+          "ms": 272.7,
+          "left": 57,
+          "server_cell": 5
+        },
+        {
+          "ms": 341.2,
+          "left": 57,
+          "server_cell": 5
+        },
+        {
+          "ms": 407.7,
+          "left": 57,
+          "server_cell": 5
+        },
+        {
+          "ms": 481.8,
+          "left": 57,
+          "server_cell": 5
+        },
+        {
+          "ms": 529.7,
+          "left": 57,
+          "server_cell": 5
+        },
+        {
+          "ms": 576.7,
+          "left": 57,
+          "server_cell": 6
+        },
+        {
+          "ms": 624.2,
+          "left": 57,
+          "server_cell": 6
+        },
+        {
+          "ms": 670.8,
+          "left": 57,
+          "server_cell": 6
+        },
+        {
+          "ms": 717.9,
+          "left": 57,
+          "server_cell": 6
+        },
+        {
+          "ms": 764.8,
+          "left": 57,
+          "server_cell": 6
+        },
+        {
+          "ms": 812.4,
+          "left": 57,
+          "server_cell": 6
+        },
+        {
+          "ms": 859.7,
+          "left": 57,
+          "server_cell": 6
+        },
+        {
+          "ms": 909.5,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 955.7,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1011.1,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1058.3,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1106.9,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1156.2,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1204.3,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1252.2,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1299.2,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1347.4,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1394.8,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1442.2,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1490.8,
+          "left": 57,
+          "server_cell": 7
+        },
+        {
+          "ms": 1537.6,
+          "left": 57,
+          "server_cell": 7
+        }
+      ],
+      "post_release_moves": [],
+      "neutral_delay_ms": 54.5
+    }
+  },
+  {
+    "artifact_dir": "/tmp/maze-suzy-game-_wgvi94i",
+    "diagnostic_local_cell_test": true,
+    "rom_sha256": "7f7f6db8e29f81cc0ae6d2b3023f8911801310fd12c5f4cc5e1af95d8c4c477a",
+    "latency_results": {
+      "input_delay_ms": 300.0,
+      "held_ms": 1412,
+      "sent_steps": 12,
+      "applied_steps": 12,
+      "largest_repeat_gap_ms": 139.3,
+      "distinct_visual_positions": 12,
+      "samples": [
+        {
+          "ms": 57.7,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 114.2,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 172.5,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 223.6,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 278.7,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 348.1,
+          "left": 25,
+          "server_cell": 1
+        },
+        {
+          "ms": 490.2,
+          "left": 25,
+          "server_cell": 2
+        },
+        {
+          "ms": 540.6,
+          "left": 41,
+          "server_cell": 2
+        },
+        {
+          "ms": 610.8,
+          "left": 41,
+          "server_cell": 2
+        },
+        {
+          "ms": 668.8,
+          "left": 49,
+          "server_cell": 3
+        },
+        {
+          "ms": 718.1,
+          "left": 49,
+          "server_cell": 3
+        },
+        {
+          "ms": 768.7,
+          "left": 57,
+          "server_cell": 4
+        },
+        {
+          "ms": 829.3,
+          "left": 65,
+          "server_cell": 4
+        },
+        {
+          "ms": 874.9,
+          "left": 65,
+          "server_cell": 5
+        },
+        {
+          "ms": 919.9,
+          "left": 65,
+          "server_cell": 5
+        },
+        {
+          "ms": 972.1,
+          "left": 65,
+          "server_cell": 6
+        },
+        {
+          "ms": 1016.3,
+          "left": 73,
+          "server_cell": 6
+        },
+        {
+          "ms": 1065.6,
+          "left": 81,
+          "server_cell": 6
+        },
+        {
+          "ms": 1111.5,
+          "left": 81,
+          "server_cell": 7
+        },
+        {
+          "ms": 1159.1,
+          "left": 81,
+          "server_cell": 7
+        },
+        {
+          "ms": 1212.4,
+          "left": 89,
+          "server_cell": 8
+        },
+        {
+          "ms": 1269.5,
+          "left": 89,
+          "server_cell": 8
+        },
+        {
+          "ms": 1318.0,
+          "left": 89,
+          "server_cell": 9
+        },
+        {
+          "ms": 1364.9,
+          "left": 97,
+          "server_cell": 9
+        },
+        {
+          "ms": 1411.3,
+          "left": 105,
+          "server_cell": 9
+        }
+      ],
+      "server_at_release": 9,
+      "server_after_stop": 13,
+      "visual_at_release_left": 105,
+      "visual_stopped_left": 105,
+      "visual_travel_after_release_cells": 0.0,
+      "last_unsettled_sample_ms": 0,
+      "release_samples": [
+        {
+          "ms": 47.2,
+          "left": 105,
+          "server_cell": 10
+        },
+        {
+          "ms": 92.0,
+          "left": 105,
+          "server_cell": 10
+        },
+        {
+          "ms": 136.8,
+          "left": 105,
+          "server_cell": 11
+        },
+        {
+          "ms": 183.3,
+          "left": 105,
+          "server_cell": 11
+        },
+        {
+          "ms": 229.3,
+          "left": 105,
+          "server_cell": 11
+        },
+        {
+          "ms": 274.4,
+          "left": 105,
+          "server_cell": 12
+        },
+        {
+          "ms": 334.8,
+          "left": 105,
+          "server_cell": 12
+        },
+        {
+          "ms": 386.1,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 440.3,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 492.6,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 541.4,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 597.4,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 663.0,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 730.0,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 804.2,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 880.1,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 953.6,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1017.0,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1066.1,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1116.4,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1162.0,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1225.9,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1277.0,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1328.5,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1375.2,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1428.9,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1481.3,
+          "left": 105,
+          "server_cell": 13
+        },
+        {
+          "ms": 1530.4,
+          "left": 105,
+          "server_cell": 13
+        }
+      ],
+      "post_release_moves": [],
+      "neutral_delay_ms": 47.3
+    }
+  }
+]

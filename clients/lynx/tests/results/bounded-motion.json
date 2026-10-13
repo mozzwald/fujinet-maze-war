@@ -1,0 +1,314 @@
+[
+  {
+    "artifact_dir": "/tmp/maze-suzy-game-3vyjwlf0",
+    "rom_sha256": "78e8c44083876f63a4a7b92e5f47d53ff684fc8985e18f2cf28efdb529e1fd9b",
+    "latency_results": {
+      "input_delay_ms": 300.0,
+      "held_ms": 1434,
+      "sent_steps": 11,
+      "applied_steps": 11,
+      "largest_repeat_gap_ms": 188.9,
+      "distinct_visual_positions": 15,
+      "samples": [
+        {
+          "ms": 48.9,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 99.1,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 152.1,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 214.1,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 273.3,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 324.8,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 384.2,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 434.6,
+          "left": 25,
+          "server_cell": 1
+        },
+        {
+          "ms": 494.5,
+          "left": 25,
+          "server_cell": 2
+        },
+        {
+          "ms": 558.6,
+          "left": 30,
+          "server_cell": 2
+        },
+        {
+          "ms": 625.2,
+          "left": 37,
+          "server_cell": 2
+        },
+        {
+          "ms": 673.4,
+          "left": 42,
+          "server_cell": 2
+        },
+        {
+          "ms": 730.4,
+          "left": 46,
+          "server_cell": 3
+        },
+        {
+          "ms": 793.4,
+          "left": 49,
+          "server_cell": 3
+        },
+        {
+          "ms": 857.0,
+          "left": 55,
+          "server_cell": 4
+        },
+        {
+          "ms": 900.5,
+          "left": 57,
+          "server_cell": 4
+        },
+        {
+          "ms": 960.1,
+          "left": 59,
+          "server_cell": 5
+        },
+        {
+          "ms": 1053.4,
+          "left": 59,
+          "server_cell": 5
+        },
+        {
+          "ms": 1101.4,
+          "left": 71,
+          "server_cell": 6
+        },
+        {
+          "ms": 1191.4,
+          "left": 71,
+          "server_cell": 6
+        },
+        {
+          "ms": 1243.3,
+          "left": 81,
+          "server_cell": 7
+        },
+        {
+          "ms": 1305.9,
+          "left": 81,
+          "server_cell": 7
+        },
+        {
+          "ms": 1380.6,
+          "left": 86,
+          "server_cell": 8
+        },
+        {
+          "ms": 1433.9,
+          "left": 93,
+          "server_cell": 8
+        }
+      ],
+      "server_at_release": 8,
+      "server_after_stop": 12,
+      "visual_at_release_left": 93,
+      "visual_stopped_left": 97,
+      "visual_travel_after_release_cells": 0.5,
+      "last_unsettled_sample_ms": 91.0,
+      "release_samples": [
+        {
+          "ms": 91.0,
+          "left": 93,
+          "server_cell": 9
+        },
+        {
+          "ms": 138.2,
+          "left": 97,
+          "server_cell": 10
+        },
+        {
+          "ms": 184.7,
+          "left": 97,
+          "server_cell": 10
+        },
+        {
+          "ms": 236.2,
+          "left": 97,
+          "server_cell": 10
+        },
+        {
+          "ms": 288.1,
+          "left": 97,
+          "server_cell": 11
+        },
+        {
+          "ms": 345.1,
+          "left": 97,
+          "server_cell": 11
+        },
+        {
+          "ms": 402.8,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 460.2,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 511.3,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 558.9,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 609.8,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 662.9,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 771.7,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 871.0,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 943.0,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1070.0,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1141.8,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1206.0,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1259.0,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1310.5,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1365.4,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1428.1,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1489.2,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1551.7,
+          "left": 97,
+          "server_cell": 12
+        }
+      ],
+      "post_release_moves": [],
+      "neutral_delay_ms": 91.1
+    },
+    "movement_results": []
+  },
+  {
+    "artifact_dir": "/tmp/maze-suzy-game-riktf2j0",
+    "rom_sha256": "78e8c44083876f63a4a7b92e5f47d53ff684fc8985e18f2cf28efdb529e1fd9b",
+    "latency_results": {},
+    "movement_results": [
+      {
+        "tap_ms": 60,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          4,
+          17
+        ]
+      },
+      {
+        "tap_ms": 120,
+        "before": [
+          4,
+          17
+        ],
+        "after": [
+          5,
+          17
+        ]
+      },
+      {
+        "tap_ms": 160,
+        "before": [
+          5,
+          17
+        ],
+        "after": [
+          6,
+          17
+        ]
+      },
+      {
+        "turn": "Up then Right while Up held",
+        "after": [
+          7,
+          15
+        ]
+      }
+    ]
+  }
+]

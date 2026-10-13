@@ -97,11 +97,12 @@ static void motion_reset(uint8_t id)
     ++game.motion[id].epoch;
     game.motion[id].serial = 0;
 }
-static void motion_append(uint8_t id, uint8_t x, uint8_t y)
+static void motion_append(uint8_t id, uint8_t x, uint8_t y, uint8_t ticks)
 {
     struct game_motion *m = &game.motion[id];
     uint8_t n = m->serial % GAME_MOTION_POINTS;
     m->x[n] = x; m->y[n] = y; m->at[n] = game.input_clock;
+    m->ticks[n] = ticks;
     ++m->serial;
 }
 static void predict_input(uint8_t joy)
@@ -225,6 +226,9 @@ static void snapshot_apply(const uint8_t *p)
     replay_pending();
     for (i=0; i<GAME_PLAYERS; ++i) {
         if (old_x[i] == game.players[i].x && old_y[i] == game.players[i].y) continue;
+        if (i == game.local_pid && game.snapshot_ready && old_x[i] < 20 &&
+            old_y[i] < 19 && !game.players[i].respawning)
+            ++game.local_corrections;
         if (i == game.local_pid || !game.snapshot_ready ||
             game.players[i].respawning || old_x[i] >= 20 || old_y[i] >= 19 ||
             (old_x[i] != game.players[i].x && old_y[i] != game.players[i].y))
@@ -235,7 +239,7 @@ static void snapshot_apply(const uint8_t *p)
                 else if (old_x[i] > game.players[i].x) --old_x[i];
                 else if (old_y[i] < game.players[i].y) ++old_y[i];
                 else --old_y[i];
-                motion_append(i,old_x[i],old_y[i]);
+                motion_append(i,old_x[i],old_y[i],GAME_MOVE_TICKS);
             }
         }
     }
@@ -511,9 +515,6 @@ void game_set_joy(uint8_t joy)
 {
     if (!joy_ok(joy)) return;
     if (joy != game.input_joy) {
-        if ((joy & 0x10) && !(game.input_joy & 0x10) &&
-            (joy & 15) != 15 && game_ready())
-            game.fire_cue_frames = 3;
         /* Preserve sampled presses across a release during a render. Each
            intent is one discrete action, not a level-triggered repeat. */
         if (game_ready() && game.local_pid < GAME_PLAYERS &&
@@ -626,11 +627,12 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
         old_y = game.players[game.local_pid].y;
         predict_input(joy);
         if (old_x != game.players[game.local_pid].x || old_y != game.players[game.local_pid].y) {
-            motion_append(game.local_pid,game.players[game.local_pid].x,game.players[game.local_pid].y);
+            motion_append(game.local_pid,game.players[game.local_pid].x,game.players[game.local_pid].y,
+                          explicit_intent ? GAME_PRESS_TICKS : GAME_MOVE_TICKS);
             game.sound_events[game.local_pid] |= GAME_SOUND_STEP;
         }
-        if ((joy & 0x10) && !(game.sent_joy & 0x10))
-            game.sound_events[game.local_pid] |= GAME_SOUND_FIRE;
+        if ((joy & 0x10) && (joy & 15) != 15 && joy != game.sent_joy)
+            game.fire_cue_frames = 3;
     }
     game.last_input_at = game.input_clock;
     game.retry_at = game.input_clock;

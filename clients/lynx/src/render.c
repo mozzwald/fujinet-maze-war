@@ -9,10 +9,7 @@
 #include "colors.h"
 #include "command.h"
 
-#define BOARD_X 2
-#define BOARD_Y 13
-#define CELL 4
-#define HUD_X 86
+extern SCB_REHV_PAL maze_text_scb;
 struct render_timing render_timing;
 static uint16_t last_render_at;
 static uint8_t timing_ready;
@@ -69,7 +66,7 @@ static const char *link_message(void)
 
 static void draw_diagnostics(void)
 {
-    char latency[24] = "W0000 D0000 Q0000 F0000";
+    char latency[36] = "W0000 D0000 Q0000 F0000 C0000 I0000";
     tgi_setcolor(COLOR_YELLOW);
     tgi_outtextxy(4, 2, "MAZE WAR LYNX");
     tgi_setcolor(link_state == LINK_WELCOME ? COLOR_LIGHTGREEN : COLOR_WHITE);
@@ -95,147 +92,10 @@ static void draw_diagnostics(void)
         hex_word(latency+7,game.ack_delay); latency[11]=' ';
         hex_word(latency+13,game.pending_count); latency[17]=' ';
         hex_word(latency+19,render_timing.frame_ticks);
+        latency[23]=' '; hex_word(latency+25,game.local_corrections);
+        latency[29]=' '; hex_word(latency+31,game.input_retries);
         render_small_text(4,98,latency);
     }
-}
-
-static uint8_t brick_at(uint8_t x, uint8_t y)
-{
-    uint16_t index = (uint16_t)y * 20 + x;
-    return (game.bricks[index >> 3] >> (index & 7)) & 1;
-}
-
-static void draw_maze(void (*pump)(void))
-{
-    uint8_t x;
-    uint8_t y;
-    uint8_t start;
-    uint8_t wall;
-    for (y = 0; y < 19; ++y) {
-        x = 0;
-        while (x < 20) {
-            wall = brick_at(x, y);
-            if (!wall) {
-                ++x;
-                continue;
-            }
-            start = x;
-            while (x < 20 && brick_at(x, y)) ++x;
-            tgi_setcolor(y == 0 || y == 18 ? COLOR_BLUE : COLOR_LIGHTGREY);
-            tgi_bar(BOARD_X + start * CELL, BOARD_Y + y * CELL,
-                    BOARD_X + x * CELL - 1, BOARD_Y + y * CELL + CELL - 1);
-        }
-        if (pump) pump();
-    }
-}
-
-static void draw_shots(void)
-{
-    uint8_t i;
-    for (i = 0; i < GAME_PLAYERS; ++i) {
-        const struct game_shot *shot = &game.shots[i];
-        if (!shot->active || shot->x >= 20 || shot->y >= 19) continue;
-        tgi_setcolor(COLOR_WHITE);
-        tgi_bar(BOARD_X + shot->x * CELL + 1,
-                BOARD_Y + shot->y * CELL + 1,
-                BOARD_X + shot->x * CELL + 2,
-                BOARD_Y + shot->y * CELL + 2);
-    }
-}
-
-static void draw_players(void)
-{
-    uint8_t i;
-    uint8_t x;
-    uint8_t y;
-    uint8_t facing;
-    for (i = 0; i < GAME_PLAYERS; ++i) {
-        const struct game_player *player = &game.players[i];
-        if (!((game.seat_mask | game.zombie_mask) & (1u << i)) ||
-            player->respawning || player->x >= 20 || player->y >= 19)
-            continue;
-        x = BOARD_X + player->x * CELL;
-        y = BOARD_Y + player->y * CELL;
-        tgi_setcolor(player_colors[i]);
-        tgi_bar(x, y, x + 3, y + 3);
-        facing = player->joy & 15;
-        tgi_setcolor(i == game.local_pid ? COLOR_WHITE : COLOR_BLACK);
-        if (facing == 14) tgi_setpixel(x + 1, y);
-        else if (facing == 7) tgi_setpixel(x + 3, y + 1);
-        else if (facing == 13) tgi_setpixel(x + 1, y + 3);
-        else if (facing == 11) tgi_setpixel(x, y + 1);
-    }
-}
-
-static void draw_seat(uint8_t i)
-{
-    char name[9];
-    char score[6];
-    uint8_t j;
-    uint8_t points = game.players[i].score;
-    uint8_t row_y = 16 + i * 18;
-    uint8_t occupied = (game.seat_mask | game.zombie_mask) & (1u << i);
-    if (!occupied) {
-        const char vacant[9] = "VACANT  ";
-        for (j = 0; j < 8; ++j) name[j] = vacant[j];
-    } else if (game.zombie_mask & (1u << i)) {
-        const char zombie[9] = "ZOMBIE  ";
-        for (j = 0; j < 8; ++j) name[j] = zombie[j];
-    } else {
-        for (j = 0; j < GAME_NAME_LEN; ++j)
-            name[j] = game.names[i][j] ? game.names[i][j] : ' ';
-    }
-    name[8] = 0;
-    score[0] = 'S'; score[1] = ':';
-    score[2] = (char)('0' + points / 100);
-    score[3] = (char)('0' + (points / 10) % 10);
-    score[4] = (char)('0' + points % 10);
-    score[5] = 0;
-    tgi_setcolor(occupied ? player_colors[i] : COLOR_LIGHTGREY);
-    {
-        char seat[2];
-        seat[0] = i == game.local_pid ? '*' : (char)('1' + i);
-        seat[1] = 0;
-        tgi_outtextxy(HUD_X, row_y, seat);
-    }
-    tgi_outtextxy(HUD_X + 9, row_y, name);
-    if (occupied) tgi_outtextxy(HUD_X + 9, row_y + 8, score);
-}
-
-static void draw_game(void (*pump)(void))
-{
-    uint8_t i;
-    char line[10];
-    tgi_setcolor(COLOR_YELLOW);
-    tgi_outtextxy(2, 2, "MAZE WAR");
-    tgi_setcolor(COLOR_LIGHTBLUE);
-    line[0] = 'R';
-    line[1] = ':';
-    line[2] = hex_digit(game.round_id >> 4);
-    line[3] = hex_digit(game.round_id);
-    line[4] = 0;
-    tgi_outtextxy(HUD_X, 2, line);
-    if (game.map_ready) draw_maze(pump);
-    if (game.snapshot_ready) {
-        draw_shots();
-        draw_players();
-    }
-    if (pump) pump();
-    for (i = 0; i < GAME_PLAYERS; ++i) {
-        draw_seat(i);
-        if (pump) pump();
-    }
-    tgi_setcolor(COLOR_WHITE);
-    if (link_state != LINK_WELCOME)
-        tgi_outtextxy(2, 91, link_message());
-    else if (game.phase)
-        tgi_outtextxy(HUD_X, 91, "ROUND OVER");
-    else if (!game_ready())
-        tgi_outtextxy(HUD_X, 91, "SYNCING");
-    else
-        tgi_outtextxy(HUD_X, 91, "PLAYING");
-    tgi_setcolor(COLOR_LIGHTBLUE);
-    tgi_outtextxy(151, 2, "B");
 }
 
 /* Ten four-pixel pitches fit each 40-pixel player slot: name[8] + score[2]. */
@@ -256,7 +116,6 @@ static const uint8_t mini_font[39][4] = {
 void render_small_text(uint8_t x, uint8_t y, const char *line)
 {
     static uint8_t bitmap[329];
-    static SCB_REHV_PAL sprite;
     uint8_t index, row, col, bits, count, stride;
     char c;
     if (x >= 160 || y > 98) return;
@@ -284,14 +143,14 @@ void render_small_text(uint8_t x, uint8_t y, const char *line)
     }
     /* One synchronous Suzy sprite per line, rather than hundreds of
        individual pixel sprites. Transparent pen zero preserves the HUD. */
-    memset(&sprite,0,sizeof(sprite));
-    sprite.sprctl0 = BPP_4 | TYPE_NONCOLL;
-    sprite.sprctl1 = LITERAL | REHV;
-    sprite.sprcoll = NO_COLLIDE;
-    sprite.data = bitmap; sprite.hpos = x; sprite.vpos = y;
-    sprite.hsize = sprite.vsize = 0x100;
-    sprite.penpal[0] = tgi_getcolor();
-    tgi_sprite(&sprite);
+    memset(&maze_text_scb,0,sizeof(maze_text_scb));
+    maze_text_scb.sprctl0 = BPP_4 | TYPE_NONCOLL;
+    maze_text_scb.sprctl1 = LITERAL | REHV;
+    maze_text_scb.sprcoll = NO_COLLIDE;
+    maze_text_scb.data = bitmap; maze_text_scb.hpos = x; maze_text_scb.vpos = y;
+    maze_text_scb.hsize = maze_text_scb.vsize = 0x100;
+    maze_text_scb.penpal[0] = tgi_getcolor();
+    tgi_sprite(&maze_text_scb);
 }
 
 static void draw_score(uint8_t slot)
@@ -455,9 +314,11 @@ void render_draw(uint8_t diagnostics, void (*pump)(void))
         hud_valid[0] = hud_valid[1] = 0;
         previous_status[0] = previous_status[1] = 255;
         tgi_clear();
-        if (diagnostics) draw_diagnostics();
-        else if (game_round_stage(&game) == ROUND_RESULTS) draw_round_results(pump);
-        else draw_game(pump);
+        draw_diagnostics();
+        if (!direct_page_ok) {
+            tgi_setcolor(COLOR_YELLOW);
+            render_small_text(4,98,"VIDEO PAGE ERROR");
+        }
     } else {
         draw_full_map(pump);
     }

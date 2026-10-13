@@ -3,8 +3,12 @@
 #include "protocol.h"
 #include "command.h"
 
+#ifdef LYNX_NETSTREAM_HOST
+#include "serial_host.h"
+#else
 #include <lynx.h>
 #include <serial.h>
+#endif
 #include <string.h>
 
 #define FUJI_DEVICE 0x70
@@ -14,6 +18,8 @@
 #define RX_RING_CAP 128
 #define HELLO_RETRY_FRAMES 6
 #define HELLO_DEADLINE_FRAMES 600
+#define RX_FRAME_WAIT_TICKS 2 /* Longest wire frame is under 12 ms at 62500. */
+#define RX_QUIET_TICKS 2 /* At least one whole VBL without received bytes. */
 /* lynx-comlynx.ser returns raw Mikey bits plus software RX overflow, not
    the generic serial.h status layout. Include RX break, exclude PARBIT. */
 #define SERIAL_ERROR_MASK 0x9e
@@ -28,6 +34,8 @@ static uint8_t rx_write;
 static uint8_t rx_count;
 static uint16_t handshake_frames;
 static uint8_t hello_cooldown;
+static uint16_t last_rx_at;
+static uint8_t rx_seen;
 
 static uint8_t enable_raw_tcp(const char *host, uint16_t port)
 {
@@ -92,12 +100,14 @@ void netstream_poll(void)
     uint8_t budget;
     uint8_t status;
     uint8_t result;
+    uint8_t received;
     char byte;
     if (link_state == LINK_STARTING || link_state == LINK_COMMAND_ERROR ||
         link_state == LINK_SERIAL_ERROR)
         return;
     for (pass = 0; pass < 2; ++pass) {
         budget = 96;
+        received = 0;
         while (budget-- && rx_count < RX_RING_CAP) {
             result = ser_get(&byte);
             if (result == SER_ERR_NO_DATA)
@@ -111,7 +121,9 @@ void netstream_poll(void)
                 rx_write = 0;
             ++rx_count;
             ++link_stats.rx_bytes;
+            received = 1;
         }
+        if (received) { last_rx_at = command_clock(); rx_seen = 1; }
         if (rx_count == RX_RING_CAP)
             ++link_stats.rx_overflows;
         parse_ring();
@@ -136,7 +148,6 @@ static uint8_t send_payload(const uint8_t *payload, uint8_t payload_len)
     for (i = 0; i < length; ++i) {
         attempts = 512;
         while (ser_put((char)wire[i]) != SER_ERR_OK) {
-            netstream_poll();
             if (--attempts == 0) {
                 /* Abandoned COBS bytes must not merge with the next retry. */
                 attempts = 512;
@@ -146,8 +157,11 @@ static uint8_t send_payload(const uint8_t *payload, uint8_t payload_len)
             }
         }
         ++link_stats.tx_bytes;
-        netstream_poll();
     }
+    /* Queue a complete frame without interleaving CRC/parsing work. Mikey's
+       driver disables RX while transmitting; byte-wise parsing can empty
+       the TX ring and split one COBS frame into separate wire turns. */
+    netstream_poll();
     return 1;
 }
 
@@ -169,6 +183,8 @@ uint8_t netstream_start(const char *host, uint16_t port)
     frame_reset(&frame_rx);
     rx_read = rx_write = rx_count = 0;
     handshake_frames = 0;
+    last_rx_at = 0;
+    rx_seen = 0;
     hello_cooldown = 0;
     link_state = LINK_STARTING;
     if (!host || !port) {
@@ -208,6 +224,20 @@ void netstream_service(void)
     netstream_poll();
     if (link_state != LINK_WELCOME) return;
     for (i = 0; i < 2; ++i) {
+        /* A COBS boundary is not the end of FujiNet's serial burst. RX is
+           disabled during TX: wait for quiet even after a complete frame. */
+        if (rx_seen &&
+            (uint16_t)(command_clock() - last_rx_at) < RX_QUIET_TICKS)
+            return;
+        if (frame_rx.used || frame_rx.discarding) {
+            /* Recheck after every send: its RX poll can start another frame.
+               A truncated frame cannot prevent recovery indefinitely. */
+            if ((uint16_t)(command_clock() - last_rx_at) < RX_FRAME_WAIT_TICKS)
+                return;
+            frame_reset(&frame_rx);
+            ++link_stats.bad_frames;
+            link_stats.last_frame_error = FRAME_ERROR_TRUNCATED;
+        }
         len = game_next_outbound(payload, sizeof(payload));
         if (!len) break;
         if (!send_payload(payload, len)) {

@@ -36,8 +36,6 @@ static const uint8_t period[6] = {0,2,1,2,2,4};
 struct voice { uint16_t started; uint8_t effect; };
 static struct voice voices[4];
 static uint8_t epoch, stage, initialized;
-static uint16_t local_fire_at;
-static uint8_t local_fire_pending;
 
 static void silence(void)
 {
@@ -59,7 +57,7 @@ void sound_init(void)
         CHANNELS[i].control=0x1b; /* count, reload, 8us; no linked timer */
     }
     STEREO=0; PANNING=0; /* enable all voices on both sides, no attenuation */
-    initialized=0; local_fire_pending=0; stage=ROUND_NONE;
+    initialized=0; stage=ROUND_NONE;
 }
 static void play(uint8_t channel, uint8_t effect)
 {
@@ -77,7 +75,7 @@ void sound_update(void)
     uint16_t elapsed;
     if (!initialized || epoch!=game.round_id) {
         silence(); epoch=game.round_id; initialized=1;
-        stage=ROUND_NONE; local_fire_pending=0;
+        stage=ROUND_NONE;
     }
     /* Expire before arbitration so an old death cannot suppress a respawn.
        Direct elapsed time skips missed envelope steps, never catches up. */
@@ -102,15 +100,10 @@ void sound_update(void)
         events=game.sound_events[i]; game.sound_events[i]=0;
         if (game.phase || !game_ready()) continue;
         if (events&GAME_SOUND_STEP) play(i,STEP);
-        if (events&GAME_SOUND_FIRE) {
-            play(i,SHOT); local_fire_at=game.input_clock; local_fire_pending=1;
-        }
         if (events&GAME_SOUND_SHOT) {
-            /* The local authoritative echo confirms the already heard shot.
-               Held-fire shots without a fresh predicted press still sound. */
-            if (i!=game.local_pid || !local_fire_pending ||
-                (uint16_t)(game.input_clock-local_fire_at)>=30) play(i,SHOT);
-            if (i==game.local_pid) local_fire_pending=0;
+            /* Sound actual projectile creation, including direction pressed
+               while fire is already held. A bare trigger is not a shot. */
+            play(i,SHOT);
         }
         if ((events&GAME_SOUND_IMPACT) && !(events&GAME_SOUND_SHOT)) {
             play(i,IMPACT); impact=1;

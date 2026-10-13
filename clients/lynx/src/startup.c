@@ -7,20 +7,24 @@
 #include "setup.h"
 #include "command.h"
 #include "render.h"
+#include "boot_guard.h"
 
 static uint8_t last_buttons;
 static uint16_t repeat_at;
 static uint8_t saved = 1;
 static void begin_screen(const char *title)
 {
+    boot_guard(2);
     while (tgi_busy()) {}
     tgi_setbgcolor(COLOR_BLACK);
     tgi_clear();
+    boot_guard(3);
     tgi_setcolor(COLOR_YELLOW);
     tgi_outtextxy(4,3,title);
+    boot_guard(4);
     tgi_setcolor(COLOR_WHITE);
 }
-static void show(void) { tgi_updatedisplay(); }
+static void show(void) { boot_guard(5); tgi_updatedisplay(); }
 static void release_buttons(void)
 {
     while (tgi_busy()) {}
@@ -128,12 +132,14 @@ uint8_t startup_run(void)
     begin_screen("LOADING YOUR NAME"); show();
     if (!command_open()) return 0;
     if (!setup_load_name()) edit_name();
+    boot_guard(6);
     release_buttons();
     for (;;) {
         if (refresh) {
             begin_screen("FETCHING LOBBY");
             tgi_outtextxy(4,30,"PLEASE WAIT"); show();
             result = setup_lobby(); selected = 0; refresh = 0; dirty = 1;
+            boot_guard(7);
             release_buttons();
         }
         if (dirty) { lobby_screen(result,selected); dirty = 0; }

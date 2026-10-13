@@ -33,21 +33,31 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rom', type=Path, default=Path(__file__).resolve().parents[1] / 'build/maze-war-lynx.lnx')
     parser.add_argument("--movement-checks", action="store_true")
+    parser.add_argument("--remote-jitter-checks", action="store_true", help="sample a remote sprite with irregularly spaced snapshot destinations")
     parser.add_argument("--death-checks", action="store_true")
     parser.add_argument("--round-checks", action="store_true")
     parser.add_argument("--sound-checks", action="store_true", help="capture Handy SDL audio using a test-only preload")
     parser.add_argument("--input-lag-ms", type=float, default=0)
+    parser.add_argument("--snapshot-burst", type=int, default=1, help="deliver this many 10 Hz snapshots together to simulate receive jitter")
     parser.add_argument("--latency-checks", action="store_true", help="measure held movement and visible pixel cadence in an empty corridor")
+    parser.add_argument("--hold-ms", type=float, default=1200, help="corridor hold duration for latency checks")
     parser.add_argument("--recovery-checks", action="store_true", help="drop held movement until its window fills and check retry recovery without another key press")
     parser.add_argument("--expect-stall", action="store_true", help="record an older ROM's missing recovery; requires --recovery-checks")
     args = parser.parse_args()
-    if sum((args.movement_checks, args.death_checks, args.round_checks, args.latency_checks, args.recovery_checks)) > 1:
+    if args.hold_ms <= 0:
+        parser.error('--hold-ms must be positive')
+    if not 1 <= args.snapshot_burst <= 4:
+        parser.error('--snapshot-burst must be 1..4')
+    if sum((args.movement_checks, args.remote_jitter_checks, args.death_checks, args.round_checks, args.latency_checks, args.recovery_checks)) > 1:
         parser.error('run movement, death, round, latency and recovery checks separately')
     if args.expect_stall and not args.recovery_checks:
         parser.error('--expect-stall requires --recovery-checks')
     rom = args.rom.resolve()
     pc = Path.home() / 'lynx-pc'
     output = Path(tempfile.mkdtemp(prefix='maze-suzy-game-'))
+    # Measure an immutable cartridge even if another terminal rebuilds it.
+    shutil.copyfile(rom, output / 'cartridge.lnx')
+    rom = output / 'cartridge.lnx'
     shutil.copy(pc / 'lynxboot.img', output / 'lynxboot.img')
     (output / 'config').mkdir()
     listener = socket.socket()
@@ -65,6 +75,8 @@ def main():
     input_queue = deque()
     local = [3,17]
     dead_slots = {1,2,3} if args.latency_checks or args.recovery_checks else set()
+    if args.remote_jitter_checks:
+        dead_slots = {2,3}
     remote_positions = [[7,17],[11,17],[15,17]]
     simulate_moves = args.movement_checks or args.death_checks or args.latency_checks or args.recovery_checks
     latency_results = {}
@@ -78,6 +90,7 @@ def main():
     applied_moves = []
     next_snapshot = time.monotonic()
     movement_results = []
+    remote_results = {}
     events = []
     key_events = []
     audio_windows = []
@@ -110,8 +123,21 @@ def main():
         peer.sendall(b'\x06\x06')
         peer.setblocking(False)
 
+        snapshot_batch = bytearray()
+        snapshot_batch_count = 0
         def send(payload):
-            peer.sendall(wire.encode(bytes(payload)))
+            nonlocal snapshot_batch_count
+            encoded = wire.encode(bytes(payload))
+            if payload[0] == 0x40 and args.snapshot_burst > 1:
+                snapshot_batch.extend(encoded)
+                snapshot_batch_count += 1
+                if snapshot_batch_count < args.snapshot_burst:
+                    return
+                peer.sendall(snapshot_batch)
+                snapshot_batch.clear()
+                snapshot_batch_count = 0
+            else:
+                peer.sendall(encoded)
 
         def snapshot():
             nonlocal sequence
@@ -241,6 +267,36 @@ def main():
             key_events.append(dict(key=name, down=down, at=time.monotonic()))
             xtest.fake_input(d,X.KeyPress if down else X.KeyRelease,d.keysym_to_keycode(string_to_keysym(name)))
             d.sync()
+        if args.remote_jitter_checks:
+            remote_positions[0] = [4,12]
+            send([0x52,58,1,4,12,3,round_id])
+            service(.6,True)
+            image = capture('remote-before')
+            robe = image.getpixel((35,61))
+            assert robe != image.getpixel((32,60)), 'remote robe sample was floor'
+            schedule = [(0,5),(.075,6),(.205,7),(.305,8),(.51,9),(.61,10)]
+            samples, destinations = [], []
+            started = time.monotonic()
+            while time.monotonic()-started < 1.3:
+                elapsed = time.monotonic()-started
+                while schedule and elapsed >= schedule[0][0]:
+                    _, cell = schedule.pop(0)
+                    remote_positions[0][0] = cell
+                    destinations.append(dict(ms=round(elapsed*1000,1),cell=cell))
+                    snapshot()
+                service(.01,True)
+                image = capture('remote-jitter')
+                xs = [x for y in range(60,65) for x in range(8,152) if image.getpixel((x,y)) == robe]
+                samples.append(dict(ms=round((time.monotonic()-started)*1000,1),left=min(xs) if xs else None))
+            service(.4,True)
+            image = capture('remote-settled')
+            xs = [x for y in range(60,65) for x in range(8,152) if image.getpixel((x,y)) == robe]
+            visible = [s['left'] for s in samples if s['left'] is not None]
+            assert xs and min(xs)==81, 'remote did not settle at final destination'
+            assert len(set(visible))>=4, 'remote intermediate positions missing'
+            assert all(a<=b for a,b in zip(visible,visible[1:])), 'remote straight motion reversed'
+            remote_results = dict(destinations=destinations,samples=samples,distinct_positions=len(set(visible)),
+                                  largest_sample_gap_pixels=max((b-a for a,b in zip(visible,visible[1:])),default=0),stopped_left=min(xs))
         if args.recovery_checks:
             local[:] = [1,17]
             input_queue.clear()
@@ -281,24 +337,45 @@ def main():
             first_event = len(events)
             held_at = time.monotonic()
             key('Right',True)
-            while time.monotonic()-held_at < 1.2:
+            while time.monotonic()-held_at < args.hold_ms / 1000:
                 service(.02,True)
                 image = capture('latency-walking')
                 xs = [x for y in range(85,90) for x in range(8,152) if image.getpixel((x,y)) == robe]
-                samples.append(dict(ms=round((time.monotonic()-held_at)*1000,1),left=min(xs) if xs else None))
+                samples.append(dict(ms=round((time.monotonic()-held_at)*1000,1),left=min(xs) if xs else None, server_cell=local[0]))
             key('Right',False)
             released_at = time.monotonic()
-            service(1.5,True)
+            server_at_release = local[0]
+            release_samples = []
+            while time.monotonic()-released_at < 1.5:
+                service(.02,True)
+                image = capture('latency-releasing')
+                xs = [x for y in range(85,90) for x in range(8,152) if image.getpixel((x,y)) == robe]
+                release_samples.append(dict(ms=round((time.monotonic()-released_at)*1000,1),left=min(xs) if xs else None, server_cell=local[0]))
             stopped=list(local); service(.4,True)
             assert local==stopped,'continued moving after release drain'
             moves=[e for e in events[first_event:] if e['at']<=released_at and e['delta'][3]==7]
             gaps=[round((b['at']-a['at'])*1000,1) for a,b in zip(moves[1:],moves[2:])]
             visible=[s['left'] for s in samples if s['left'] is not None]
+            release_visible=[s for s in release_samples if s['left'] is not None]
+            final_left=release_visible[-1]['left']
+            last_moving=next((s['ms'] for s in reversed(release_visible) if s['left']!=final_left),0)
+            first_neutral=next((e for e in events[first_event:] if e['at']>=released_at and e['delta'][3]==15),None)
             latency_results=dict(input_delay_ms=args.input_lag_ms,held_ms=round((released_at-held_at)*1000),
                                  sent_steps=len(moves),applied_steps=local[0]-1,
                                  largest_repeat_gap_ms=max(gaps,default=0),
-                                 distinct_visual_positions=len(set(visible)),samples=samples)
-            assert latency_results['sent_steps']==latency_results['applied_steps'],'prediction/server step count differs'
+                                 distinct_visual_positions=len(set(visible)),samples=samples,
+                                 server_at_release=server_at_release, server_after_stop=local[0],
+                                 visual_at_release_left=visible[-1], visual_stopped_left=final_left,
+                                 visual_travel_after_release_cells=round((final_left-visible[-1])/8,3),
+                                 last_unsettled_sample_ms=last_moving,
+                                 release_samples=release_samples,
+                                 post_release_moves=[e for e in events[first_event:] if e['at']>released_at and e['delta'][3]==7],
+                                 neutral_delay_ms=round((first_neutral['at']-released_at)*1000,1) if first_neutral else None)
+            # A byte already in transit at key-up can arrive just afterward.
+            all_moves=[e for e in events[first_event:] if e['delta'][3]==7]
+            assert len({e['delta'][1] for e in all_moves})==latency_results['applied_steps'],'prediction/server step count differs'
+            assert first_neutral is not None,'release never sent a neutral input'
+            assert not any(e['delta'][3]==7 and e['at']>first_neutral['at'] for e in events[first_event:]),'movement transmitted after neutral'
             capture('latency-stopped')
         if args.death_checks:
             local[:] = [6,17]
@@ -380,7 +457,7 @@ def main():
         service(.4,True)
         key('z',False)
         service(.4,True)
-        if args.sound_checks: audio_windows.append(('local-fire',start_audio,time.monotonic()))
+        if args.sound_checks: audio_windows.append(('bare-fire-idle',start_audio,time.monotonic()))
         assert any(e['delta'][3] & 0x10 for e in events), 'A/fire input not transmitted'
         start_audio = time.monotonic()
         key('Right',True)
@@ -467,7 +544,7 @@ def main():
         service(2,True)
         restarted = capture('new-round')
         assert restarted.getpixel((80,50)) == before.getpixel((80,50)), 'new round did not restore brick'
-        result = dict(endpoint=endpoint, port=endpoint_port, input_lag_ms=args.input_lag_ms,
+        result = dict(endpoint=endpoint, port=endpoint_port, input_lag_ms=args.input_lag_ms, snapshot_burst=args.snapshot_burst, remote_results=remote_results,
                       movement_results=movement_results, death_results=death_results, round_results=round_results, latency_results=latency_results, recovery_results=recovery_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
                       handy_sha256=hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),
                       received=dict(received), acknowledged=sorted(acked),
@@ -495,8 +572,9 @@ def main():
             result['audio_checks']=checks
         (output/'results.json').write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps(dict(output=str(output), endpoint=endpoint, port=endpoint_port,
+                              remote_results={k:v for k,v in remote_results.items() if k != 'samples'}, snapshot_burst=args.snapshot_burst,
                               movement_results=movement_results, death_results=death_results, round_results=round_results,
-                              latency_results={k:v for k,v in latency_results.items() if k != 'samples'}, rom_sha256=result['rom_sha256'],
+                              latency_results={k:v for k,v in latency_results.items() if k not in ('samples','release_samples')}, rom_sha256=result['rom_sha256'],
                               recovery_results=recovery_results,
                               acknowledged=sorted(acked)),indent=2))
     finally:

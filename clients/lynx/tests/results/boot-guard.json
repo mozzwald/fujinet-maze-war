@@ -1,0 +1,119 @@
+{
+  "date": "2026-10-12",
+  "status": "User confirms graphics-fixed normal ROM works on real hardware without freeze",
+  "handy_checks": [
+    {
+      "name": "normal_startup",
+      "artifacts": "/tmp/maze-lynx-startup-mbx2dm26",
+      "rom_sha256": "d18322efe1d594112c9b68a61ba0e3e0db718b0dc797a53dc343a8428e61444a",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ]
+    },
+    {
+      "name": "guarded_startup_edit",
+      "artifacts": "/tmp/maze-lynx-startup-h1z7ug66",
+      "rom_sha256": "7526b173777f34c156405a4677e30756b36ed591bb3cb11f99e1fa944743b328",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ]
+    },
+    {
+      "name": "guard_fault_injection",
+      "artifacts": "/tmp/maze-lynx-startup-zzj00341",
+      "rom_sha256": "71d5e645ff9a862eaf64b2a6200965407b6174ee1fc2cf707e1a3e2fb71eda89",
+      "checks": [
+        "sealed checksum fault detected before graphics/serial",
+        "CPU-only stage 1 bar displayed"
+      ]
+    },
+    {
+      "name": "candidate_startup",
+      "artifacts": "/tmp/maze-lynx-startup-qeplmsur",
+      "rom_sha256": "1e7f5077541f79e646ba27ea8003042f1a11de560284c4d3731c8dcee42a2ac4",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ]
+    },
+    {
+      "name": "candidate_name_edit",
+      "artifacts": "/tmp/maze-lynx-startup-2exgfjt8",
+      "rom_sha256": "1e7f5077541f79e646ba27ea8003042f1a11de560284c4d3731c8dcee42a2ac4",
+      "checks": [
+        "name resolved before HTTP",
+        "Lobby waits for selection",
+        "selected endpoint",
+        "HELLO/WELCOME",
+        "NAME survives WELCOME"
+      ]
+    },
+    {
+      "name": "candidate_movement_render",
+      "artifacts": "/tmp/maze-suzy-game-7abs3g5e",
+      "rom_sha256": "1e7f5077541f79e646ba27ea8003042f1a11de560284c4d3731c8dcee42a2ac4",
+      "checks": [
+        "brick removal",
+        "bottom feet",
+        "border texture",
+        "fire input",
+        "movement input",
+        "diagnostics restoration",
+        "new round"
+      ]
+    }
+  ],
+  "host_tests": "Full suite passed with GAME_MOTION_POINTS=2 diagnostic history",
+  "limitations": [
+    "Individual graphics changes not isolated to establish one root cause",
+    "Page alignment is preventive; no general SCB page-crossing prohibition established",
+    "Failing ROM palettes did not hit known xxFA erratum",
+    "Handy does not reproduce electrical half-duplex or this freeze",
+    "Checksum excludes mutable RAM and early startup"
+  ],
+  "hardware_feedback": {
+    "previous": "user confirms boot works",
+    "boot_test": "user confirms boot works, slow as expected",
+    "normal": "Fresh d18322 ROM freezes in lobby again; photo IMG_20261012_211240.jpg shows absent title and corrupted selection marker",
+    "current_normal": "User confirms: works again, no freeze"
+  },
+  "historical_roms": {
+    "maze-war-lynx.lnx": "d18322efe1d594112c9b68a61ba0e3e0db718b0dc797a53dc343a8428e61444a",
+    "maze-war-lynx-previous.lnx": "78e8c44083876f63a4a7b92e5f47d53ff684fc8985e18f2cf28efdb529e1fd9b",
+    "maze-war-lynx-boot-test.lnx": "7526b173777f34c156405a4677e30756b36ed591bb3cb11f99e1fa944743b328"
+  },
+  "historical_rom_sizes_bytes": {
+    "maze-war-lynx.lnx": 42537,
+    "maze-war-lynx-previous.lnx": 42262,
+    "maze-war-lynx-boot-test.lnx": 42746
+  },
+  "candidate": {
+    "file": "clients/lynx/build/maze-war-lynx.lnx",
+    "sha256": "1e7f5077541f79e646ba27ea8003042f1a11de560284c4d3731c8dcee42a2ac4",
+    "bytes": 40948,
+    "server": "fujinet.online:5025",
+    "changes": [
+      "Local cc65 TGI text padding restored",
+      "Aligned TGI/game control blocks and text buffer",
+      "Build checks layout, palette erratum avoidance, full 2 KB stack",
+      "Obsolete mini-maze fallback replaced by diagnostics on video-page error"
+    ],
+    "bss_end_exclusive": "B41D",
+    "stack_bottom": "B838",
+    "free_before_stack_bytes": 1051,
+    "hardware_status": "User confirmed working without freeze"
+  },
+  "candidate_automation_note": "Fast name-editor run timed out joining: screenshot and command trace show the join key arrived while saving. Slower input run passes name editing, AppKey save and join.",
+  "candidate_host_tests": "Full default suite passed, plus build gate and three injected invalid map placements rejected"
+}

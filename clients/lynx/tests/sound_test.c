@@ -58,7 +58,13 @@ int main(void)
     game_set_joy(15); game_set_joy(7); game_next_outbound(out,11);
     assert(!game.sound_events[0]);
     update(20);
+    /* A alone is silent. Pressing a direction with A held sends valid fire,
+       but audio waits for actual projectile creation, never a bare trigger. */
+    game_set_joy(0x1f); assert(game_next_outbound(out,11)==5); update(0);
+    silent(); assert(!game.fire_cue_frames);
     game_set_joy(0x17); assert(game_next_outbound(out,11)==5); update(0);
+    silent(); assert(game.fire_cue_frames);
+    shot(0,1); update(0);
     assert(sound_channels[0].feedback==1 && sound_channels[0].volume==64);
     reload=sound_channels[0].reload; update(3);
     assert(sound_channels[0].reload>reload);

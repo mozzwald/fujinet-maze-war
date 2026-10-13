@@ -1,0 +1,486 @@
+[
+  {
+    "artifact_dir": "/tmp/maze-suzy-game-vs_u0hhc",
+    "rom_sha256": "d18322efe1d594112c9b68a61ba0e3e0db718b0dc797a53dc343a8428e61444a",
+    "snapshot_burst": 1,
+    "input_lag_ms": 0,
+    "remote_results": {
+      "destinations": [
+        {
+          "ms": 0.0,
+          "cell": 5
+        },
+        {
+          "ms": 110.5,
+          "cell": 6
+        },
+        {
+          "ms": 213.1,
+          "cell": 7
+        },
+        {
+          "ms": 311.4,
+          "cell": 8
+        },
+        {
+          "ms": 516.4,
+          "cell": 9
+        },
+        {
+          "ms": 643.5,
+          "cell": 10
+        }
+      ],
+      "samples": [
+        {
+          "ms": 69.2,
+          "left": 33
+        },
+        {
+          "ms": 110.4,
+          "left": 33
+        },
+        {
+          "ms": 155.4,
+          "left": 37
+        },
+        {
+          "ms": 213.1,
+          "left": 37
+        },
+        {
+          "ms": 262.2,
+          "left": 45
+        },
+        {
+          "ms": 311.3,
+          "left": 45
+        },
+        {
+          "ms": 375.8,
+          "left": 49
+        },
+        {
+          "ms": 412.0,
+          "left": 53
+        },
+        {
+          "ms": 463.1,
+          "left": 53
+        },
+        {
+          "ms": 516.4,
+          "left": 57
+        },
+        {
+          "ms": 565.4,
+          "left": 65
+        },
+        {
+          "ms": 643.5,
+          "left": 65
+        },
+        {
+          "ms": 699.4,
+          "left": 65
+        },
+        {
+          "ms": 746.9,
+          "left": 69
+        },
+        {
+          "ms": 785.7,
+          "left": 79
+        },
+        {
+          "ms": 832.8,
+          "left": 79
+        },
+        {
+          "ms": 892.5,
+          "left": 81
+        },
+        {
+          "ms": 931.5,
+          "left": 81
+        },
+        {
+          "ms": 981.6,
+          "left": 81
+        },
+        {
+          "ms": 1031.4,
+          "left": 81
+        },
+        {
+          "ms": 1073.7,
+          "left": 81
+        },
+        {
+          "ms": 1127.1,
+          "left": 81
+        },
+        {
+          "ms": 1175.1,
+          "left": 81
+        },
+        {
+          "ms": 1215.9,
+          "left": 81
+        },
+        {
+          "ms": 1271.4,
+          "left": 81
+        },
+        {
+          "ms": 1325.3,
+          "left": 81
+        }
+      ],
+      "distinct_positions": 10,
+      "largest_sample_gap_pixels": 10,
+      "stopped_left": 81
+    },
+    "movement_results": [],
+    "latency_results": {}
+  },
+  {
+    "artifact_dir": "/tmp/maze-suzy-game-zw5tkcau",
+    "rom_sha256": "d18322efe1d594112c9b68a61ba0e3e0db718b0dc797a53dc343a8428e61444a",
+    "snapshot_burst": 3,
+    "input_lag_ms": 300.0,
+    "remote_results": {},
+    "movement_results": [
+      {
+        "tap_ms": 60,
+        "before": [
+          3,
+          17
+        ],
+        "after": [
+          4,
+          17
+        ]
+      },
+      {
+        "tap_ms": 120,
+        "before": [
+          4,
+          17
+        ],
+        "after": [
+          5,
+          17
+        ]
+      },
+      {
+        "tap_ms": 160,
+        "before": [
+          5,
+          17
+        ],
+        "after": [
+          6,
+          17
+        ]
+      },
+      {
+        "turn": "Up then Right while Up held",
+        "after": [
+          7,
+          15
+        ]
+      }
+    ],
+    "latency_results": {}
+  },
+  {
+    "artifact_dir": "/tmp/maze-suzy-game-tc_sm508",
+    "rom_sha256": "d18322efe1d594112c9b68a61ba0e3e0db718b0dc797a53dc343a8428e61444a",
+    "snapshot_burst": 1,
+    "input_lag_ms": 300.0,
+    "remote_results": {},
+    "movement_results": [],
+    "latency_results": {
+      "input_delay_ms": 300.0,
+      "held_ms": 1415,
+      "sent_steps": 10,
+      "applied_steps": 11,
+      "largest_repeat_gap_ms": 209.6,
+      "distinct_visual_positions": 17,
+      "samples": [
+        {
+          "ms": 57.1,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 108.0,
+          "left": 9,
+          "server_cell": 1
+        },
+        {
+          "ms": 152.6,
+          "left": 14,
+          "server_cell": 1
+        },
+        {
+          "ms": 203.1,
+          "left": 14,
+          "server_cell": 1
+        },
+        {
+          "ms": 247.8,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 310.9,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 370.5,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 432.3,
+          "left": 17,
+          "server_cell": 1
+        },
+        {
+          "ms": 489.7,
+          "left": 22,
+          "server_cell": 2
+        },
+        {
+          "ms": 545.0,
+          "left": 27,
+          "server_cell": 2
+        },
+        {
+          "ms": 611.0,
+          "left": 34,
+          "server_cell": 2
+        },
+        {
+          "ms": 669.6,
+          "left": 41,
+          "server_cell": 2
+        },
+        {
+          "ms": 721.0,
+          "left": 41,
+          "server_cell": 3
+        },
+        {
+          "ms": 777.9,
+          "left": 46,
+          "server_cell": 3
+        },
+        {
+          "ms": 850.9,
+          "left": 51,
+          "server_cell": 4
+        },
+        {
+          "ms": 914.1,
+          "left": 58,
+          "server_cell": 4
+        },
+        {
+          "ms": 985.9,
+          "left": 61,
+          "server_cell": 5
+        },
+        {
+          "ms": 1058.0,
+          "left": 65,
+          "server_cell": 5
+        },
+        {
+          "ms": 1128.0,
+          "left": 70,
+          "server_cell": 6
+        },
+        {
+          "ms": 1182.6,
+          "left": 73,
+          "server_cell": 6
+        },
+        {
+          "ms": 1276.3,
+          "left": 74,
+          "server_cell": 7
+        },
+        {
+          "ms": 1330.6,
+          "left": 83,
+          "server_cell": 8
+        },
+        {
+          "ms": 1414.7,
+          "left": 86,
+          "server_cell": 8
+        }
+      ],
+      "server_at_release": 8,
+      "server_after_stop": 12,
+      "visual_at_release_left": 86,
+      "visual_stopped_left": 97,
+      "visual_travel_after_release_cells": 1.375,
+      "last_unsettled_sample_ms": 107.7,
+      "release_samples": [
+        {
+          "ms": 58.7,
+          "left": 95,
+          "server_cell": 9
+        },
+        {
+          "ms": 107.7,
+          "left": 95,
+          "server_cell": 9
+        },
+        {
+          "ms": 155.9,
+          "left": 97,
+          "server_cell": 10
+        },
+        {
+          "ms": 206.3,
+          "left": 97,
+          "server_cell": 10
+        },
+        {
+          "ms": 262.9,
+          "left": 97,
+          "server_cell": 11
+        },
+        {
+          "ms": 316.2,
+          "left": 97,
+          "server_cell": 11
+        },
+        {
+          "ms": 372.3,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 420.5,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 471.8,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 528.5,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 578.9,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 629.1,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 681.7,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 730.6,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 788.6,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 843.7,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 901.4,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 968.4,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1055.5,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1140.0,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1206.2,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1269.5,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1327.7,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1375.2,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1424.2,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1480.2,
+          "left": 97,
+          "server_cell": 12
+        },
+        {
+          "ms": 1528.5,
+          "left": 97,
+          "server_cell": 12
+        }
+      ],
+      "post_release_moves": [
+        {
+          "delta": [
+            65,
+            19,
+            0,
+            7,
+            1
+          ],
+          "at": 2792249.087035627
+        }
+      ],
+      "neutral_delay_ms": 8.9
+    }
+  }
+]

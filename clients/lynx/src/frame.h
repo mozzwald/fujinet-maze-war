@@ -12,6 +12,7 @@
 #define FRAME_ERROR_COBS 3
 #define FRAME_ERROR_LENGTH 4
 #define FRAME_ERROR_CRC 5
+#define FRAME_ERROR_TRUNCATED 6
 
 struct frame_rx {
     uint8_t encoded[FRAME_ENCODED_MAX];

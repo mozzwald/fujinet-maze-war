@@ -8,9 +8,20 @@ LOBBY_BASE ?= https://lobby.fujinet.online
 LOBBY_PLATFORM ?= atari
 ROOM_PORT_BASE ?= $(SERVER_PORT)
 ROOM_COUNT ?= 4
+# Diagnostic only: bypass local interpolation to isolate hardware release drift.
+LOCAL_CELL_TEST ?= 0
+# Hardware fault isolation only; the checksum scans intentionally slow menus.
+BOOT_GUARD ?= 0
 TARGET := build/maze-war-lynx.lnx
 MAP := build/maze-war-lynx.map
-SOURCES := src/main.c src/command.c src/setup.c src/startup.c src/netstream.c src/frame.c src/protocol.c src/render.c src/playfield.c src/sound.c
+SOURCES := src/main.c src/command.c src/setup.c src/startup.c src/netstream.c src/frame.c src/protocol.c src/render.c src/playfield.c src/sound.c src/lynx_tgi.s src/graphics_buffers.s
+GUARD_FLAGS :=
+ifeq ($(BOOT_GUARD),1)
+SOURCES += src/boot_guard.s
+# Only the final two route points are read by the bounded renderer. Compact
+# this diagnostic's presentation history to fit the guard with the 2 KB stack.
+GUARD_FLAGS := -D LYNX_BOOT_GUARD=1 -D GAME_MOTION_POINTS=2 -u _boot_expected
+endif
 
 .PHONY: all clean test FORCE
 all: $(TARGET)
@@ -19,16 +30,23 @@ build:
 	mkdir -p build
 
 # Endpoint changes must relink even if the C sources are unchanged.
-$(TARGET): $(SOURCES) src/netstream.h src/frame.h src/protocol.h src/render.h src/playfield.h src/colors.h src/playfield_internal.h src/death_art.h src/command.h src/setup.h src/startup.h src/sound.h src/lynx.cfg Makefile FORCE | build
+$(TARGET): $(SOURCES) src/netstream.h src/frame.h src/protocol.h src/render.h src/playfield.h src/colors.h src/playfield_internal.h src/death_art.h src/death_sprites.h src/command.h src/setup.h src/startup.h src/sound.h src/boot_guard.h src/lynx.cfg tools/seal_boot_guard.py tools/check_graphics_layout.py Makefile FORCE | build
 	$(CL65) -t lynx -O -I src -I $(CC65_ROOT)/include \
 		--asm-include-dir $(CC65_ROOT)/asminc -L $(CC65_ROOT)/lib \
-		-C src/lynx.cfg -m $(MAP) \
+		-C src/lynx.cfg -vm -m $(MAP) \
 		-D 'SERVER_HOST="$(SERVER_HOST)"' -D SERVER_PORT=$(SERVER_PORT) \
 		-D 'LOBBY_BASE="$(LOBBY_BASE)"' -D 'LOBBY_PLATFORM="$(LOBBY_PLATFORM)"' \
 		-D ROOM_PORT_BASE=$(ROOM_PORT_BASE) -D ROOM_COUNT=$(ROOM_COUNT) \
+		-D LYNX_LOCAL_CELL_TEST=$(LOCAL_CELL_TEST) \
+		$(GUARD_FLAGS) \
 		-o $@ $(SOURCES)
+	python3 tools/check_graphics_layout.py $@ $(MAP)
+ifeq ($(BOOT_GUARD),1)
+	python3 tools/seal_boot_guard.py $@ $(MAP)
+endif
 
 test: | build
+	python3 tools/generate_death_sprites.py --check
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_COMMAND_HOST -I src \
 		-D 'SERVER_HOST="fujinet.online"' -D SERVER_PORT=5025 \
 		-o build/setup_test tests/setup_test.c src/setup.c src/command.c
@@ -36,6 +54,9 @@ test: | build
 	$(CC) -std=c99 -Wall -Wextra -Werror -I src \
 		-o build/frame_test tests/frame_test.c src/frame.c
 	./build/frame_test
+	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_NETSTREAM_HOST -I src -I tests \
+		-o build/netstream_test tests/netstream_test.c src/netstream.c src/frame.c src/protocol.c
+	./build/netstream_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -I src \
 		-o build/protocol_test tests/protocol_test.c src/protocol.c
 	./build/protocol_test

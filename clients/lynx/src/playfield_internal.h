@@ -88,13 +88,20 @@ static uint8_t visual_footprint_clear(const struct game_state *state,
     return 1;
 }
 
-/* Consumed path index and fractional cell progress are independent of the
-   two cached display pages and of how often a render is called. */
+/* Each actor has one bounded interpolation segment. `next` stores the
+   destination pixels, not an index into a playback queue. Old route points
+   establish a legal last leg; they never add animation time after release. */
 struct visual_motion {
     uint16_t next, tick;
     uint8_t epoch, progress, from_x, from_y;
 };
 static struct visual_motion motion[GAME_PLAYERS];
+
+static uint8_t single_leg(uint8_t x, uint8_t y, uint8_t tx, uint8_t ty)
+{
+    return (y == ty && (x > tx ? x-tx : tx-x) <= 8) ||
+           (x == tx && (y > ty ? y-ty : ty-y) <= 5);
+}
 
 static void move_visual(uint8_t i, const struct game_state *state)
 {
@@ -102,50 +109,68 @@ static void move_visual(uint8_t i, const struct game_state *state)
     const struct game_motion *path = &state->motion[i];
     struct overlay_position *position = &visual[i];
     struct visual_motion *m = &motion[i];
-    uint8_t target_x = player->x * 8, target_y = player->y * 5;
-    uint8_t index, x, y, take, progress, distance;
-    uint16_t elapsed, event_at;
-    if (!position->valid || m->epoch != path->epoch ||
-        (uint16_t)(path->serial - m->next) > GAME_MOTION_POINTS ||
-        (i == state->local_pid && (state->input_joy & 0x10))) {
-        /* Spawn/correction/history overflow/fire are explicit rejoin points.
-           A muzzle must originate at the same cell as its server shot. */
-        position->x = target_x; position->y = target_y; position->valid = 1;
-        m->next = path->serial; m->epoch = path->epoch;
-        m->progress = 0; m->tick = state->input_clock;
-        return;
-    }
-    while (m->next != path->serial) {
-        index = m->next % GAME_MOTION_POINTS;
-        x = path->x[index] * 8; y = path->y[index] * 5;
-        if (!m->progress) {
-            m->from_x = position->x; m->from_y = position->y;
-            distance = (x > position->x ? x-position->x : position->x-x);
-            distance += (y > position->y ? y-position->y : position->y-y);
-            if (!((distance == 8 && y == position->y) ||
-                  (distance == 5 && x == position->x))) break;
-            event_at = path->at[index];
-            if ((uint16_t)(event_at - m->tick) < 0x8000u) m->tick = event_at;
+    uint8_t tx = player->x * 8, ty = player->y * 5;
+    uint8_t x, y, index, ticks;
+    uint16_t target = tx | ((uint16_t)ty << 8);
+    uint16_t elapsed;
+    if (!position->valid ||
+#if defined(LYNX_LOCAL_CELL_TEST) && LYNX_LOCAL_CELL_TEST
+        i == state->local_pid ||
+#endif
+        (i == state->local_pid && (state->input_joy & 0x10) &&
+         (state->input_joy & 15) != 15)) goto place;
+    if (m->next != target) {
+        /* A correction can ease one clear cell, but a teleport or a corner
+           must never create a diagonal route through the maze. */
+        if (!path->serial && m->epoch == path->epoch) goto place;
+        x = position->x; y = position->y;
+        /* A remote update commonly arrives while its previous cell is still
+           being drawn. Retarget smoothly across up to two clear cells;
+           restricting this to one cell forced a jump on ordinary jitter.
+           Local forward prediction keeps its one-cell stopping bound. */
+        if (!single_leg(x,y,tx,ty) &&
+            !((i != state->local_pid || m->epoch != path->epoch) &&
+              ((y == ty && (x > tx ? x-tx : tx-x) <= 16) ||
+               (x == tx && (y > ty ? y-ty : ty-y) <= 10)) &&
+              visual_footprint_clear(state,i,(x+tx)/2,(y+ty)/2))) {
+            if (path->serial > 1) {
+                index = (path->serial - 2) % GAME_MOTION_POINTS;
+                x = path->x[index] * 8; y = path->y[index] * 5;
+            } else if (m->epoch == path->epoch) {
+                x = (uint8_t)m->next; y = (uint8_t)(m->next >> 8);
+            } else goto place;
+            if (!single_leg(x,y,tx,ty) ||
+                !visual_footprint_clear(state,i,x,y)) goto place;
+            /* Catch up to the last recorded leg rather than replaying old
+               cells. Its existing timestamp also bounds its finish time. */
+            position->x = x; position->y = y;
         }
-        elapsed = (uint16_t)(state->input_clock - m->tick);
-        if (!elapsed || elapsed >= 0x8000u) return;
-        take = GAME_MOVE_TICKS - m->progress;
-        if (elapsed < take) take = (uint8_t)elapsed;
-        progress = m->progress + take;
-        x = x >= m->from_x ? m->from_x + (x-m->from_x)*progress/GAME_MOVE_TICKS :
-                            m->from_x - (m->from_x-x)*progress/GAME_MOVE_TICKS;
-        y = y >= m->from_y ? m->from_y + (y-m->from_y)*progress/GAME_MOVE_TICKS :
-                            m->from_y - (m->from_y-y)*progress/GAME_MOVE_TICKS;
-        if (!visual_footprint_clear(state,i,x,y)) break;
-        position->x = x; position->y = y;
-        m->tick += take; m->progress = progress;
-        if (progress != GAME_MOVE_TICKS) return;
-        ++m->next; m->progress = 0;
+        m->from_x = x; m->from_y = y;
+        m->tick = state->input_clock;
+        ticks = GAME_PRESS_TICKS;
+        if (path->serial && m->epoch == path->epoch) {
+            index = (path->serial - 1) % GAME_MOTION_POINTS;
+            if (path->x[index] == player->x && path->y[index] == player->y) {
+                m->tick = path->at[index];
+                ticks = path->ticks[index];
+            }
+        }
+        m->progress = ticks ? ticks : GAME_MOVE_TICKS;
+        m->next = target; m->epoch = path->epoch;
     }
-    /* No recorded route means an authoritative placement, never guessed
-       X-then-Y movement around a corner. Clipping remains a final safeguard. */
-    if (visual_footprint_clear(state,i,target_x,target_y)) {
-        position->x = target_x; position->y = target_y;
-    }
-    m->next = path->serial; m->progress = 0; m->tick = state->input_clock;
+    if (!m->progress) return;
+    elapsed = (uint16_t)(state->input_clock - m->tick);
+    if (elapsed >= 0x8000u) return;
+    if (elapsed >= m->progress) goto place;
+    ticks = (uint8_t)elapsed;
+    x = tx >= m->from_x ? m->from_x + (tx-m->from_x)*ticks/m->progress :
+                          m->from_x - (m->from_x-tx)*ticks/m->progress;
+    y = ty >= m->from_y ? m->from_y + (ty-m->from_y)*ticks/m->progress :
+                          m->from_y - (m->from_y-ty)*ticks/m->progress;
+    if (!visual_footprint_clear(state,i,x,y)) goto place;
+    position->x = x; position->y = y;
+    return;
+place:
+    position->x = tx; position->y = ty; position->valid = 1;
+    m->next = target; m->epoch = path->epoch; m->progress = 0;
 }

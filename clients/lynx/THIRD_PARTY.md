@@ -1,3 +1,14 @@
+# cc65 Lynx graphics driver
+
+`src/lynx_tgi.s` is a modified copy of cc65's
+`libsrc/lynx/tgi/lynx-160-102-16.s` at commit `f54780cfb`, originally by
+Karri Kaksonen (2004). The cc65 license is preserved in the source and in
+[`third_party/cc65-LICENSE.txt`](third_party/cc65-LICENSE.txt).
+
+Local changes restore the text scanline fill byte, align graphics buffers
+and control blocks, and export their addresses for build checks. The driver
+is linked into the game; the installed compiler/library are not modified.
+
 # FujiRealm Lynx linker layout
 
 `src/lynx.cfg` was adapted from `fujirealm-game-demo/lynx-client/src/lynx.cfg`.

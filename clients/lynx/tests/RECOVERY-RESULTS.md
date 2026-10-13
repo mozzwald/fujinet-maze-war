@@ -23,6 +23,9 @@ These changes preserve packet formats and legacy-client behavior. The client
 retry works with the old server for an input lost before admission. Repair
 of queue-full rejection additionally requires deploying the updated server.
 The live `fujinet.online` server has not been deployed by this work.
+Follow-up: the user subsequently deployed this server version and confirmed
+Atari 8 compatibility. Lynx lag remained, prompting the client-only work in
+[TRANSPORT-RESULTS.md](TRANSPORT-RESULTS.md).
 
 ## Handy loss reproduction
 

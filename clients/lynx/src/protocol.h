@@ -12,13 +12,17 @@
 #define GAME_REPEAT_PERIOD 6 /* 10 steps/second */
 #define GAME_REPEAT_PENDING 2
 #define GAME_REPEAT_MAX 4 /* Leave server queue room for turns and release. */
+#ifndef GAME_MOTION_POINTS
 #define GAME_MOTION_POINTS 8
+#endif
 #define GAME_MOVE_TICKS 6
+#define GAME_PRESS_TICKS 3 /* Fast initial tap/turn; held steps stay 100 ms. */
 #define GAME_RETRY_MIN 30 /* 500 ms; at most two retry frames/second. */
 #define GAME_RETRY_MAX 120 /* Cap recovery timeout at two seconds. */
 struct game_motion {
     uint16_t serial;
     uint16_t at[GAME_MOTION_POINTS];
+    uint8_t ticks[GAME_MOTION_POINTS];
     uint8_t epoch;
     uint8_t x[GAME_MOTION_POINTS], y[GAME_MOTION_POINTS];
 };
@@ -31,7 +35,6 @@ enum { ROUND_NONE, ROUND_LOSERS, ROUND_DANCE, ROUND_WINNER_SMOKE, ROUND_RESULTS 
 #define GAME_SOUND_SHOT 2
 #define GAME_SOUND_DEATH 4
 #define GAME_SOUND_SPAWN 8
-#define GAME_SOUND_FIRE 16
 #define GAME_SOUND_IMPACT 32
 
 struct game_player {
@@ -102,6 +105,7 @@ struct game_state {
     uint16_t ack_delay, ack_last, ack_samples, repeat_stalls, stall_at;
     uint16_t intent_dropped;
     uint16_t retry_at, input_retries;
+    uint16_t local_corrections;
     uint8_t repeat_window, pending_highwater;
     struct game_motion motion[GAME_PLAYERS];
     uint8_t fire_cue_frames;
