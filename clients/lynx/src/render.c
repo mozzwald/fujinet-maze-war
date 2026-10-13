@@ -2,6 +2,7 @@
 #include <tgi.h>
 #include <string.h>
 
+
 #include "netstream.h"
 #include "protocol.h"
 #include "playfield.h"
@@ -62,6 +63,9 @@ static const char *link_message(void)
     case LINK_SERIAL_ERROR: return "SERIAL ERROR";
     case LINK_COMMAND_ERROR: return "FUJINET CMD ERR";
     case LINK_TX_ERROR: return "TX ERROR";
+    case LINK_STALE: return "WAITING FOR SERVER";
+    case LINK_REJOIN: return "REJOINING ROOM";
+    case LINK_LOST: return "LINK LOST";
     }
     return "UNKNOWN";
 }
@@ -69,7 +73,7 @@ static const char *link_message(void)
 static void draw_diagnostics(void)
 {
     char latency[36] = "W0000 D0000 Q0000 F0000 C0000 I0000";
-    char waits[18] = "U0000 S0000 M0000";
+    char waits[30] = "U0000 S0000 M0000 G0000 J0000";
     char state[36];
     static const char labels[] = "PSERAJK";
     uint8_t field;
@@ -95,7 +99,9 @@ static void draw_diagnostics(void)
     render_small_text(4,84,state);
     hex_word(waits+1,link_stats.quiet_ticks); waits[5]=' ';
     hex_word(waits+7,game.repeat_stalls); waits[11]=' ';
-    hex_word(waits+13,game.input_history);
+    hex_word(waits+13,game.input_history); waits[17]=' ';
+    hex_word(waits+19,link_stats.serial_api_errors); waits[23]=' ';
+    hex_word(waits+25,link_stats.rejoins);
     render_small_text(4,90,waits);
     if (link_state == LINK_COMMAND_ERROR)
         render_small_text(4,96,command_error_text());
@@ -113,33 +119,70 @@ static void draw_diagnostics(void)
 /* Nine four-pixel pitches per slot: name[8] + score[1], then a blank pitch. */
 #include "font_art.h"
 
+/* Foreground-only text packing finishes before any serial callback. */
+/* Disjoint per-function temporaries: foreground-only, assigned before use.
+   Explicit globals let cc65 use true zero-page instructions; IRQs never use
+   these and no owning function recursively reenters through a callback. */
+#ifdef __CC65__
+#pragma bss-name (push, "APPZP", "zp")
+#endif
+static uint8_t render_small_text_index;
+static uint8_t render_small_text_row;
+static uint8_t render_small_text_col;
+static uint8_t render_small_text_bits;
+static uint8_t render_small_text_count;
+static uint8_t render_small_text_stride;
+static char render_small_text_c;
+#ifdef __CC65__
+#pragma zpsym ("render_small_text_index")
+#pragma zpsym ("render_small_text_row")
+#pragma zpsym ("render_small_text_col")
+#pragma zpsym ("render_small_text_bits")
+#pragma zpsym ("render_small_text_count")
+#pragma zpsym ("render_small_text_stride")
+#pragma zpsym ("render_small_text_c")
+#endif
+static char draw_score_line[10];
+static uint8_t draw_score_i;
+static uint8_t draw_score_score;
+static uint8_t draw_score_occupied;
+static const char *draw_score_role;
+#ifdef __CC65__
+#pragma zpsym ("draw_score_line")
+#pragma zpsym ("draw_score_i")
+#pragma zpsym ("draw_score_score")
+#pragma zpsym ("draw_score_occupied")
+#pragma zpsym ("draw_score_role")
+#endif
+#ifdef __CC65__
+#pragma bss-name (pop)
+#endif
+
 void render_small_text(uint8_t x, uint8_t y, const char *line)
 {
     /* Text packing and maze/command scratch have disjoint lifetimes. */
 #define bitmap phase_scratch.text
-    uint8_t index, row, col, bits, count, stride;
-    char c;
     if (x >= 160 || y > 96) return;
-    count = (uint8_t)strlen(line);
-    if (count > (160-x)/4) count = (160-x)/4;
-    if (!count) return;
+    render_small_text_count = (uint8_t)strlen(line);
+    if (render_small_text_count > (160-x)/4) render_small_text_count = (160-x)/4;
+    if (!render_small_text_count) return;
     /* A zero guard byte prevents real Suzy dropping the last text pixel. */
-    stride = count*2+2;
+    render_small_text_stride = render_small_text_count*2+2;
     memset(bitmap,0,sizeof(bitmap));
-    for (row = 0; row < 6; ++row) {
-        bitmap[row*stride] = stride;
-        for (col = 0; col < count; ++col) {
-            c = line[col];
-            if (c >= 'a' && c <= 'z') c -= 'a'-'A';
-            if (c >= 'A' && c <= 'Z') index = c-'A';
-            else if (c >= '0' && c <= '9') index = c-'0'+26;
-            else if (c == '-') index = 36;
-            else if (c == '.') index = 37;
-            else if (c == '/') index = 38;
+    for (render_small_text_row = 0; render_small_text_row < 6; ++render_small_text_row) {
+        bitmap[render_small_text_row*render_small_text_stride] = render_small_text_stride;
+        for (render_small_text_col = 0; render_small_text_col < render_small_text_count; ++render_small_text_col) {
+            render_small_text_c = line[render_small_text_col];
+            if (render_small_text_c >= 'a' && render_small_text_c <= 'z') render_small_text_c -= 'a'-'A';
+            if (render_small_text_c >= 'A' && render_small_text_c <= 'Z') render_small_text_index = render_small_text_c-'A';
+            else if (render_small_text_c >= '0' && render_small_text_c <= '9') render_small_text_index = render_small_text_c-'0'+26;
+            else if (render_small_text_c == '-') render_small_text_index = 36;
+            else if (render_small_text_c == '.') render_small_text_index = 37;
+            else if (render_small_text_c == '/') render_small_text_index = 38;
             else continue;
-            bits = mini_font[index][row];
-            bitmap[row*stride+1+col*2] = (bits & 8 ? 0x10 : 0) | (bits & 4 ? 1 : 0);
-            bitmap[row*stride+2+col*2] = (bits & 2 ? 0x10 : 0) | (bits & 1 ? 1 : 0);
+            render_small_text_bits = mini_font[render_small_text_index][render_small_text_row];
+            bitmap[render_small_text_row*render_small_text_stride+1+render_small_text_col*2] = (render_small_text_bits & 8 ? 0x10 : 0) | (render_small_text_bits & 4 ? 1 : 0);
+            bitmap[render_small_text_row*render_small_text_stride+2+render_small_text_col*2] = (render_small_text_bits & 2 ? 0x10 : 0) | (render_small_text_bits & 1 ? 1 : 0);
         }
     }
     /* One synchronous Suzy sprite per line, rather than hundreds of
@@ -157,24 +200,23 @@ void render_small_text(uint8_t x, uint8_t y, const char *line)
 
 static void draw_score(uint8_t slot)
 {
-    char line[10];
-    uint8_t i;
-    uint8_t score = game.players[slot].score;
-    uint8_t occupied = (game.seat_mask | game.zombie_mask) & (1u << slot);
-    const char *role = (game.zombie_mask & (1u << slot)) ? "ZOMBIE  " :
+    draw_score_score = game.players[slot].score;
+    draw_score_occupied = (game.seat_mask | game.zombie_mask) & (1u << slot);
+    draw_score_role = (game.zombie_mask & (1u << slot)) ? "ZOMBIE  " :
                        ((game.seat_mask & (1u << slot)) ? 0 : "VACANT  ");
-    for (i = 0; i < GAME_NAME_LEN; ++i)
-        line[i] = role ? role[i] :
-            (game.names[slot][i] ? game.names[slot][i] : ' ');
-    line[8] = occupied ? (char)('0' + score % 10) : '-';
-    line[9] = 0;
-    tgi_setcolor(occupied ? player_colors[slot] : COLOR_LIGHTGREY);
-    render_small_text((uint8_t)(slot * 40), 95, line);
+    for (draw_score_i = 0; draw_score_i < GAME_NAME_LEN; ++draw_score_i)
+        draw_score_line[draw_score_i] = draw_score_role ? draw_score_role[draw_score_i] :
+            (game.names[slot][draw_score_i] ? game.names[slot][draw_score_i] : ' ');
+    draw_score_line[8] = draw_score_occupied ? (char)('0' + draw_score_score % 10) : '-';
+    draw_score_line[9] = 0;
+    tgi_setcolor(draw_score_occupied ? player_colors[slot] : COLOR_LIGHTGREY);
+    render_small_text((uint8_t)(slot * 40), 95, draw_score_line);
     if (slot == game.local_pid) {
         tgi_setcolor(COLOR_WHITE);
         tgi_bar(slot * 40, 101, slot * 40 + 35, 101);
     }
 }
+
 
 static uint8_t status_code(void)
 {
@@ -264,12 +306,14 @@ static void draw_full_map(void (*pump)(void))
     draw_scores_if_changed();
     if (status && status != 16) {
         tgi_setcolor(COLOR_BLACK);
-        tgi_bar(37, 30, 123, 44);
+        tgi_bar(0, 30, 159, 52);
         tgi_setcolor(COLOR_WHITE);
-        if (link_state != LINK_WELCOME)
-            tgi_outtextxy(44, 33, link_message());
-        else
-            tgi_outtextxy(52, 33, "SYNCING");
+        render_small_text(12,33,link_state == LINK_WELCOME ? "SYNCING" : link_message());
+        if (link_state == LINK_COMMAND_ERROR || link_state == LINK_SERIAL_ERROR)
+            render_small_text(12,43,"RESET FUJINET THEN LYNX");
+        else if (link_state == LINK_REJECT || link_state == LINK_TIMEOUT ||
+                 link_state == LINK_TX_ERROR || link_state == LINK_LOST)
+            render_small_text(12,43,"OPT1 RETRY SAME ROOM");
     }
 }
 

@@ -42,6 +42,7 @@ def diagnostic_values(image, trace=False):
             value = value*16 + alphabet[pattern]
         return value
     values = dict(quiet_vbl_samples=number(1,90),window_stall_vbl_samples=number(7,90),input_history=number(13,90),
+                serial_api_errors=number(19,90),rejoins=number(25,90),
                 window=number(1,96),ack_age_ticks=number(7,96),pending=number(13,96),
                 diagnostic_frame_ticks=number(19,96),corrections=number(25,96),retries=number(31,96))
     if trace:
@@ -119,6 +120,7 @@ def main():
     death_results = []
     round_results = []
     applied_moves = []
+    intermission = False
     next_snapshot = time.monotonic()
     movement_results = []
     remote_results = {}
@@ -199,9 +201,12 @@ def main():
             nonlocal last_delta, next_snapshot, last_admitted, drop_moves, duplicate_inputs
             end = time.monotonic() + seconds
             while time.monotonic() < end:
-                if snapshots and time.monotonic() >= next_snapshot:
-                    snapshot()
-                    next_snapshot = time.monotonic() + .1
+                if (snapshots or intermission) and time.monotonic() >= next_snapshot:
+                    # The real server stops snapshots between rounds but
+                    # continues periodic seat/name traffic. Keep that contract.
+                    if intermission: send([0x44,0,15])
+                    else: snapshot()
+                    next_snapshot = time.monotonic() + (1 if intermission else .1)
                 if not select.select([peer], [], [], .01)[0]:
                     assert handy.poll() is None, 'Handy exited'
                     continue
@@ -592,6 +597,7 @@ def main():
             names = b'LYNX    ATARI8  PLAYER3 PLAYER4 '
             match = [0x54,round_id,0,15,8,10,10,7,4,2,8]+list(names)
             send([0x53,0,4,0]+match)
+            intermission = True
             for _ in range(30):
                 service(.04)
                 smoke = capture('round-losers-smoke')
@@ -627,6 +633,7 @@ def main():
                              'ACK during animation', 'duplicate result does not restart',
                              'score screen', 'results restored after diagnostics']
             next_revision = 6
+        intermission = False
         round_id = 2
         reliable(next_revision,[0x55,2,10])
         reliable(next_revision+1,[0x50,0,1]+maze()+[2])

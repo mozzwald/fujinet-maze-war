@@ -101,6 +101,7 @@ struct game_state {
     uint16_t snapshots;
     uint16_t ack_sent;
     uint8_t have_welcome;
+    uint8_t link_paused;
     uint8_t kill_limit;
     uint8_t result_zombie_history;
     uint8_t sound_events[GAME_PLAYERS];

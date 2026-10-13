@@ -22,7 +22,13 @@ typedef char port_must_fit[(SERVER_PORT > 0 && SERVER_PORT <= 65535UL) ? 1 : -1]
 
 static void sample_buttons(uint8_t buttons)
 {
+    static uint8_t retry_pressed;
+    uint8_t retry = SUZY.joystick & 8;
     uint8_t directions = 0;
+    /* joy_read masks Option keys. Sample the raw bit between draw batches
+       too, so a brief retry press is not lost during a full maze repaint. */
+    if (retry && !retry_pressed) netstream_retry();
+    retry_pressed = retry;
     if (JOY_UP(buttons)) directions |= 1;
     if (JOY_RIGHT(buttons)) directions |= 2;
     if (JOY_DOWN(buttons)) directions |= 4;

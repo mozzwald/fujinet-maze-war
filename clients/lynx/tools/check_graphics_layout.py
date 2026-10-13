@@ -37,6 +37,9 @@ def check(rom, linker_map):
         require((address + palette_offset) & 255 != 0xFA,
                 f'TGI {name} palette hits Suzy $xxFA erratum')
 
+    zp_start, zp_size = symbol('__APPZP_RUN__'), symbol('__APPZP_SIZE__')
+    require(zp_start >= 0x2b and zp_start + zp_size <= 0x100,
+            'application zero-page scratch overlaps runtime or exceeds page zero')
     bss_start = symbol('__BSS_RUN__')
     bss_end = bss_start + symbol('__BSS_SIZE__')
     for name, size in (('maze_tgi_text_bitmap', 177), ('_maze_scbs', 184),
@@ -58,7 +61,8 @@ def check(rom, linker_map):
     stack_bottom = 0xC038 - symbol('__STACKSIZE__')
     require(bss_end <= stack_bottom, 'BSS overlaps reserved stack/video RAM')
     print(f'Graphics layout: SCBs ${scbs:04X}, text ${symbol("maze_tgi_text_bitmap"):04X}; '
-          f'{stack_bottom - bss_end} bytes before full 2 KB stack')
+          f'{stack_bottom - bss_end} bytes before full 2 KB stack; '
+          f'APPZP ${zp_start:02X}..${zp_start+zp_size-1:02X}')
 
 
 def main():

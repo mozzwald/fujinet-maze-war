@@ -1,0 +1,63 @@
+{
+  "rom_sha256": "cc62e765a2383c5b513146e01280a9482bbc3728aafb149fa12cfcfb3f7d24f4",
+  "server_sha256": "45748b8b666a8b9ade21744c9ecc91fe3306706459f72740ccd03e6d2faed50b",
+  "counts": {
+    "up": {
+      "0x46": 36,
+      "0x45": 36,
+      "0x43": 4,
+      "0x41": 4,
+      "0x59": 4,
+      "0x58": 75,
+      "0x56": 35
+    },
+    "down": {
+      "0x47": 5,
+      "0x53": 71,
+      "reliable_0x55": 6,
+      "0x52": 48,
+      "0x44": 46,
+      "reliable_0x50": 4,
+      "0x43": 49,
+      "0x40": 446,
+      "reliable_0x52": 13,
+      "reliable_0x43": 4,
+      "0x51": 42,
+      "reliable_0x51": 44,
+      "0x59": 4,
+      "0x50": 12,
+      "0x42": 46,
+      "0x57": 2
+    }
+  },
+  "diagnostics": {
+    "quiet_vbl_samples": 332,
+    "window_stall_vbl_samples": 0,
+    "input_history": 1,
+    "serial_api_errors": 0,
+    "rejoins": 4,
+    "window": 2,
+    "ack_age_ticks": 10,
+    "pending": 0,
+    "diagnostic_frame_ticks": 13,
+    "corrections": 0,
+    "retries": 0
+  },
+  "connection_results": [
+    "snapshot-only gap pauses inputs despite metadata; resumes without rejoin",
+    "one-way outage retires old TCP seat; lost WELCOME recovers with same-room LEAVE/HELLO",
+    "server restart rejoins; name retained; old movement/fire never replayed",
+    "thirty-second recovery deadline displays LINK LOST; Option 1 rejoins same room"
+  ],
+  "tcp_connections": 5,
+  "dropped_history": [],
+  "checks": [
+    "actual server two-zombie session",
+    "handshake/name/map/reliable ACKs",
+    "movement/stop/turn/directional fire",
+    "applied input ACKs",
+    "periodic names direct only",
+    "diagnostics/maze return",
+    "negotiated input history"
+  ]
+}

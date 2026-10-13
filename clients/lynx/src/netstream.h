@@ -11,7 +11,10 @@ enum link_state {
     LINK_TIMEOUT,
     LINK_SERIAL_ERROR,
     LINK_COMMAND_ERROR,
-    LINK_TX_ERROR
+    LINK_TX_ERROR,
+    LINK_STALE,
+    LINK_REJOIN,
+    LINK_LOST
 };
 
 struct link_stats {
@@ -21,7 +24,9 @@ struct link_stats {
     uint16_t bad_frames;
     uint16_t crc_errors;
     uint8_t last_frame_error;
-    uint16_t serial_errors;
+    uint16_t serial_errors; /* polls introducing previously unseen sticky bits */
+    uint16_t serial_api_errors; /* failed get/status calls, not physical error rate */
+    uint16_t rejoins;
     uint16_t rx_overflows;
     uint8_t serial_status;
     uint8_t hello_attempts;
@@ -33,7 +38,7 @@ struct link_stats {
 };
 
 extern struct link_stats link_stats;
-extern enum link_state link_state;
+extern uint8_t link_state;
 
 /* Reuses command-mode serial and issues $70/$F0 with raw TCP flags. */
 uint8_t netstream_start(const char *host, uint16_t port);
@@ -41,7 +46,9 @@ uint8_t netstream_start(const char *host, uint16_t port);
 void netstream_poll(void);
 /* Send pending actions/ACKs between render batches, without advancing timers. */
 void netstream_service(void);
-/* Call once per displayed frame; retries HELLO until WELCOME or deadline. */
+/* Retry the same raw endpoint after a terminal error; never enter command mode. */
+void netstream_retry(void);
+/* Call once per displayed frame; timers use the independent 60 Hz clock. */
 void netstream_tick(void);
 
 #endif

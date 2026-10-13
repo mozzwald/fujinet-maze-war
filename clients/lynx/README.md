@@ -43,8 +43,52 @@ Hold B for serial and protocol diagnostics. In that view, `A` is the
 applied reliable revision
 and `G:0007` means round authorization, reliable map, and fresh snapshot are
 all present. `B` counts rejected frames, `C` counts CRC failures, and `F`
-shows the last frame-error code (3 means malformed COBS). Return to Lobby
+shows the last frame-error code (3 means malformed COBS). See the connection
+and diagnostics notes below for counter meanings. Return to Lobby
 after gameplay awaits a future firmware NetStream STOP mechanism.
+
+### Connection loss and same-room retry
+
+During play, three seconds without an applied authoritative snapshot pauses
+new movement/prediction and discards pending inputs. Valid metadata alone does
+not keep an old maze connected. During round results, accepted game traffic
+provides the freshness check because snapshots stop between rounds. The maze
+remains visible with WAITING FOR SERVER. A fresh snapshot within ten seconds
+resumes the existing session. Snapshots without the reliable round/map
+bootstrap do not keep a stalled SYNCING screen alive; new rounds receive a
+fresh bootstrap deadline.
+
+After ten seconds without progress, REJOINING ROOM alternates the existing
+Maze War LEAVE and HELLO messages every half second. LEAVE retires a surviving
+old connection; the unchanged FujiNet firmware reconnects TCP to the same
+endpoint. A new WELCOME resets session sequences, reliable revisions and input
+history while retaining the configured name. Fresh round/map/snapshot state
+is required before play resumes. Old movement and shots are never replayed.
+This also handles a lost first WELCOME after reconnecting.
+
+Recovery gives up after thirty seconds and displays LINK LOST. Option 1 retries
+that same room from LINK LOST, initial TIMEOUT, REJECT or TX ERROR; it can also
+start recovery early while WAITING FOR SERVER. No FujiNet commands are sent in
+raw mode. Returning to Lobby, editing AppKeys or switching rooms still requires
+NetStream STOP through FujiNet's web configuration or resetting FujiNet.
+Resetting only Lynx does not restore command mode. No firmware change is needed
+for same-room recovery.
+
+On the B diagnostics screen, counters and masks are hexadecimal:
+
+- E counts polls that introduce previously unseen serial error bits; S is the
+  accumulated raw mask. The cc65 ComLynx driver latches these bits until open,
+  so E is **not an error rate** and cannot count repeated occurrences of a
+  latched error. S includes 80 software RX overflow, 10 parity, 08 overrun,
+  04 framing and 02 break.
+- G on the bottom U/S/M/G/J line counts failed serial API reads/status calls;
+  J counts recovery attempts. M is negotiated input-history mode.
+- O counts application RX-ring capacity observations, not Mikey overruns.
+  B counts malformed/incomplete wire frames; C counts CRC failures; F retains
+  the last framing error. These remain separate from driver/API diagnostics.
+
+The recovery tests and emulator procedure are documented in
+[connection recovery results](tests/CONNECTION-RECOVERY-RESULTS.md).
 
 ### Username and Lobby startup
 
@@ -81,11 +125,14 @@ name. Full rooms are unavailable for selection. Missing/invalid listings and
 HTTP failures allow refresh or default-room fallback. HTTP closes before
 `$F0` activates raw TCP. No HTTP or AppKey commands run during gameplay.
 
-Until firmware provides an in-band STOP mechanism, a failed raw connection
-cannot return to this browser or change endpoints. Stop NetStream using
+Until firmware provides an in-band STOP mechanism, a raw connection can retry
+the same room but cannot return to this browser or change endpoints. Stop NetStream using
 FujiNet's web configuration (or reset FujiNet) before restarting the cartridge
 to browse again; resetting only the Lynx does not guarantee command mode.
-No firmware modifications are included in this client change.
+No firmware modifications are included in this client change. The advertised
+`tnfs://tnfs.fujinet.online/LYNX/maze-war.lnx` is a Lobby reference only: Lynx
+FujiNet cannot load a ROM directly into the system; transfer test cartridges
+to the flash-cart SD card yourself.
 
 Command mode follows FujiRealm's ComLynx handoff: before each command it waits
 for 1,200 consecutive empty serial polls (resetting on trailing bytes), and
@@ -602,3 +649,15 @@ survives neutral snapshots too. Facing survives display-page rebuilds and resets
 for a new round; movement/stop input and prediction still use the actual joystick
 state. The host regression checks both display pages, taps released before the
 first draw, stale/neutral snapshots, switching right, fire alone and round reset.
+
+### Foreground scratch and memory layout
+
+Protocol/text functions use disjoint file-static temporaries in the APPZP
+zero-page segment to reduce 65C02 code size. They are foreground-only and
+non-reentrant; each value is assigned before use. APPZP is not startup-cleared.
+IRQ/runtime ZEROPAGE and EXTZP precede it; no IRQ accesses APPZP. Do not introduce
+recursion or a callback that reenters an owning function while it is active.
+The build gate checks APPZP does not overlap runtime storage or extend past
+$FF, keeps SCBs/text hardware-aligned, and preserves the full 2 KB stack.
+The connection-recovery build uses $2B..$7F for APPZP and leaves 27 bytes
+before the reserved stack; that margin is separate from stack capacity.

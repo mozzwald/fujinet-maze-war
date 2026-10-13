@@ -16,8 +16,12 @@
 #define FUJI_ACK 0x06
 #define FUJI_NAK 0x15
 #define RX_RING_CAP 128
-#define HELLO_RETRY_FRAMES 6
-#define HELLO_DEADLINE_FRAMES 600
+#define HELLO_RETRY_TICKS 6
+#define HELLO_DEADLINE_TICKS 600
+#define STALE_TICKS 180 /* Three seconds without authoritative progress. */
+#define REJOIN_TICKS 600 /* Short gaps may resume without retiring the seat. */
+#define REJOIN_DEADLINE_TICKS 1800
+#define REJOIN_SEND_TICKS 30
 #define RX_FRAME_WAIT_TICKS 2 /* Longest wire frame is under 12 ms at 62500. */
 #ifndef RX_QUIET_TICKS
 #define RX_QUIET_TICKS 2 /* At least one whole VBL without received bytes. */
@@ -27,15 +31,15 @@
 #define SERIAL_ERROR_MASK 0x9e
 
 struct link_stats link_stats;
-enum link_state link_state = LINK_STARTING;
+uint8_t link_state = LINK_STARTING;
 
 static struct frame_rx frame_rx;
 static uint8_t rx_ring[RX_RING_CAP];
 static uint8_t rx_read;
 static uint8_t rx_write;
 static uint8_t rx_count;
-static uint16_t handshake_frames;
-static uint8_t hello_cooldown;
+static uint16_t phase_at, hello_at, last_valid_at, last_snapshot_at;
+static uint8_t rejoin_leave;
 static uint16_t last_rx_at;
 static uint8_t rx_seen;
 static uint16_t quiet_counted;
@@ -57,21 +61,35 @@ static uint8_t enable_raw_tcp(const char *host, uint16_t port)
 
 static void handle_frame(const uint8_t *payload, uint8_t len)
 {
+    uint8_t phase = game.phase, round = game.round_id;
+    uint16_t snapshots = game.snapshots;
+    uint16_t now = command_clock();
     if (len == 5 && payload[0] == 0x47 && game_receive(payload, len)) {
-        link_stats.round_id = payload[2];
-        link_stats.round_phase = payload[3];
-        link_stats.kill_limit = payload[4];
         link_state = LINK_WELCOME;
-        handshake_frames = command_clock(); /* Reuse as capability retry time. */
-    } else if (len == 3 && payload[0] == 0x48) {
+        phase_at = last_valid_at = last_snapshot_at = now;
+    } else if (len == 3 && payload[0] == 0x48 && payload[1] == 1 &&
+               (link_state == LINK_WAIT_WELCOME || link_state == LINK_REJOIN)) {
         link_stats.reject_reason = payload[2];
         link_state = LINK_REJECT;
-    } else if (link_state == LINK_WELCOME) {
-        game_receive(payload, len);
-        link_stats.round_id = game.round_id;
-        link_stats.round_phase = game.phase;
-        link_stats.kill_limit = game.kill_limit;
+    } else if ((link_state == LINK_WELCOME || link_state == LINK_STALE) &&
+               game_receive(payload, len)) {
+        last_valid_at = now;
+        /* Results intentionally stop snapshots. Give a new round its own
+           bootstrap window instead of timing it from the previous round. */
+        if (game.phase != phase || game.round_id != round) last_snapshot_at = now;
+        /* A stream of snapshots cannot finish a missing reliable bootstrap. */
+        if (game.snapshots != snapshots && game.round_authorized && game.map_ready)
+            last_snapshot_at = now;
+        if (link_state == LINK_STALE &&
+            ((game.snapshots != snapshots && game.round_authorized && game.map_ready) ||
+             (game.phase && game.result_valid))) {
+            game.link_paused = 0;
+            link_state = LINK_WELCOME;
+        }
     }
+    link_stats.round_id = game.round_id;
+    link_stats.round_phase = game.phase;
+    link_stats.kill_limit = game.kill_limit;
 }
 
 static void parse_ring(void)
@@ -117,7 +135,7 @@ void netstream_poll(void)
             if (result == SER_ERR_NO_DATA)
                 break;
             if (result != SER_ERR_OK) {
-                ++link_stats.serial_errors;
+                ++link_stats.serial_api_errors;
                 break;
             }
             rx_ring[rx_write++] = (uint8_t)byte;
@@ -134,10 +152,10 @@ void netstream_poll(void)
     }
     if (ser_status(&status) == SER_ERR_OK) {
         status &= SERIAL_ERROR_MASK;
-        if (status && status != link_stats.serial_status)
+        if (status & (uint8_t)~link_stats.serial_status)
             ++link_stats.serial_errors;
         link_stats.serial_status |= status;
-    }
+    } else ++link_stats.serial_api_errors;
 }
 
 static uint8_t send_payload(const uint8_t *payload, uint8_t payload_len)
@@ -186,11 +204,12 @@ uint8_t netstream_start(const char *host, uint16_t port)
     game_reset();
     frame_reset(&frame_rx);
     rx_read = rx_write = rx_count = 0;
-    handshake_frames = 0;
+    phase_at = last_valid_at = last_snapshot_at = command_clock();
+    hello_at = phase_at - HELLO_RETRY_TICKS;
+    rejoin_leave = 1;
     last_rx_at = 0;
     rx_seen = 0;
     quiet_counted = command_clock() - 1;
-    hello_cooldown = 0;
     link_state = LINK_STARTING;
     if (!host || !port) {
         link_state = LINK_COMMAND_ERROR;
@@ -217,47 +236,97 @@ uint8_t netstream_start(const char *host, uint16_t port)
         link_state = LINK_COMMAND_ERROR;
         return 0;
     }
+    /* Command-mode handoff time is separate from the HELLO deadline. */
+    phase_at = last_valid_at = last_snapshot_at = command_clock();
+    hello_at = phase_at - HELLO_RETRY_TICKS;
     link_state = LINK_WAIT_WELCOME;
     return 1;
+}
+
+/* Drop unsent/predicted actions at the freshness boundary. A new WELCOME
+   resets all session sequence/reliable state but preserves configured identity. */
+static void pause_game(void)
+{
+    game.link_paused = 1;
+    game.pending_count = game.intent_count = game.fire_cue_frames = 0;
+    game.input_sent = 0;
+}
+
+void netstream_retry(void)
+{
+    if (link_state != LINK_STALE && link_state != LINK_LOST &&
+        link_state != LINK_TIMEOUT && link_state != LINK_REJECT &&
+        link_state != LINK_TX_ERROR) return;
+    pause_game();
+    if (!game.leave_requested) {
+        game.leave_seq = game.tx_seq++;
+        game.leave_requested = 1;
+    }
+    phase_at = command_clock();
+    hello_at = phase_at - REJOIN_SEND_TICKS;
+    rejoin_leave = 1;
+    link_state = LINK_REJOIN;
+    ++link_stats.rejoins;
 }
 
 void netstream_service(void)
 {
     uint8_t payload[3 + 2 * GAME_PENDING_INPUTS];
-    uint8_t len;
-    uint8_t i;
-    uint8_t n;
-    uint16_t now;
+    uint8_t len, i, n;
+    uint16_t now, age;
     netstream_poll();
-    if (link_state != LINK_WELCOME) return;
+    now = command_clock();
+    if (link_state == LINK_WELCOME || link_state == LINK_STALE) {
+        age = (uint16_t)(now - (game.phase ? last_valid_at : last_snapshot_at));
+        if (age >= STALE_TICKS && link_state == LINK_WELCOME) {
+            pause_game(); link_state = LINK_STALE;
+        }
+        if (age >= REJOIN_TICKS) netstream_retry();
+    }
+    if (link_state == LINK_WAIT_WELCOME &&
+        (uint16_t)(now-phase_at) >= HELLO_DEADLINE_TICKS) link_state = LINK_TIMEOUT;
+    if (link_state == LINK_REJOIN &&
+        (uint16_t)(now-phase_at) >= REJOIN_DEADLINE_TICKS) link_state = LINK_LOST;
     for (i = 0; i < 2; ++i) {
-        /* A COBS boundary is not the end of FujiNet's serial burst. RX is
-           disabled during TX: wait for quiet even after a complete frame. */
+        if (link_state != LINK_WELCOME && link_state != LINK_STALE &&
+            link_state != LINK_WAIT_WELCOME && link_state != LINK_REJOIN) return;
+        /* A delimiter is not the end of a half-duplex burst. Apply the same
+           quiet/partial-frame gate to gameplay, HELLO and recovery controls. */
         now = command_clock();
         if (rx_seen && (uint16_t)(now - last_rx_at) < RX_QUIET_TICKS) {
             if (quiet_counted != now) {
-                ++link_stats.quiet_ticks;
-                quiet_counted = now;
+                ++link_stats.quiet_ticks; quiet_counted = now;
             }
             return;
         }
         if (frame_rx.used || frame_rx.discarding) {
-            /* Recheck after every send: its RX poll can start another frame.
-               A truncated frame cannot prevent recovery indefinitely. */
-            if ((uint16_t)(command_clock() - last_rx_at) < RX_FRAME_WAIT_TICKS)
-                return;
+            if ((uint16_t)(now - last_rx_at) < RX_FRAME_WAIT_TICKS) return;
             frame_reset(&frame_rx);
             ++link_stats.bad_frames;
             link_stats.last_frame_error = FRAME_ERROR_TRUNCATED;
         }
-        if (!game.input_history && (uint16_t)(now-handshake_frames) >= 60) {
+        if (link_state == LINK_WAIT_WELCOME || link_state == LINK_REJOIN) {
+            if ((uint16_t)(now-hello_at) <
+                (link_state == LINK_REJOIN ? REJOIN_SEND_TICKS : HELLO_RETRY_TICKS)) return;
+            hello_at = now;
+            if (link_state == LINK_REJOIN && rejoin_leave) {
+                payload[0] = 0x56; payload[1] = game.leave_seq;
+                rejoin_leave = 0;
+                if (!send_payload(payload,2)) link_state = LINK_TX_ERROR;
+            } else {
+                rejoin_leave = 1;
+                if (!send_hello()) link_state = LINK_TX_ERROR;
+            }
+            return;
+        }
+        if (link_state == LINK_STALE && !game.ack_pending) return;
+        if (link_state == LINK_WELCOME && !game.input_history &&
+            (uint16_t)(now-phase_at) >= 60) {
             payload[0] = 0x59; payload[1] = 1; len = 2;
-            handshake_frames = now;
+            phase_at = now;
         } else len = game_next_outbound(payload, sizeof(payload));
         if (!len) break;
         if (game.input_history && payload[0] == 0x41 && game.pending_count) {
-            /* One CRC covers the entire ordered prefix. Losing a frame
-               cannot admit its newest action without its predecessors. */
             payload[0] = 0x58; payload[1] = game.round_id;
             payload[2] = game.pending_count; len = 3;
             for (n = 0; n < game.pending_count; ++n) {
@@ -266,33 +335,14 @@ void netstream_service(void)
             }
         }
         if (!send_payload(payload, len)) {
-            link_state = LINK_TX_ERROR;
+            pause_game(); link_state = LINK_TX_ERROR;
             break;
         }
-
     }
 }
 
 void netstream_tick(void)
 {
     netstream_service();
-    if (link_state == LINK_WELCOME) {
-        game_step();
-        return;
-    }
-    if (link_state != LINK_WAIT_WELCOME)
-        return;
-    if (++handshake_frames >= HELLO_DEADLINE_FRAMES) {
-        link_state = LINK_TIMEOUT;
-        return;
-    }
-    if (hello_cooldown)
-        --hello_cooldown;
-    if (!hello_cooldown) {
-        if (!send_hello()) {
-            link_state = LINK_TX_ERROR;
-            return;
-        }
-        hello_cooldown = HELLO_RETRY_FRAMES;
-    }
+    if (link_state == LINK_WELCOME) game_step();
 }
