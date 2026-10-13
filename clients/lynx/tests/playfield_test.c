@@ -106,8 +106,8 @@ int main(void)
     playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(42, 25) == 10); /* Atari $C8: green */
     assert(pen(58, 25) == 14); /* Atari $86: blue */
-    assert(pen(74, 25) == 12); /* Atari $58: purple */
-    assert(pen(90, 25) == 8);  /* Atari $28: orange */
+    assert(pen(74, 25) == 3); /* slot 2 pink */
+    assert(pen(90, 25) == 9);  /* slot 3 yellow */
     state.players[0].x = 6;
     playfield_draw(framebuffer + 4, 0, &state, 0);
     assert(pen(42, 25) == 1);  /* previous sprite was restored */

@@ -109,7 +109,7 @@ static void draw_diagnostics(void)
     }
 }
 
-/* Ten four-pixel pitches fit each 40-pixel player slot: name[8] + score[2]. */
+/* Nine four-pixel pitches per slot: name[8] + score[1], then a blank pitch. */
 static const uint8_t mini_font[39][4] = {
     {2,5,7,5}, {6,5,6,7}, {3,4,4,3}, {6,5,5,6},
     {7,6,4,7}, {7,6,4,4}, {3,4,5,3}, {5,7,5,5},
@@ -166,7 +166,7 @@ void render_small_text(uint8_t x, uint8_t y, const char *line)
 
 static void draw_score(uint8_t slot)
 {
-    char line[11];
+    char line[10];
     uint8_t i;
     uint8_t score = game.players[slot].score;
     uint8_t occupied = (game.seat_mask | game.zombie_mask) & (1u << slot);
@@ -175,9 +175,8 @@ static void draw_score(uint8_t slot)
     for (i = 0; i < GAME_NAME_LEN; ++i)
         line[i] = role ? role[i] :
             (game.names[slot][i] ? game.names[slot][i] : ' ');
-    line[8] = occupied ? (char)('0' + (score / 10) % 10) : '-';
-    line[9] = occupied ? (char)('0' + score % 10) : '-';
-    line[10] = 0;
+    line[8] = occupied ? (char)('0' + score % 10) : '-';
+    line[9] = 0;
     tgi_setcolor(occupied ? player_colors[slot] : COLOR_LIGHTGREY);
     render_small_text((uint8_t)(slot * 40), 97, line);
     if (slot == game.local_pid) {
@@ -221,7 +220,7 @@ static void draw_round_results(void (*pump)(void))
         line[0] = '1'+i;
         for (j = 0; j < GAME_NAME_LEN; ++j) line[3+j] = names[i][j];
         points = scores[i];
-        line[18] = '0'+(points/10)%10;
+        line[18] = points >= 10 ? '0'+(points/10)%10 : ' ';
         line[19] = '0'+points%10;
         line[20] = 0;
         tgi_setcolor(player_colors[i]);

@@ -64,6 +64,7 @@ def main():
     parser.add_argument("--remote-jitter-checks", action="store_true", help="sample a remote sprite with irregularly spaced snapshot destinations")
     parser.add_argument("--death-checks", action="store_true")
     parser.add_argument("--round-checks", action="store_true")
+    parser.add_argument("--hud-checks", action="store_true", help="verify full names, single-digit rollover scores and inter-player gaps")
     parser.add_argument("--sound-checks", action="store_true", help="capture Handy SDL audio using a test-only preload")
     parser.add_argument("--input-lag-ms", type=float, default=0)
     parser.add_argument("--snapshot-burst", type=int, default=1, help="deliver this many 10 Hz snapshots together to simulate receive jitter")
@@ -102,6 +103,7 @@ def main():
     last_delta = 0
     input_queue = deque()
     local = [3,17]
+    player_scores = [1,2,3,4]
     dead_slots = {1,2,3} if args.latency_checks or args.recovery_checks else set()
     if args.remote_jitter_checks:
         dead_slots = {2,3}
@@ -191,7 +193,7 @@ def main():
             for slot,pos in enumerate(remote_positions,1):
                 coords.extend([255,255] if slot in dead_slots else pos)
             send([0x40, sequence, 0x81]+coords+
-                 [7,11,7,11,1,2,3,4,last_delta,round_id])
+                 [7,11,7,11]+player_scores+[last_delta,round_id])
 
         def service(seconds, snapshots=False):
             nonlocal last_delta, next_snapshot, last_admitted, drop_moves, duplicate_inputs
@@ -286,6 +288,26 @@ def main():
         assert before.getpixel((80,50)) != destroyed.getpixel((80,50)), 'brick did not disappear'
         assert destroyed.getpixel((25,89)) != destroyed.getpixel((24,89)), 'last-row feet missing'
         assert destroyed.getpixel((24,90)) != destroyed.getpixel((27,90)), 'border texture missing'
+        if args.hud_checks:
+            full_names = ('ABCDEFGH','IJKLMNOP','QRSTUVWX','YZ012345')
+            for slot,name in enumerate(full_names):
+                send([0x43,0,slot]+list(name.encode('ascii')))
+            digits = {0:(7,5,5,7),1:(2,6,2,7),9:(7,5,7,1)}
+            for iteration,points in enumerate(([0,9,10,11],[11,10,9,0])):
+                player_scores[:] = points
+                service(.6,True)
+                hud = capture(f'hud-rollover-{iteration}',full=True)
+                background = hud.getpixel((39,97))
+                for slot,score in enumerate(points):
+                    x=slot*40
+                    actual=tuple(sum(1<<(2-col) for col in range(3)
+                                     if hud.getpixel((x+32+col,97+row))!=background)
+                                 for row in range(4))
+                    assert actual==digits[score%10], ('HUD score',score,actual)
+                    assert all(hud.getpixel((xx,yy))==background
+                               for xx in range(x+35,x+40) for yy in range(97,101)), 'HUD entry gap missing'
+                    assert any(hud.getpixel((xx,yy))!=background
+                               for xx in range(x+28,x+31) for yy in range(97,101)), 'eighth name character missing'
         d = display.Display(env['DISPLAY'])
         def windows(w):
             yield w
@@ -591,6 +613,9 @@ def main():
             scores = capture('round-scores')
             assert scores.getpixel((0,0)) == floor, 'results screen not displayed'
             assert any(scores.getpixel((x,y)) != floor for x in range(24,108) for y in range(45,49)), 'score row missing'
+            assert any(scores.getpixel((x,y)) != floor for x in range(96,99) for y in range(45,49)), 'winner lost tens digit'
+            for row in (55,65,75):
+                assert all(scores.getpixel((x,y))==floor for x in range(96,99) for y in range(row,row+4)), 'results score retained leading zero'
             key('x',True); service(.6); key('x',False); service(1)
             assert capture('round-scores-restored').tobytes() == scores.tobytes(), 'diagnostics lost frozen results'
             if args.sound_checks:

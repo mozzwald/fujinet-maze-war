@@ -34,9 +34,12 @@ appears when directional fire is transmitted; shot audio, hit and score results 
 applies snapshots, seats, names, shots, brick maps,
 respawns, match results, and round starts. The entire 20×19 maze is visible
 at once, with 8×5 textured brick and border cells, colored side-view wizards,
-shots, and one compact score line beneath the map. Player slots use the Atari 8
-shirt hues in order: green, blue, purple, orange (the closest Lynx palette
-entries). Hold B for serial and protocol diagnostics. In that view, `A` is the
+shots, and one compact score line beneath the map. Player slots use green,
+blue, pink and yellow, consistently across sprites, HUD and round results.
+The gameplay HUD preserves all eight name characters and shows only the last
+score digit (10 displays 0, 11 displays 1), leaving five blank pixel columns
+between entries. Round results retain two-digit scores without leading zeroes.
+Hold B for serial and protocol diagnostics. In that view, `A` is the
 applied reliable revision
 and `G:0007` means round authorization, reliable map, and fresh snapshot are
 all present. `B` counts rejected frames, `C` counts CRC failures, and `F`
