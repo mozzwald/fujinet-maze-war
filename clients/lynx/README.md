@@ -341,7 +341,7 @@ prediction and stopping bounds are unchanged; smoothing never predicts combat.
 
 The immutable render snapshot now copies only the shared `game_view` prefix;
 a compile-time layout check protects that copy. Existing maze/player artwork
-is preencoded by `tools/generate_maze_sprites.py` from `src/maze_art.h`, preserving
+is preencoded by `tools/generate_art.py` from `art/maze-war-tiles.json`, preserving
 counted tile packets and literal guard bytes. These changes fit the observation
 buffers while retaining the full 2 KB stack and graphics placement checks.
 
@@ -366,9 +366,9 @@ that timeout. This is client scheduling; firmware remains unchanged.
 CRC-16/CCITT-FALSE uses two 256-byte lookup tables with an eight-bit inner
 loop. Polynomial, initial value and wire bytes are unchanged. To keep the
 Lynx memory layout and 2 KB stack, smoke packets are encoded ahead of time
-from the existing artwork, preserving every Suzy guard byte. Run
-`python3 clients/lynx/tools/generate_death_sprites.py` after editing the art;
-the host suite checks that the generated header is current.
+from the editable JSON artwork, preserving every Suzy guard byte. Normal builds
+regenerate the graphics automatically; `make check-art` verifies the generated
+headers without changing them.
 
 The CRC benchmark uses the emulated Mikey microsecond clock, comparing the
 previous bitwise function with the production lookup function in one ROM:
@@ -567,3 +567,20 @@ failure. Photograph either frozen screen. It still uses the live Lobby and
 
 `src/lynx.cfg` is adapted from the FujiRealm Lynx client's MIT-licensed
 linker layout. See [THIRD_PARTY.md](THIRD_PARTY.md) for its notice.
+
+## Editing Lynx graphics
+
+Open [`tools/charsetter/index.html`](../../tools/charsetter/index.html) in a browser,
+load [`art/maze-war-tiles.json`](art/maze-war-tiles.json), and edit the named
+terrain, player, dance, explosion, effect or HUD glyph images. Save the downloaded
+JSON over that source file, then rebuild:
+
+```sh
+make -C clients/lynx SERVER_HOST=fujinet.online SERVER_PORT=5025
+```
+
+Graphics regenerate automatically. The initial extraction preserves the current
+ROM byte for byte and retains the full stack and real-Suzy row guards. The editor
+and editable JSON are tracked; `ref/` remains local and ignored. See the
+[Charsetter guide](../../tools/charsetter/README.md) for pen roles, transparency,
+frame names, animation previews, generated files and tests.

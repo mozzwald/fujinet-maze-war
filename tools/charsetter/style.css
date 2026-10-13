@@ -1,0 +1,213 @@
+:root {
+    color-scheme: dark;
+    --bg: #101214;
+    --panel: #191c1f;
+    --panel-2: #202429;
+    --border: #363c42;
+    --text: #edf0f2;
+    --muted: #9aa4ad;
+    --accent: #ef7d21;
+    --accent-dark: #a94d0d;
+    --focus: #55a7e8;
+    --danger: #bd3d42;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); overflow: hidden; }
+button, input, select { font: inherit; }
+button { color: inherit; }
+
+.app-header {
+    height: 62px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    background: #151719;
+    border-bottom: 1px solid var(--border);
+}
+.brand-block { display: flex; align-items: baseline; gap: 9px; }
+.brand-block strong { color: var(--accent); font-size: 22px; }
+.brand-block > span { color: var(--muted); font-size: 14px; }
+.dirty-indicator { color: #f3c66d !important; font-size: 11px !important; text-transform: uppercase; }
+.header-actions { display: flex; align-items: center; gap: 7px; }
+.divider { width: 1px; height: 28px; background: var(--border); margin: 0 5px; }
+
+.button, .icon-button {
+    border: 1px solid #48515a;
+    background: #2a3036;
+    border-radius: 5px;
+    min-height: 34px;
+    cursor: pointer;
+}
+.button { padding: 6px 12px; }
+.button i { margin-right: 6px; }
+.icon-button { width: 36px; padding: 0; display: inline-grid; place-items: center; }
+.button:hover, .icon-button:hover { background: #343c43; border-color: #65717c; }
+.button.primary { background: #185d87; border-color: #2f88ba; }
+.icon-button.danger:hover { background: #612d30; border-color: var(--danger); }
+button:disabled { opacity: .35; cursor: default; }
+
+.workspace {
+    height: calc(100vh - 62px);
+    display: grid;
+    grid-template-columns: 324px minmax(560px, 1fr) 300px;
+    gap: 12px;
+    padding: 12px;
+}
+.left-rail { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.panel { min-height: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.panel > header, .panel > .tile-header { min-height: 40px; padding: 9px 12px; background: var(--panel-2); border-bottom: 1px solid var(--border); font-weight: 650; }
+.muted { color: var(--muted); font-size: 11px; font-weight: 400; }
+.mono { font-family: "DejaVu Sans Mono", ui-monospace, monospace; }
+
+.palette { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 10px; }
+.swatch { min-width: 0; height: 42px; border: 2px solid transparent; border-radius: 4px; cursor: pointer; position: relative; }
+.swatch.active { border-color: var(--accent); box-shadow: 0 0 0 1px #111; }
+.swatch span { position: absolute; inset: auto 0 2px; text-align: center; font-size: 9px; color: white; text-shadow: 0 1px 2px black; }
+
+.character-panel { flex: 0 0 auto; }
+.character-panel > header, .font-panel > header { display: flex; justify-content: space-between; }
+.character-body { display: flex; gap: 8px; padding: 10px; }
+.tool-column { width: 36px; display: flex; flex-direction: column; gap: 5px; }
+.tool-gap { height: 5px; }
+#character-canvas { width: 242px; height: 242px; background: #0c0d0e; image-rendering: pixelated; border: 1px solid #4a5259; }
+.usage-list { min-height: 30px; max-height: 58px; overflow: auto; border-top: 1px solid var(--border); padding: 7px 10px; color: var(--muted); font-size: 10px; }
+.font-panel { flex: 1; display: flex; flex-direction: column; }
+#font-canvas { align-self: center; width: min(288px, 100%); aspect-ratio: 1; margin: 8px; background: #0c0d0e; image-rendering: pixelated; cursor: pointer; }
+
+.tile-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }
+.tile-header { display: flex; align-items: center; justify-content: space-between; }
+.binding { display: block; color: var(--muted); font: 11px "DejaVu Sans Mono", monospace; margin-top: 2px; }
+.tile-stage { min-height: 0; display: grid; place-items: center; position: relative; padding: 18px; background: #121416; }
+#tile-canvas { width: min(100%, 64vh); max-height: 100%; aspect-ratio: 1; background: #0b0c0d; border: 1px solid #4a5259; image-rendering: pixelated; cursor: crosshair; }
+.empty-state { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 10px; color: #66717a; }
+.empty-state i { font-size: 44px; }
+.quadrant-bar { min-height: 78px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: center; gap: 16px; padding: 10px 14px; }
+.quadrant-buttons { display: grid; grid-template-columns: repeat(2, 88px); gap: 4px; }
+.quadrant-button { height: 27px; border: 1px solid #4b555e; background: #252b30; border-radius: 3px; font: 11px "DejaVu Sans Mono", monospace; cursor: pointer; }
+.quadrant-button.active { border-color: var(--accent); color: #ffd0a8; }
+.toggle-control { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.tile-workspace > footer { min-height: 34px; padding: 8px 12px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
+
+.animation-controls { display: flex; align-items: center; gap: 8px; }
+.animation-frames { display: flex; gap: 4px; }
+.frame-button { width: 30px; height: 28px; border: 1px solid #4c555d; background: #282e33; border-radius: 3px; cursor: pointer; }
+.frame-button.active { border-color: var(--accent); }
+
+.library-panel { display: flex; flex-direction: column; }
+.library-controls { display: grid; grid-template-columns: 1fr; gap: 7px; padding: 9px; border-bottom: 1px solid var(--border); }
+.library-controls input, .library-controls select { width: 100%; min-height: 34px; padding: 5px 8px; color: var(--text); background: #111416; border: 1px solid #424a51; border-radius: 4px; }
+.tile-list { flex: 1; min-height: 0; overflow-y: auto; padding: 7px; }
+.tile-item { width: 100%; height: 64px; display: grid; grid-template-columns: 50px 1fr; align-items: center; gap: 10px; padding: 6px; margin-bottom: 5px; text-align: left; border: 1px solid transparent; border-radius: 5px; background: #20252a; cursor: pointer; }
+.tile-item:hover { background: #282e34; }
+.tile-item.active { border-color: var(--accent); background: #2d2925; }
+.tile-item canvas { width: 48px; height: 48px; image-rendering: pixelated; background: #0b0c0d; }
+.tile-item strong { display: block; font-size: 12px; }
+.tile-item span { color: var(--muted); font: 10px "DejaVu Sans Mono", monospace; }
+
+dialog { width: min(440px, 90vw); border: 1px solid var(--border); border-radius: 6px; padding: 0; color: var(--text); background: var(--panel); }
+dialog::backdrop { background: rgba(0,0,0,.7); }
+dialog form { padding: 16px; }
+dialog header { font-weight: 700; }
+dialog p { color: var(--muted); line-height: 1.45; white-space: pre-wrap; }
+dialog .button { float: right; }
+
+@media (max-height: 820px) {
+    #character-canvas { width: 190px; height: 190px; }
+    .character-body { justify-content: center; }
+    .usage-list { max-height: 34px; }
+}
+
+@media (max-width: 1180px) {
+    body { overflow: auto; }
+    .app-header { height: auto; min-height: 62px; flex-wrap: wrap; gap: 8px; padding: 10px 14px; }
+    .workspace {
+        height: auto;
+        min-height: calc(100vh - 62px);
+        grid-template-columns: minmax(290px, 340px) minmax(500px, 1fr);
+    }
+    .library-panel { grid-column: 1 / -1; min-height: 360px; }
+    .tile-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 5px; }
+    .tile-item { margin: 0; }
+}
+
+@media (max-width: 760px) {
+    .brand-block { width: 100%; }
+    .header-actions { width: 100%; overflow-x: auto; padding-bottom: 2px; }
+    .header-actions .button { white-space: nowrap; }
+    .workspace { display: flex; flex-direction: column; padding: 8px; }
+    .left-rail { display: contents; }
+    .palette-panel { order: 1; }
+    .tile-workspace { order: 2; min-height: 690px; }
+    .library-panel { order: 3; min-height: 420px; }
+    .character-panel { order: 4; }
+    .font-panel { order: 5; min-height: 340px; }
+    #tile-canvas { width: min(100%, 512px); }
+    .quadrant-bar { flex-wrap: wrap; }
+    .tile-header { gap: 8px; align-items: flex-start; }
+    .animation-controls { flex: 0 0 auto; }
+    .character-body { justify-content: center; }
+    #character-canvas { width: min(242px, calc(100vw - 80px)); height: auto; aspect-ratio: 1; }
+}
+
+/* ---------------------------------------------------------------- Lynx editor
+   Lynx tiles use direct CLUT indices, so the editor needs a
+   16-swatch palette and small pixel-accurate previews rather than the ANTIC
+   character/quadrant furniture. */
+.lynx-palette { grid-template-columns: repeat(4, 1fr); }
+.lynx-palette .swatch { height: 34px; }
+.lynx-preview-body { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px; }
+.lynx-preview-body p { margin: 0; text-align: center; }
+.lynx-preview-body canvas { image-rendering: pixelated; background: #121416; border: 1px solid var(--border); border-radius: 3px; }
+#actual-canvas { width: 64px; height: 64px; }
+.tool-row { display: flex; gap: 5px; }
+#editor-canvas { image-rendering: pixelated; max-width: 100%; max-height: 100%; cursor: crosshair; }
+.filter-input { width: 100%; box-sizing: border-box; padding: 6px 8px; background: #20252a; color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; }
+
+/* -------------------------------------------------- Intellivision editor
+   Cards are 1bpp with one STIC colour each, so the palette selects the card's
+   colour rather than a pen: the active swatch is the card's colour, and black
+   is shown disabled because it is the background. Everything else reuses the
+   Lynx furniture above. */
+.palette .swatch:disabled { cursor: not-allowed; opacity: 0.45; }
+.palette .swatch:disabled:hover { border-color: var(--border); }
+
+.bitmap-dialog { background: var(--panel, #191d21); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 16px; max-width: min(520px, 92vw); }
+.bitmap-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+.bitmap-dialog h2 { margin: 0 0 4px; font-size: 14px; }
+.bitmap-dialog p { margin: 0 0 10px; font-size: 12px; }
+.bitmap-dialog textarea {
+    width: 100%; box-sizing: border-box; resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.35;
+    background: #14181c; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px;
+}
+.bitmap-dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 12px 0 0; padding: 0; }
+
+/* Attribution line shown at the bottom of the editor pages. */
+.page-credit {
+    padding: 12px 16px 20px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted, #8a8f98);
+}
+
+.page-credit a {
+    color: inherit;
+}
+
+/* Rectangular Maze War images retain their pixel aspect ratio. */
+.tile-item canvas { object-fit: contain; }
+#tiled-canvas { max-width: 100%; height: auto; }
+.left-rail { overflow-y: auto; }
+#animation-label { text-align: center; }
+.left-rail > .panel { flex-shrink: 0; }
+.usage-list { max-height: none; white-space: normal; }
+#actual-canvas { image-rendering: pixelated; }
+
+@media (min-width: 1181px) {
+    .workspace { height: calc(100vh - 104px); }
+}
+.page-credit { min-height: 42px; padding: 10px 16px; }

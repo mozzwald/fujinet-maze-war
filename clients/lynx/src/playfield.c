@@ -38,7 +38,6 @@ static uint8_t queued;
 #define DEATH_ROW 8
 #define DEATH_BYTES (9 * DEATH_ROW + 1)
 #include "maze_sprites.h"
-static const uint8_t shot_sprite[] = {3,0x9f,0,3,0x90,0,0};
 static uint8_t sprites_ready;
 #define frame_state phase_scratch.play.frame
 static uint8_t clipped_wizards[GAME_PLAYERS][WIZARD_BYTES];
@@ -163,8 +162,8 @@ static void queue_fire(const struct game_view *state, uint8_t slot,
     else if (facing == 14) py = y;
     else if (facing == 13) py = y + 4;
     fire_sprites[slot][0] = 3;
-    fire_sprites[slot][1] = (actor_clear(state, px, py) ? 0x90 : 0) |
-        (actor_clear(state, px + 1, py) ? 0x0f : 0);
+    fire_sprites[slot][1] = (actor_clear(state, px, py) ? ART_MUZZLE_LEFT : 0) |
+        (actor_clear(state, px + 1, py) ? ART_MUZZLE_RIGHT : 0);
     fire_sprites[slot][2] = 0;
     fire_sprites[slot][3] = 0;
     queue(fire_sprites[slot], px, py, 1, 0);

@@ -1,5 +1,5 @@
 /* Keep an independent CPU oracle for production renderer regression tests. */
-#define REFERENCE_PLAIN_FLOOR
+#define REFERENCE_EDITABLE_ART
 #define playfield_draw cpu_playfield_draw
 #define playfield_invalidate cpu_playfield_invalidate
 #define playfield_invalidate_page cpu_playfield_invalidate_page

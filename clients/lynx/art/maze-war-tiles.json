@@ -1,0 +1,849 @@
+{
+  "projectType": "maze-war-lynx-tiles",
+  "version": 1,
+  "palette": [
+    "#332222",
+    "#110011",
+    "#dd3344",
+    "#ff99aa",
+    "#8899bb",
+    "#777777",
+    "#553333",
+    "#884444",
+    "#ee7755",
+    "#ffdd55",
+    "#33cc55",
+    "#228822",
+    "#444488",
+    "#5588ee",
+    "#55ccff",
+    "#ffffff"
+  ],
+  "entries": [
+    {
+      "id": "floor_tile",
+      "name": "Floor",
+      "kind": "terrain",
+      "width": 8,
+      "height": 5,
+      "mode": "palette",
+      "rows": [
+        "11111111",
+        "11111111",
+        "11111111",
+        "11111111",
+        "11111111"
+      ]
+    },
+    {
+      "id": "wall_even",
+      "name": "Brick even",
+      "kind": "terrain",
+      "width": 8,
+      "height": 5,
+      "mode": "palette",
+      "rows": [
+        "99999999",
+        "77177717",
+        "78817887",
+        "77177717",
+        "66666666"
+      ]
+    },
+    {
+      "id": "wall_odd",
+      "name": "Brick odd",
+      "kind": "terrain",
+      "width": 8,
+      "height": 5,
+      "mode": "palette",
+      "rows": [
+        "99999999",
+        "77717771",
+        "77877881",
+        "77717771",
+        "66666666"
+      ]
+    },
+    {
+      "id": "border_tile",
+      "name": "Border wall",
+      "kind": "terrain",
+      "width": 8,
+      "height": 5,
+      "mode": "palette",
+      "rows": [
+        "DDDEDDDE",
+        "DEDDDEDD",
+        "DDEDDDED",
+        "DEDDDEDD",
+        "DDDDDDDD"
+      ]
+    },
+    {
+      "id": "player_0",
+      "name": "Player right",
+      "kind": "player",
+      "width": 8,
+      "height": 5,
+      "mode": "player",
+      "rows": [
+        "00110000",
+        "01111110",
+        "00223100",
+        "00111110",
+        "01444410"
+      ]
+    },
+    {
+      "id": "player_1",
+      "name": "Player left",
+      "kind": "player",
+      "width": 8,
+      "height": 5,
+      "mode": "player",
+      "rows": [
+        "00001100",
+        "01111110",
+        "00132200",
+        "01111100",
+        "01444410"
+      ]
+    },
+    {
+      "id": "player_2",
+      "name": "Local player right",
+      "kind": "player",
+      "width": 8,
+      "height": 5,
+      "mode": "player",
+      "rows": [
+        "00110000",
+        "01111110",
+        "30223100",
+        "00111110",
+        "01444410"
+      ]
+    },
+    {
+      "id": "player_3",
+      "name": "Local player left",
+      "kind": "player",
+      "width": 8,
+      "height": 5,
+      "mode": "player",
+      "rows": [
+        "00001100",
+        "01111110",
+        "30132200",
+        "01111100",
+        "01444410"
+      ]
+    },
+    {
+      "id": "dance_1",
+      "name": "Dance 1",
+      "kind": "dance",
+      "width": 8,
+      "height": 5,
+      "mode": "player",
+      "rows": [
+        "00110000",
+        "01111110",
+        "10223101",
+        "00111110",
+        "01440100"
+      ]
+    },
+    {
+      "id": "dance_2",
+      "name": "Dance 2",
+      "kind": "dance",
+      "width": 8,
+      "height": 5,
+      "mode": "player",
+      "rows": [
+        "00001100",
+        "01111110",
+        "01322010",
+        "11111101",
+        "00104410"
+      ]
+    },
+    {
+      "id": "dance_3",
+      "name": "Dance 3",
+      "kind": "dance",
+      "width": 8,
+      "height": 5,
+      "mode": "player",
+      "rows": [
+        "00110000",
+        "01111110",
+        "01223100",
+        "10111110",
+        "00104410"
+      ]
+    },
+    {
+      "id": "dance_4",
+      "name": "Dance 4",
+      "kind": "dance",
+      "width": 8,
+      "height": 5,
+      "mode": "player",
+      "rows": [
+        "00001100",
+        "01111110",
+        "10132201",
+        "01111100",
+        "00144010"
+      ]
+    },
+    {
+      "id": "explosion_1",
+      "name": "Explosion 1",
+      "kind": "explosion",
+      "width": 12,
+      "height": 9,
+      "mode": "palette",
+      "rows": [
+        "000000000000",
+        "000009000000",
+        "000809080000",
+        "00009F900000",
+        "0099FFF99000",
+        "00009F900000",
+        "000809080000",
+        "000009000000",
+        "000000000000"
+      ]
+    },
+    {
+      "id": "explosion_2",
+      "name": "Explosion 2",
+      "kind": "explosion",
+      "width": 12,
+      "height": 9,
+      "mode": "palette",
+      "rows": [
+        "000040400000",
+        "0044FFF44000",
+        "048FF9FF8400",
+        "04FFFFF9F400",
+        "44FF9F9F4400",
+        "048FFFFF8400",
+        "0044FF440000",
+        "000400400000",
+        "000000000000"
+      ]
+    },
+    {
+      "id": "explosion_3",
+      "name": "Explosion 3",
+      "kind": "explosion",
+      "width": 12,
+      "height": 9,
+      "mode": "palette",
+      "rows": [
+        "000440040000",
+        "004FF44F4000",
+        "04FFFFFFF400",
+        "04FF4FFF4000",
+        "004FFFFFF400",
+        "044FFF4F4000",
+        "0044FF440000",
+        "000400400000",
+        "000000000000"
+      ]
+    },
+    {
+      "id": "explosion_4",
+      "name": "Explosion 4",
+      "kind": "explosion",
+      "width": 12,
+      "height": 9,
+      "mode": "palette",
+      "rows": [
+        "005000500000",
+        "000004005000",
+        "050040000000",
+        "000500400500",
+        "004000005000",
+        "000050040000",
+        "050000500000",
+        "000600006000",
+        "000000000000"
+      ]
+    },
+    {
+      "id": "projectile",
+      "name": "Projectile",
+      "kind": "effect",
+      "width": 2,
+      "height": 2,
+      "mode": "palette",
+      "rows": [
+        "9F",
+        "90"
+      ]
+    },
+    {
+      "id": "muzzle",
+      "name": "Muzzle flash",
+      "kind": "effect",
+      "width": 2,
+      "height": 1,
+      "mode": "palette",
+      "rows": [
+        "9F"
+      ]
+    },
+    {
+      "id": "glyph_65",
+      "name": "HUD A",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "010",
+        "101",
+        "111",
+        "101"
+      ]
+    },
+    {
+      "id": "glyph_66",
+      "name": "HUD B",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "110",
+        "101",
+        "110",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_67",
+      "name": "HUD C",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "011",
+        "100",
+        "100",
+        "011"
+      ]
+    },
+    {
+      "id": "glyph_68",
+      "name": "HUD D",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "110",
+        "101",
+        "101",
+        "110"
+      ]
+    },
+    {
+      "id": "glyph_69",
+      "name": "HUD E",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "110",
+        "100",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_70",
+      "name": "HUD F",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "110",
+        "100",
+        "100"
+      ]
+    },
+    {
+      "id": "glyph_71",
+      "name": "HUD G",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "011",
+        "100",
+        "101",
+        "011"
+      ]
+    },
+    {
+      "id": "glyph_72",
+      "name": "HUD H",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "111",
+        "101",
+        "101"
+      ]
+    },
+    {
+      "id": "glyph_73",
+      "name": "HUD I",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "010",
+        "010",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_74",
+      "name": "HUD J",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "001",
+        "001",
+        "101",
+        "010"
+      ]
+    },
+    {
+      "id": "glyph_75",
+      "name": "HUD K",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "110",
+        "110",
+        "101"
+      ]
+    },
+    {
+      "id": "glyph_76",
+      "name": "HUD L",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "100",
+        "100",
+        "100",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_77",
+      "name": "HUD M",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "111",
+        "111",
+        "101"
+      ]
+    },
+    {
+      "id": "glyph_78",
+      "name": "HUD N",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "111",
+        "111",
+        "101"
+      ]
+    },
+    {
+      "id": "glyph_79",
+      "name": "HUD O",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "010",
+        "101",
+        "101",
+        "010"
+      ]
+    },
+    {
+      "id": "glyph_80",
+      "name": "HUD P",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "110",
+        "101",
+        "110",
+        "100"
+      ]
+    },
+    {
+      "id": "glyph_81",
+      "name": "HUD Q",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "010",
+        "101",
+        "111",
+        "011"
+      ]
+    },
+    {
+      "id": "glyph_82",
+      "name": "HUD R",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "110",
+        "101",
+        "110",
+        "101"
+      ]
+    },
+    {
+      "id": "glyph_83",
+      "name": "HUD S",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "011",
+        "100",
+        "011",
+        "110"
+      ]
+    },
+    {
+      "id": "glyph_84",
+      "name": "HUD T",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "010",
+        "010",
+        "010"
+      ]
+    },
+    {
+      "id": "glyph_85",
+      "name": "HUD U",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "101",
+        "101",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_86",
+      "name": "HUD V",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "101",
+        "101",
+        "010"
+      ]
+    },
+    {
+      "id": "glyph_87",
+      "name": "HUD W",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "101",
+        "111",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_88",
+      "name": "HUD X",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "010",
+        "010",
+        "101"
+      ]
+    },
+    {
+      "id": "glyph_89",
+      "name": "HUD Y",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "101",
+        "010",
+        "010"
+      ]
+    },
+    {
+      "id": "glyph_90",
+      "name": "HUD Z",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "001",
+        "010",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_48",
+      "name": "HUD 0",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "101",
+        "101",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_49",
+      "name": "HUD 1",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "010",
+        "110",
+        "010",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_50",
+      "name": "HUD 2",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "001",
+        "110",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_51",
+      "name": "HUD 3",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "001",
+        "011",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_52",
+      "name": "HUD 4",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "101",
+        "101",
+        "111",
+        "001"
+      ]
+    },
+    {
+      "id": "glyph_53",
+      "name": "HUD 5",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "100",
+        "011",
+        "110"
+      ]
+    },
+    {
+      "id": "glyph_54",
+      "name": "HUD 6",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "011",
+        "100",
+        "111",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_55",
+      "name": "HUD 7",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "001",
+        "001",
+        "001"
+      ]
+    },
+    {
+      "id": "glyph_56",
+      "name": "HUD 8",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "101",
+        "111",
+        "111"
+      ]
+    },
+    {
+      "id": "glyph_57",
+      "name": "HUD 9",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "111",
+        "101",
+        "111",
+        "001"
+      ]
+    },
+    {
+      "id": "glyph_45",
+      "name": "HUD -",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "000",
+        "000",
+        "111",
+        "000"
+      ]
+    },
+    {
+      "id": "glyph_46",
+      "name": "HUD .",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "000",
+        "000",
+        "000",
+        "010"
+      ]
+    },
+    {
+      "id": "glyph_47",
+      "name": "HUD /",
+      "kind": "font",
+      "width": 3,
+      "height": 4,
+      "mode": "font",
+      "rows": [
+        "001",
+        "001",
+        "010",
+        "100"
+      ]
+    }
+  ]
+}

@@ -24,6 +24,9 @@ static struct overlay_position old_players[2][GAME_PLAYERS];
 static struct overlay_position old_shots[2][GAME_PLAYERS];
 static uint8_t frame_valid[2];
 
+#ifdef REFERENCE_EDITABLE_ART
+#include "art_pixels.h"
+#else
 /* The full 20x19 maze uses 8x5 cells. The remaining seven rows are HUD. */
 static const uint8_t floor_tile[20] = {
     0x11, 0x11, 0x11, 0x11,
@@ -67,6 +70,8 @@ static const char *const wizard[5] = {
     ".CSSSSC."
 };
 
+#endif
+
 static uint8_t wall_at(const uint8_t *bricks, uint8_t x, uint8_t y)
 {
     uint16_t index = (uint16_t)y * 20 + x;
@@ -97,7 +102,11 @@ static void actor_pixel(uint8_t *page, uint8_t x, uint8_t y, uint8_t color)
 }
 
 static void wizard_draw(uint8_t *page, uint8_t px, uint8_t py,
-                        uint8_t color, uint8_t facing)
+                        uint8_t color, uint8_t facing
+#ifdef REFERENCE_EDITABLE_ART
+                        , uint8_t local
+#endif
+                        )
 {
     uint8_t row;
     uint8_t col;
@@ -108,6 +117,17 @@ static void wizard_draw(uint8_t *page, uint8_t px, uint8_t py,
         screen_y = (uint8_t)(py + row);
         if (screen_y >= PLAYFIELD_H) continue;
         for (col = 0; col < 8; ++col) {
+#ifdef REFERENCE_EDITABLE_ART
+            tile_x = (facing == 11 ? 1 : 0) | (local ? 2 : 0);
+            pen = art_players[tile_x][row][col];
+            switch (pen) {
+            case 0: continue;
+            case 1: pen=color; break;
+            case 2: pen=8; break;
+            case 3: pen=15; break;
+            case 4: pen=6; break;
+            }
+#else
             tile_x = facing == 11 ? (uint8_t)(7 - col) : col;
             switch (wizard[row][tile_x]) {
             case 'C': pen = color; break;
@@ -116,6 +136,7 @@ static void wizard_draw(uint8_t *page, uint8_t px, uint8_t py,
             case 'S': pen = 6; break;
             default: continue;
             }
+#endif
             actor_pixel(page, (uint8_t)(px + col), screen_y, pen);
         }
     }
@@ -126,9 +147,16 @@ static void shot_draw(uint8_t *page, uint8_t x, uint8_t y)
 {
     uint8_t px = (uint8_t)(x * 8 + 3);
     uint8_t py = (uint8_t)(y * 5 + 2);
+#ifdef REFERENCE_EDITABLE_ART
+    { uint8_t row, col;
+      for(row=0;row<2;++row) for(col=0;col<2;++col)
+        if(art_projectile[row][col] && py+row < PLAYFIELD_H)
+            pixel(page,px+col,py+row,art_projectile[row][col]); }
+#else
     pixel(page, px, py, 9);
     pixel(page, (uint8_t)(px + 1), py, 15);
     if (py + 1 < PLAYFIELD_H) pixel(page, px, (uint8_t)(py + 1), 9);
+#endif
 }
 
 static void fire_cue_draw(uint8_t *page, uint8_t px, uint8_t py,
@@ -140,8 +168,13 @@ static void fire_cue_draw(uint8_t *page, uint8_t px, uint8_t py,
     else if (facing == 11) x = px;
     else if (facing == 14) y = py;
     else if (facing == 13) y = (uint8_t)(py + 4);
+#ifdef REFERENCE_EDITABLE_ART
+    if (art_muzzle[0][0]) actor_pixel(page,x,y,art_muzzle[0][0]);
+    if (x < 159 && art_muzzle[0][1]) actor_pixel(page,x+1,y,art_muzzle[0][1]);
+#else
     actor_pixel(page, x, y, 9);
     if (x < 159) actor_pixel(page, (uint8_t)(x + 1), y, 15);
+#endif
 }
 
 static void build_background(const struct game_state *state)
@@ -465,9 +498,15 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
             move_visual(i, state);
             position = &visual[i];
             wizard_draw(page, position->x, position->y,
-                        player_colors[i], player->joy & 15);
+                        player_colors[i], player->joy & 15
+#ifdef REFERENCE_EDITABLE_ART
+                        , i == state->local_pid
+#endif
+                        );
+#ifndef REFERENCE_EDITABLE_ART
             if (i == state->local_pid)
                 actor_pixel(page, position->x, (uint8_t)(position->y + 2), 15);
+#endif
             if (i == state->local_pid && state->fire_cue_frames)
                 fire_cue_draw(page, position->x, position->y,
                               state->input_joy & 15);

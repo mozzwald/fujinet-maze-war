@@ -1,4 +1,5 @@
 #include "playfield.h"
+#include "art_pixels.h"
 #include <assert.h>
 #include <stdio.h>
 static uint8_t pages[2][PLAYFIELD_PAGE_BYTES];
@@ -29,7 +30,7 @@ static void buffered_first_draw_cleanup(void) {
         for (y=25;y<30;++y)
             for (x=40;x<50;++x) {
                 uint8_t byte=pages[page][(uint16_t)y*80+x/2];
-                assert((x&1 ? byte&15 : byte>>4)==1);
+                assert((x&1 ? byte&15 : byte>>4)==art_floor_tile[y%5][x%8]);
             }
     }
 }

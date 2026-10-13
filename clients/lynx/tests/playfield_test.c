@@ -1,3 +1,4 @@
+#include "art_expect.h"
 #include "playfield.h"
 #include "suzy_host.h"
 #include <assert.h>
@@ -83,12 +84,12 @@ int main(void)
     state.shots[0].y = 6;
     playfield_invalidate();
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(0, 0) == 13 || pen(0, 0) == 14);
-    assert(pen(8, 5) == 9);
-    assert(pen(39, 25) == 1);
-    assert(pen(44, 27) == 15); /* right-facing eye */
-    assert(pen(42, 25) == 10); /* slot 0 green, matching Atari PLR0COL */
-    assert(pen(51, 32) == 9);  /* shot spark */
+    assert(pen(0, 0) == art_border_tile[0][0]);
+    assert(pen(8, 5) == art_wall_odd[0][0]);
+    assert(pen(39, 25) == art_floor_tile[0][7]);
+    assert(pen(44, 27) == art_player_pen(2,2,4,0)); /* right-facing eye */
+    assert(pen(42, 25) == art_player_pen(2,0,2,0)); /* slot 0 green, matching Atari PLR0COL */
+    assert(pen(51, 32) == (art_projectile[0][0] ? art_projectile[0][0] : art_floor_tile[2][3]));  /* shot spark */
     assert(pen(0, 95) == 0xa && pen(159, 101) == 5);
     for (i = 0; i < 4; ++i) {
         assert(framebuffer[i] == 0xa5);
@@ -96,7 +97,7 @@ int main(void)
     }
     state.players[0].joy = 11;
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(43, 27) == 15); /* mirrored left-facing eye */
+    assert(pen(43, 27) == art_player_pen(3,2,3,0)); /* mirrored left-facing eye */
     state.seat_mask = 15;
     for (i = 0; i < 4; ++i) {
         state.players[i].x = (uint8_t)(5 + i * 2);
@@ -104,17 +105,17 @@ int main(void)
         state.players[i].joy = 7;
     }
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(42, 25) == 10); /* Atari $C8: green */
-    assert(pen(58, 25) == 14); /* Atari $86: blue */
-    assert(pen(74, 25) == 3); /* slot 2 pink */
-    assert(pen(90, 25) == 9);  /* slot 3 yellow */
+    assert(pen(42, 25) == art_player_pen(2,0,2,0)); /* Atari $C8: green */
+    assert(pen(58, 25) == art_player_pen(0,0,2,1)); /* Atari $86: blue */
+    assert(pen(74, 25) == art_player_pen(0,0,2,2)); /* slot 2 pink */
+    assert(pen(90, 25) == art_player_pen(0,0,2,3));  /* slot 3 yellow */
     state.players[0].x = 6;
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(42, 25) == 1);  /* previous sprite was restored */
-    assert(pen(50, 25) == 10); /* unrecorded placements rejoin directly */
+    assert(pen(42, 25) == art_floor_tile[0][2]);  /* previous sprite was restored */
+    assert(pen(50, 25) == art_player_pen(2,0,2,0)); /* unrecorded placements rejoin directly */
     playfield_draw(framebuffer + 4, 0, &state, 0);
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(50, 25) == 10); /* reached the next cell smoothly */
+    assert(pen(50, 25) == art_player_pen(2,0,2,0)); /* reached the next cell smoothly */
     /* Held buttons alone must not move the sprite beyond the cell predicted
        from sent inputs. This keeps stopping and turning aligned. */
     playfield_invalidate();
@@ -128,13 +129,13 @@ int main(void)
     state.input_joy = 7;
     playfield_draw(framebuffer + 4, 0, &state, 0);
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(42, 25) == 10);
-    assert(pen(44, 25) == 1);
+    assert(pen(42, 25) == art_player_pen(2,0,2,0));
+    assert(pen(44, 25) == art_player_pen(2,0,4,0));
     assert(state.players[0].x == 5);
     wall(&state, 6, 5);
     for (i = 0; i < 8; ++i)
         playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(49, 25) == 9); /* wall did not admit the sprite */
+    assert(pen(49, 25) == art_wall_odd[0][1]); /* wall did not admit the sprite */
 
     /* A neighboring wall must stop the entire sprite at the cell edge,
        rather than letting its center advance while the leading pixels clip. */
@@ -179,8 +180,8 @@ int main(void)
     state.input_joy = 13;
     for (i = 0; i < 8; ++i)
         playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(50, 30) == 10);
-    assert(pen(42, 30) == 9);
+    assert(pen(50, 30) == art_player_pen(2,0,2,0));
+    assert(pen(42, 30) == art_wall_even[0][2]);
 
     /* Neither the sprite nor firing cue may replace a wall pixel during a
        transition between 8x5 cells. */
@@ -214,8 +215,8 @@ int main(void)
     for (i = 0; i < 8; ++i)
         playfield_draw(framebuffer + 4, 0, &state, 0);
     assert_walls_unchanged(&state);
-    assert(pen(58, 25) == 10);
-    assert(pen(42, 25) == 1);
+    assert(pen(58, 25) == art_player_pen(2,0,2,0));
+    assert(pen(42, 25) == art_floor_tile[0][2]);
 
     /* The same correction must happen while Right remains held. The old
        prediction path returned before considering a newer server position. */
@@ -228,8 +229,8 @@ int main(void)
     state.shots[0].x = 8;
     state.shots[0].y = 5;
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(58, 25) == 10);
-    assert(pen(67, 27) == 9);
+    assert(pen(58, 25) == art_player_pen(2,0,2,0));
+    assert(pen(67, 27) == (art_projectile[0][0] ? art_projectile[0][0] : art_floor_tile[2][3]));
     assert_walls_unchanged(&state);
 
     /* Follow a sideways correction even while Up is held. A held button
@@ -246,8 +247,8 @@ int main(void)
     state.players[0].x = 6;
     for (i = 0; i < 3; ++i)
         playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(50, 25) == 10);
-    assert(pen(42, 25) == 1);
+    assert(pen(50, 25) == art_player_pen(2,0,2,0));
+    assert(pen(42, 25) == art_floor_tile[0][2]);
 
     /* A firing frame settles any unfinished interpolation at the actual
        predicted cell, keeping the muzzle and shot origin together. */
@@ -262,11 +263,11 @@ int main(void)
     playfield_draw(framebuffer + 4, 0, &state, 0);
     state.players[0].x = 6;
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(50, 25) == 10);
+    assert(pen(50, 25) == art_player_pen(2,0,2,0));
     state.input_joy = 0x17;
     playfield_draw(framebuffer + 4, 0, &state, 0);
-    assert(pen(50, 25) == 10);
-    assert(pen(45, 25) == 1);
+    assert(pen(50, 25) == art_player_pen(2,0,2,0));
+    assert(pen(45, 25) == art_floor_tile[0][5]);
 
     /* Suzy paints the last row, feet and textured border on both pages;
        the seven HUD rows remain untouched. */
@@ -281,15 +282,15 @@ int main(void)
     state.players[0].y = 17;
     wall(&state, 5, 18);
     assert(playfield_draw(framebuffer + 4, 0, &state, 0));
-    assert(pen(41, 89) == 10);
-    assert(pen(40, 90) == 13);
-    assert(pen(43, 90) == 14);
+    assert(pen(41, 89) == art_player_pen(2,4,1,0));
+    assert(pen(40, 90) == art_border_tile[0][0]);
+    assert(pen(43, 90) == art_border_tile[0][3]);
     for (offset = PLAYFIELD_H * PLAYFIELD_STRIDE;
          offset < PLAYFIELD_PAGE_BYTES; ++offset)
         assert(framebuffer[4 + offset] == 0xa5);
     assert(playfield_draw(framebuffer1 + 4, 1, &state, 0));
-    assert((framebuffer1[4 + 89 * PLAYFIELD_STRIDE + (41 >> 1)] & 15) == 10);
-    assert((framebuffer1[4 + 90 * PLAYFIELD_STRIDE + (43 >> 1)] & 15) == 14);
+    assert((framebuffer1[4 + 89 * PLAYFIELD_STRIDE + (41 >> 1)] & 15) == art_player_pen(2,4,1,0));
+    assert((framebuffer1[4 + 90 * PLAYFIELD_STRIDE + (43 >> 1)] & 15) == art_border_tile[0][3]);
     assert(suzy_test_max_batch() == 8);
     puts("playfield tests passed (native Suzy, maximum batch eight)");
     return 0;

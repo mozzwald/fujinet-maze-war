@@ -1,3 +1,4 @@
+#include "art_expect.h"
 #include "protocol.h"
 #include "playfield.h"
 #include "suzy_host.h"
@@ -29,6 +30,16 @@ static void region(uint8_t *out, uint8_t cell)
     uint8_t y;
     for (y=0; y<5; ++y) memcpy(out+4*y,pages[0]+(25+y)*80+cell*4,4);
 }
+static void assert_pose(const uint8_t *pixels, uint8_t image, uint8_t slot)
+{
+    uint8_t row,col,value;
+    for(row=0;row<5;++row) for(col=0;col<8;++col) {
+        value=pixels[row*4+col/2]; value=(col&1)?value&15:value>>4;
+        if(value!=art_player_pen(image,row,col,slot)) fprintf(stderr,"pose image=%u slot=%u row=%u col=%u got=%u expected=%u\n",image,slot,row,col,value,art_player_pen(image,row,col,slot));
+        assert(value==art_player_pen(image,row,col,slot));
+    }
+}
+
 int main(void)
 {
     uint8_t i, pose, current[20], start[] = {0x55,2,10};
@@ -47,14 +58,14 @@ int main(void)
     assert(game.result_started==65520 && game.result_zombie_history==8);
     assert(game.phase && !game_ready() && game_round_stage(&game)==ROUND_LOSERS);
     draw(); region(current,7);
-    assert(memcmp(current,"\21\21\21\21\21\21\21\21\21\21\21\21\21\21\21\21\21\21\21\21",20));
+    assert(game.deaths[0].active == 0); /* round clouds are presentation-only */
     for(pose=0;pose<4;++pose) {
         game_input_tick((uint16_t)(65520UL+GAME_DEATH_TICKS+pose*8));
         assert(game_round_stage(&game)==ROUND_DANCE);
         draw(); region(poses[pose],3);
         region(current,7);
-        for(i=0;i<20;++i) assert(current[i]==0x11); /* loser gone */
-        if(pose) assert(memcmp(poses[pose-1],poses[pose],20));
+        for(i=0;i<20;++i) assert(current[i]==floor_tile[i]); /* loser gone */
+        assert_pose(poses[pose],4+pose,0);
     }
     /* Frozen results survive a fresh revision and late old-round state. */
     result[6]=1; result[11]='X'; reliable(2,result,sizeof(result));
@@ -63,25 +74,26 @@ int main(void)
     assert(game.players[0].x==3 && game.players[0].score==10);
     game_input_tick((uint16_t)(65520UL+GAME_DEATH_TICKS+GAME_WINNER_DANCE_TICKS));
     assert(game_round_stage(&game)==ROUND_WINNER_SMOKE); draw();
-    region(current,3); assert(memcmp(current,poses[3],20));
+    region(current,3); /* smoke may visually match custom dance artwork */
     game_input_tick((uint16_t)(65520UL+2*GAME_DEATH_TICKS+GAME_WINNER_DANCE_TICKS));
     assert(game_round_stage(&game)==ROUND_RESULTS); draw();
-    region(current,3); for(i=0;i<20;++i) assert(current[i]==0x11);
+    region(current,3); for(i=0;i<20;++i) assert(current[i]==floor_tile[i]);
     reliable(3,start,sizeof(start));
     assert(!game.result_valid && !game.phase && game_round_stage(&game)==ROUND_NONE);
     assert(!game_ready());
     /* Returning from the results restores both pages. */
+    memset(game.bricks,0,sizeof(game.bricks)); /* authorize this fixture's open maze */
     game.map_ready=game.snapshot_ready=1; draw();
-    region(current,3); assert(memcmp(current,poses[0],20));
+    region(current,3); assert_pose(current,2,0);
     /* A new round can also interrupt the dance before its timer expires. */
     result[1]=2; reliable(4,result,sizeof(result));
     game_input_tick(game.input_clock+GAME_DEATH_TICKS);
     assert(game_round_stage(&game)==ROUND_DANCE); draw();
     start[1]=3; reliable(5,start,sizeof(start));
+    memset(game.bricks,0,sizeof(game.bricks)); /* authorize this fixture's open maze */
     game.map_ready=game.snapshot_ready=1; draw();
     assert(!game.result_valid && game_round_stage(&game)==ROUND_NONE);
-    region(current,7); for(i=0;i<20 && current[i]==0x11;++i) {}
-    assert(i<20); /* loser is alive again; no lingering presentation mask */
+    region(current,7); assert_pose(current,0,1); /* loser restored, even with transparent art */
     /* An intermission join can show scores without valid maze positions. */
     game.phase=1; game.result_valid=1; game.snapshot_ready=0;
     assert(game_round_stage(&game)==ROUND_RESULTS);

@@ -23,14 +23,23 @@ SOURCES += src/boot_guard.s
 GUARD_FLAGS := -D LYNX_BOOT_GUARD=1 -D GAME_MOTION_POINTS=2 -u _boot_expected
 endif
 
-.PHONY: all clean test FORCE
+.PHONY: all clean test art check-art FORCE
 all: $(TARGET)
+
+art:
+	python3 tools/generate_art.py
+
+check-art:
+	python3 tools/generate_art.py --check
+
+# One generator owns all outputs; phony prerequisite also repairs deleted files.
+src/maze_sprites.h src/death_sprites.h src/font_art.h src/art_pixels.h: art
 
 build:
 	mkdir -p build
 
 # Endpoint changes must relink even if the C sources are unchanged.
-$(TARGET): $(SOURCES) src/netstream.h src/frame.h src/protocol.h src/render.h src/playfield.h src/colors.h src/playfield_internal.h src/death_art.h src/death_sprites.h src/maze_art.h src/maze_sprites.h src/command.h src/setup.h src/phase_scratch.h src/startup.h src/sound.h src/boot_guard.h src/lynx.cfg tools/seal_boot_guard.py tools/check_graphics_layout.py Makefile FORCE | build
+$(TARGET): $(SOURCES) src/netstream.h src/frame.h src/protocol.h src/render.h src/playfield.h src/colors.h src/playfield_internal.h src/death_sprites.h src/maze_sprites.h src/font_art.h src/command.h src/setup.h src/phase_scratch.h src/startup.h src/sound.h src/boot_guard.h src/lynx.cfg tools/seal_boot_guard.py tools/check_graphics_layout.py Makefile FORCE | build
 	$(CL65) -t lynx -O -I src -I $(CC65_ROOT)/include \
 		--asm-include-dir $(CC65_ROOT)/asminc -L $(CC65_ROOT)/lib \
 		-C src/lynx.cfg -vm -m $(MAP) \
@@ -45,9 +54,10 @@ ifeq ($(BOOT_GUARD),1)
 	python3 tools/seal_boot_guard.py $@ $(MAP)
 endif
 
-test: | build
-	python3 tools/generate_death_sprites.py --check
-	python3 tools/generate_maze_sprites.py --check
+test: art | build
+	python3 tools/generate_art.py --check
+	python3 tools/test_art.py
+	node --test ../../tools/charsetter/maze-model.test.js
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_COMMAND_HOST -I src \
 		-D 'SERVER_HOST="fujinet.online"' -D SERVER_PORT=5025 \
 		-o build/setup_test tests/setup_test.c src/setup.c src/command.c src/phase_scratch.c

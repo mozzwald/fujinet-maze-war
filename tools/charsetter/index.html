@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maze War Lynx Tile Editor</title>
+    <link rel="stylesheet" href="icons.css">
+    <link rel="stylesheet" href="style.css?v=4.1.0">
+</head>
+<body>
+    <input type="file" id="tileset-input" accept=".json" hidden>
+
+    <header class="app-header">
+        <div class="brand-block">
+            <strong>Maze War</strong>
+            <span>Lynx Tile Editor</span>
+            <span id="dirty-indicator" class="dirty-indicator" hidden>Modified</span>
+        </div>
+        <nav class="header-actions" aria-label="Tileset actions">
+            <button id="load-tileset" class="button primary"><i class="bi bi-folder2-open"></i> Load Tileset</button>
+            <button id="save-tileset" class="button"><i class="bi bi-floppy"></i> Save Tileset</button>
+            <span class="divider"></span>
+            <button id="undo" class="icon-button" title="Undo" aria-label="Undo" disabled><i class="bi bi-arrow-counterclockwise"></i></button>
+            <button id="redo" class="icon-button" title="Redo" aria-label="Redo" disabled><i class="bi bi-arrow-clockwise"></i></button>
+            <span class="divider"></span>
+
+        </nav>
+    </header>
+
+    <main class="workspace">
+        <aside class="left-rail">
+            <section class="panel palette-panel">
+                <header>
+                    <span>Lynx CLUT</span>
+                    <span id="active-pen-label" class="mono">$0</span>
+                </header>
+                <div id="palette" class="palette lynx-palette"></div>
+                <div class="usage-list">Pen 0 is opaque on terrain, transparent on other images. Player pens: 1 robe, 2 face, 3 white, 4 shoes.</div>
+            </section>
+
+            <section class="panel">
+                <header>Player color preview</header>
+                <select id="player-preview" class="filter-input" aria-label="Player color preview">
+                    <option value="0">P1 Green</option><option value="1">P2 Blue</option>
+                    <option value="2">P3 Pink</option><option value="3">P4 Yellow</option>
+                </select>
+            </section>
+            <section class="panel">
+                <header>Animation</header>
+                <div class="lynx-preview-body">
+                    <canvas id="animation-canvas" width="144" height="108"></canvas>
+                    <span id="animation-label" class="muted"></span>
+                    <button id="animation-play" class="button">Pause animation</button>
+                </div>
+            </section>
+            <section class="panel">
+                <header>Neighbours</header>
+                <div class="lynx-preview-body">
+                    <canvas id="tiled-canvas" width="192" height="192"></canvas>
+                    <p class="muted">Same tile 3&times;3 at 8&times;, for checking seams.</p>
+                </div>
+            </section>
+
+            <section class="panel">
+                <header>Pixel preview (8×)</header>
+                <div class="lynx-preview-body">
+                    <canvas id="actual-canvas" width="8" height="8"></canvas>
+                    <span id="sprite-cost" class="muted mono"></span>
+                </div>
+            </section>
+        </aside>
+
+        <section class="panel tile-workspace">
+            <header class="tile-header">
+                <div>
+                    <span id="entry-name">No tileset loaded</span>
+                    <span id="entry-binding" class="binding"></span>
+                </div>
+                <div class="tool-row">
+                    <button data-transform="up" class="icon-button" title="Shift up"><i class="bi bi-caret-up-fill"></i></button>
+                    <button data-transform="down" class="icon-button" title="Shift down"><i class="bi bi-caret-down-fill"></i></button>
+                    <button data-transform="left" class="icon-button" title="Shift left"><i class="bi bi-caret-left-fill"></i></button>
+                    <button data-transform="right" class="icon-button" title="Shift right"><i class="bi bi-caret-right-fill"></i></button>
+                    <button data-transform="mirror-h" class="icon-button" title="Mirror horizontally"><i class="bi bi-arrow-left-right"></i></button>
+                    <button data-transform="mirror-v" class="icon-button" title="Mirror vertically"><i class="bi bi-arrow-down-up"></i></button>
+                    <button data-transform="clear" class="icon-button danger" title="Clear to pen 0"><i class="bi bi-eraser"></i></button>
+                </div>
+            </header>
+            <div class="tile-stage">
+                <canvas id="editor-canvas" width="512" height="512"></canvas>
+                <div id="empty-state" class="empty-state">
+                    <i class="bi bi-grid-3x3" style="font-size:32px"></i>
+                    <span>Load <code>maze-war-tiles.json</code> to begin</span>
+                </div>
+            </div>
+            <div class="quadrant-bar">
+                <span class="muted">Left click paints the selected pen. Right click picks the pen under the cursor.</span>
+            </div>
+        </section>
+
+        <aside class="panel library-panel">
+            <header>Tile Library</header>
+            <div class="library-controls">
+                <input id="library-filter" type="search" placeholder="Filter by name" class="filter-input">
+                <select id="library-kind" class="filter-input">
+                    <option value="all">All</option>
+                    <option value="terrain">Terrain tiles</option>
+                    <option value="player">Player frames</option>
+                    <option value="dance">Dance frames</option><option value="explosion">Explosion frames</option><option value="effect">Effects</option><option value="font">HUD font</option>
+                </select>
+
+            </div>
+            <div id="tile-list" class="tile-list"></div>
+        </aside>
+    </main>
+
+    <footer class="page-credit">
+        Maze War Tile Editor &mdash; built on
+        <a href="https://www.atari.org.pl/charsetter/" target="_blank" rel="noopener">Charsetter</a>
+        by the 4Coloreditor Team, used with their kind permission. Thank you!
+    </footer>
+
+    <script src="maze-model.js"></script>
+    <script src="maze-editor.js"></script>
+</body>
+</html>

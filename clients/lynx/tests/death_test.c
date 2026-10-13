@@ -1,3 +1,4 @@
+#include "art_expect.h"
 #include "protocol.h"
 #include "playfield.h"
 #include "suzy_host.h"
@@ -43,6 +44,28 @@ static void draw(uint8_t page)
         assert(pages[page][offset] == 0xa5);
 }
 
+/* Compare all cloud pixels with unencoded artwork, accounting for walls and
+   the live player drawn over smoke. This also accepts identical custom frames. */
+static void assert_cloud(uint8_t frame)
+{
+    uint8_t row,col,x,y,value,byte,player,page;
+    uint16_t cell;
+    for(row=0;row<9;++row) for(col=0;col<12;++col) {
+        x=46+col; y=23+row;
+        byte=walls[(uint16_t)y*80+x/2];
+        value=(x&1)?byte&15:byte>>4;
+        cell=(uint16_t)(y/5)*20+x/8;
+        if(!(game.bricks[cell>>3] & (1u<<(cell&7)))) {
+            if(art_explosions[frame][row][col]) value=art_explosions[frame][row][col];
+            if(x>=40 && x<48 && y>=25 && y<30) {
+                player=art_players[2][y-25][x-40];
+                if(player) value=art_player_pen(2,y-25,x-40,0);
+            }
+        }
+        for(page=0;page<2;++page) assert(pen(page,x,y)==value);
+    }
+}
+
 static void setup(void)
 {
     uint8_t x, y;
@@ -85,7 +108,7 @@ int main(void)
         assert(game.deaths[1].started == 100);
         for (page = 0; page < 2; ++page) draw(page);
         memcpy(stages[frame], pages[0], sizeof(stages[frame]));
-        if (frame) assert(memcmp(stages[frame - 1], stages[frame], sizeof(stages[frame])));
+        assert_cloud(frame);
     }
     /* Protocol prediction and visual interpolation both ignore the corpse.
        Keep the smoke active while the green wizard enters the same cell. */
@@ -98,7 +121,8 @@ int main(void)
     }
     game_input_tick(game.input_clock + GAME_MOVE_TICKS);
     draw(0); draw(1);
-    assert(pen(0, 50, 25) == 10 && pen(1, 50, 25) == 10);
+    if (art_players[2][0][2])
+        assert(pen(0,50,25)==art_player_pen(2,0,2,0) && pen(1,50,25)==art_player_pen(2,0,2,0));
     game_sample_input(0, 0, 130);
     assert(game_next_outbound(out, sizeof(out)) == 5);
     game_sample_input(2, 0, 131);
