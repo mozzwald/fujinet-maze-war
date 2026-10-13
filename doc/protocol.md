@@ -56,6 +56,8 @@ therefore not required in the hostname field.
 | 0x55 | ROUND_START | S->C* | 3    | New-round authorization |
 | 0x56 | LEAVE_ROOM  | C->S  | 2    | Voluntary seat release request |
 | 0x57 | LEAVE_ACK   | S->C  | 2    | Echoed voluntary-leave acknowledgement |
+| 0x58 | INPUT_HISTORY | C->S | 5..19 | Ordered pending input prefix |
+| 0x59 | INPUT_MODE | C<->S | 2 | Opt-in input-history offer/confirmation |
 
 `*` means the payload is carried as the inner body of `RELIABLE_EVENT`.
 
@@ -190,6 +192,39 @@ Server behavior:
 - During intermission, matching neutral DELTAs are liveness heartbeats and do
   not enter the input queue or advance the applied-input ACK.
 
+### 0x59 INPUT_MODE and 0x58 INPUT_HISTORY (optional)
+
+After WELCOME, a client may offer `[0x59, 1]`. Supporting servers echo that
+exact payload. Until confirmation, the client uses ordinary DELTA packets;
+old servers ignore the offer. The Lynx retries the offer once per second.
+No unsolicited new messages are sent to Atari or other legacy clients.
+
+After confirmation the Lynx replaces gameplay DELTAs/retries with:
+
+```
+[0] type = 0x58
+[1] round_id
+[2] count = 1..8
+[3...] count pairs: input_seq, joy (oldest pending first)
+```
+
+The pairs include the newest action and all older inputs not yet acknowledged
+by SNAPSHOT. One frame CRC covers the whole history, so a lost older frame
+cannot allow its next-frame successor to arrive without the missing action.
+The server validates the entire history (length, round, joys, strictly forward
+modulo-256 sequences with distances below 128) before admitting any entries.
+Sequence gaps are legal because NAME/ACK share the input sender's counter.
+Identity comes from the TCP slot. Accepted/applied duplicates are ignored.
+If the six-entry input queue fills, admission stops at the first rejection;
+later history retries the remaining prefix. Existing one-action-per-tick and
+applied-input ACK rules are unchanged, including neutral folding/intermission.
+
+This repairs packet loss while the pending history is retained. Authoritative
+death/respawn/round changes intentionally discard old inputs. Switching from
+legacy mode cannot retroactively recover a predecessor already skipped by an
+older ACK. The extension does not eliminate collision disagreements or serial
+errors, and does not increase the bounded local movement prediction window.
+
 ### Transport Debug Counters
 
 When the server runs with `--debug`, it logs `transport accepted slot=` for each accepted DELTA and `transport summary slot=` every 2000 ms plus on disconnect/shutdown. Summary lines expose these normalization counters:
@@ -224,6 +259,9 @@ When the server runs with `--debug`, it logs `transport accepted slot=` for each
 
 Notes:
 - On clear, server sends `flags=0` and may send repeated clear bursts for reliability.
+  A normal shot end sends one clear immediately and two on later simulation
+  ticks. Slot handoff, which has no immediate clear, retains three deferred
+  clears. Duplicate clears in the same tick are omitted.
 - Clients must treat `SHOT` as server-authored projectile state. Fire remains
   intent-only `DELTA joy` input; clients do not derive projectile origin locally.
 - The Atari tracks ownership of painted shot characters separately from actor
@@ -249,10 +287,13 @@ Behavior:
   spaces. Treat inbound names as untrusted text.
 - The server broadcasts the sanitized name to every client immediately, and
   re-announces one slot per `NAME_ROTATE_MS` (1s) so a lost NAME heals. The
-  rotation is deliberately slow and never shares a tick with other traffic:
+  rotation is deliberately slow and runs on its own timer:
   running it every tick roughly doubled the inbound packet rate and starved
   `BRICK_DELTA`. Clients re-send their own name every ~2s until they see
   it echoed back for their slot.
+  Actual NAME submissions remain direct plus reliable. Unchanged periodic
+  announcements are direct only; the next rotation repairs a lost refresh
+  without adding a reliable revision or requiring an ACK.
 - An all-zero or all-space name means unnamed; clients fall back to their
   `WIZARD` label. A slot handoff clears the name with the rest of the slot's
   transient state, so an incoming player never inherits one.

@@ -25,6 +25,33 @@ wire = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wire)
 
 
+def diagnostic_values(image, trace=False):
+    # Decode the actual ROM's 3x4 hexadecimal text from screen pixels.
+    glyphs = [(7,5,5,7),(2,6,2,7),(7,1,6,7),(7,1,3,7),(5,5,7,1),
+              (7,4,3,6),(3,4,7,7),(7,1,1,1),(7,5,7,7),(7,5,7,1),
+              (2,5,7,5),(6,5,6,7),(3,4,4,3),(6,5,5,6),(7,6,4,7),(7,6,4,4)]
+    alphabet = {pattern: digit for digit,pattern in enumerate(glyphs)}
+    def number(column, row):
+        value = 0
+        background = image.getpixel((3,row))
+        for offset in range(4):
+            pattern = tuple(sum((1 << (2-x)) for x in range(3)
+                                if image.getpixel((4+(column+offset)*4+x,row+y)) != background)
+                            for y in range(4))
+            assert pattern in alphabet, ('diagnostic glyph',pattern)
+            value = value*16 + alphabet[pattern]
+        return value
+    values = dict(quiet_vbl_samples=number(1,93),window_stall_vbl_samples=number(7,93),input_history=number(13,93),
+                window=number(1,98),ack_age_ticks=number(7,98),pending=number(13,98),
+                diagnostic_frame_ticks=number(19,98),corrections=number(25,98),retries=number(31,98))
+    if trace:
+        values['reconcile'] = {name: number(1+index*5,88) for index,name in
+                               enumerate(('before','server','expected','replayed','ack_pending','respawn_ignored','prediction_detail'))}
+    return values
+
+
+
+
 def main():
     from Xlib import X, display
     from Xlib.XK import string_to_keysym
@@ -32,6 +59,7 @@ def main():
     from PIL import Image
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rom', type=Path, default=Path(__file__).resolve().parents[1] / 'build/maze-war-lynx.lnx')
+    parser.add_argument("--reconcile-checks", action="store_true", help="drop an earlier corner input and decode the latched ROM disagreement")
     parser.add_argument("--movement-checks", action="store_true")
     parser.add_argument("--remote-jitter-checks", action="store_true", help="sample a remote sprite with irregularly spaced snapshot destinations")
     parser.add_argument("--death-checks", action="store_true")
@@ -48,7 +76,7 @@ def main():
         parser.error('--hold-ms must be positive')
     if not 1 <= args.snapshot_burst <= 4:
         parser.error('--snapshot-burst must be 1..4')
-    if sum((args.movement_checks, args.remote_jitter_checks, args.death_checks, args.round_checks, args.latency_checks, args.recovery_checks)) > 1:
+    if sum((args.movement_checks, args.remote_jitter_checks, args.death_checks, args.round_checks, args.latency_checks, args.recovery_checks, args.reconcile_checks)) > 1:
         parser.error('run movement, death, round, latency and recovery checks separately')
     if args.expect_stall and not args.recovery_checks:
         parser.error('--expect-stall requires --recovery-checks')
@@ -78,9 +106,10 @@ def main():
     if args.remote_jitter_checks:
         dead_slots = {2,3}
     remote_positions = [[7,17],[11,17],[15,17]]
-    simulate_moves = args.movement_checks or args.death_checks or args.latency_checks or args.recovery_checks
+    simulate_moves = args.movement_checks or args.death_checks or args.latency_checks or args.recovery_checks or args.reconcile_checks
     latency_results = {}
     recovery_results = {}
+    reconcile_results = {}
     drop_moves = 0
     dropped_inputs = []
     last_admitted = None
@@ -197,6 +226,7 @@ def main():
                                     dropped_inputs.append(list(p))
                                     drop = True
                             if drop:
+                                if args.reconcile_checks: drop_moves = 0
                                 pass
                             elif last_admitted is not None and not 0 < ((p[1]-last_admitted) & 255) < 128:
                                 duplicate_inputs += 1
@@ -222,12 +252,12 @@ def main():
             for y in range(19):
                 for x in range(20):
                     if x in (0,19) or y in (0,18) or (x,y) == (10,10) or (
-                            args.movement_checks and y == 16 and x != 6):
+                            (args.movement_checks or args.reconcile_checks) and y == 16 and x != 6):
                         cell = y*20+x
                         bricks[cell//8] |= 1 << (cell%8)
             return list(bricks)
 
-        def capture(name):
+        def capture(name, full=False):
             path = output / (name+'.png')
             if d is None:
                 subprocess.run(['import', '-display', env['DISPLAY'], '-window', 'root', str(path)], check=True, timeout=10)
@@ -236,7 +266,7 @@ def main():
                 geometry = root_window.get_geometry()
                 raw = root_window.get_image(0,0,geometry.width,geometry.height,X.ZPixmap,0xffffffff)
                 Image.frombytes('RGB',(geometry.width,geometry.height),raw.data,'raw','BGRX').save(path)
-            return Image.open(path).convert('RGB').crop((160,147,640,432)).resize((160,95), Image.Resampling.NEAREST)
+            return Image.open(path).convert('RGB').crop((160,147,640,453 if full else 432)).resize((160,102 if full else 95), Image.Resampling.NEAREST)
 
         send([0x47,1,1,0,10])
         service(.3)
@@ -267,6 +297,26 @@ def main():
             key_events.append(dict(key=name, down=down, at=time.monotonic()))
             xtest.fake_input(d,X.KeyPress if down else X.KeyRelease,d.keysym_to_keycode(string_to_keysym(name)))
             d.sync()
+        if args.reconcile_checks:
+            local[:] = [5,17]
+            send([0x52,53,0,5,17,3,round_id])
+            service(.35,True)
+            drop_moves = 1
+            key('Right',True); service(.06,True); key('Right',False)
+            key('Up',True); service(.06,True); key('Up',False)
+            # Copy of the just-accepted spawn must not delete queued corner.
+            send([0x52,54,0,5,17,3,round_id])
+            service(1.2,True)
+            key('x',True); service(.4,True)
+            trace_values = diagnostic_values(capture('reconcile-trace',full=True),trace=True)
+            key('x',False); service(.3,True)
+            trace = trace_values['reconcile']
+            assert len(dropped_inputs)==1 and local==[5,17], (dropped_inputs,local)
+            assert trace['before']==0x1006 and trace['server']==0x1105, trace
+            assert trace['expected']==0x1006 and trace['replayed']==0x1105, trace
+            assert trace['prediction_detail']==0x000e, trace
+            assert trace['respawn_ignored']>=1 and trace_values['corrections']==1, trace_values
+            reconcile_results=trace_values
         if args.remote_jitter_checks:
             remote_positions[0] = [4,12]
             send([0x52,58,1,4,12,3,round_id])
@@ -274,6 +324,16 @@ def main():
             image = capture('remote-before')
             robe = image.getpixel((35,61))
             assert robe != image.getpixel((32,60)), 'remote robe sample was floor'
+            # Rebuild after diagnostics with observations already buffered.
+            key('x',True); service(.2,True)
+            remote_positions[0][0]=5; snapshot(); service(.15,True)
+            remote_positions[0][0]=6; snapshot(); service(.02,True)
+            key('x',False); service(2,True)
+            rebuilt = capture('remote-first-draw-cleanup')
+            xs = [x for y in range(60,65) for x in range(8,152) if rebuilt.getpixel((x,y)) == robe]
+            assert xs and min(xs)==49, 'buffered first draw left a remote ghost'
+            remote_positions[0]=[4,12]
+            send([0x52,59,1,4,12,3,round_id]); service(.6,True)
             schedule = [(0,5),(.075,6),(.205,7),(.305,8),(.51,9),(.61,10)]
             samples, destinations = [], []
             started = time.monotonic()
@@ -471,7 +531,9 @@ def main():
         stable = capture('stable')
         key('x',True)
         service(.8,True)
-        capture('diagnostics')
+        diagnostic_image = capture('diagnostics',full=True)
+        diagnostics = diagnostic_values(diagnostic_image)
+        if args.latency_checks: latency_results['diagnostics'] = diagnostics
         key('x',False)
         service(2,True)
         restored = capture('restored')
@@ -545,7 +607,7 @@ def main():
         restarted = capture('new-round')
         assert restarted.getpixel((80,50)) == before.getpixel((80,50)), 'new round did not restore brick'
         result = dict(endpoint=endpoint, port=endpoint_port, input_lag_ms=args.input_lag_ms, snapshot_burst=args.snapshot_burst, remote_results=remote_results,
-                      movement_results=movement_results, death_results=death_results, round_results=round_results, latency_results=latency_results, recovery_results=recovery_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
+                      movement_results=movement_results, death_results=death_results, round_results=round_results, latency_results=latency_results, recovery_results=recovery_results, reconcile_results=reconcile_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
                       handy_sha256=hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),
                       received=dict(received), acknowledged=sorted(acked),
                       checks=['brick removal','bottom feet','border texture','fire input','movement input','diagnostics restoration','new round'],
@@ -575,7 +637,7 @@ def main():
                               remote_results={k:v for k,v in remote_results.items() if k != 'samples'}, snapshot_burst=args.snapshot_burst,
                               movement_results=movement_results, death_results=death_results, round_results=round_results,
                               latency_results={k:v for k,v in latency_results.items() if k not in ('samples','release_samples')}, rom_sha256=result['rom_sha256'],
-                              recovery_results=recovery_results,
+                              recovery_results=recovery_results, reconcile_results=reconcile_results,
                               acknowledged=sorted(acked)),indent=2))
     finally:
         (output/'input-events.json').write_text(json.dumps(dict(received=events, applied=applied_moves, keys=key_events),indent=2)+'\n')

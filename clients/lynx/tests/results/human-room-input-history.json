@@ -1,0 +1,375 @@
+{
+  "date": "2026-10-13",
+  "room": "human-only; concurrent human occupancy not yet confirmed",
+  "hardware": [
+    {
+      "photo": "ref/screenshots/IMG_20261013_071000.jpg",
+      "trace_hex": {
+        "P": "0C06",
+        "S": "0C04",
+        "E": "0C06",
+        "R": "0C04",
+        "A": "0055",
+        "J": "0007",
+        "K": "0007"
+      },
+      "bad_frames": 20,
+      "crc_failures": 3,
+      "sticky_serial_status_hex": "1C",
+      "corrections": 4,
+      "ack_delay_ticks": 15
+    },
+    {
+      "photo": "ref/screenshots/IMG_20261013_071048.jpg",
+      "trace_hex": {
+        "P": "0C0C",
+        "S": "0D0C",
+        "E": "0D0C",
+        "R": "0D0C",
+        "A": "02F7",
+        "J": "0002",
+        "K": "0607"
+      },
+      "bad_frames": 57,
+      "crc_failures": 4,
+      "sticky_serial_status_hex": "9C",
+      "corrections": 9,
+      "ack_delay_ticks": 35
+    }
+  ],
+  "interpretation": "First: successful Right forecast differs from applied server endpoint by two horizontal cells. Missing input versus changed server collision is not proved by K alone. Second: applied endpoint agrees with latest forecast, but two pending inputs replay differently; blocked Right forecast is recorded. B does not freeze gameplay or counters.",
+  "changes": [
+    "negotiated CRC-framed oldest-first pending input history",
+    "server validates whole batch and admits ordered prefixes under queue pressure",
+    "same-round full maps only remove bricks; new round initializes unknown map to FF",
+    "exclusive startup/game temporary buffers share storage; resident setup data separate",
+    "B diagnostic M marks confirmed history mode"
+  ],
+  "validation": {
+    "host_suite": "pass",
+    "actual_server_client_differential": "pass: lost precursor, duplicates, partial admission, sequence gaps/wrap, malformed batch, delayed map repair and new-round reset",
+    "legacy_input_queue_tcp_reliable_round": "pass",
+    "handy_actual_server": {
+      "artifacts": "/tmp/maze-handy-server-1m95jyht",
+      "results": {
+        "rom_sha256": "e3cf67484343a4baeb44f8be8e6a41bffdfd4c52cf9ad5ff32017150a8f83a21",
+        "server_sha256": "681a0cace9ddc7fd6cced993ac990af72a4469559e0d86c3003447c051499174",
+        "counts": {
+          "up": {
+            "0x46": 1,
+            "0x45": 13,
+            "0x43": 1,
+            "0x41": 1,
+            "0x59": 1,
+            "0x58": 38
+          },
+          "down": {
+            "0x47": 1,
+            "0x53": 14,
+            "reliable_0x55": 1,
+            "0x52": 12,
+            "0x44": 13,
+            "reliable_0x50": 2,
+            "0x43": 14,
+            "0x40": 132,
+            "reliable_0x52": 4,
+            "reliable_0x43": 1,
+            "0x59": 1,
+            "0x50": 4,
+            "0x51": 18,
+            "reliable_0x51": 6,
+            "0x42": 42
+          }
+        },
+        "diagnostics": {
+          "quiet_vbl_samples": 146,
+          "window_stall_vbl_samples": 0,
+          "input_history": 1,
+          "window": 2,
+          "ack_age_ticks": 5,
+          "pending": 0,
+          "diagnostic_frame_ticks": 10,
+          "corrections": 0,
+          "retries": 0
+        },
+        "dropped_history": [
+          88,
+          1,
+          1,
+          8,
+          7
+        ],
+        "checks": [
+          "actual server two-zombie session",
+          "handshake/name/map/reliable ACKs",
+          "movement/stop/turn/directional fire",
+          "applied input ACKs",
+          "periodic names direct only",
+          "diagnostics/maze return",
+          "negotiated input history",
+          "dropped moving frame repaired in later history"
+        ]
+      }
+    },
+    "handy_legacy_peer": {
+      "artifacts": "/tmp/maze-suzy-game-mdktljlw",
+      "results": {
+        "endpoint": "fujinet.online",
+        "port": 5025,
+        "input_lag_ms": 0,
+        "snapshot_burst": 1,
+        "remote_results": {
+          "destinations": [
+            {
+              "ms": 0.0,
+              "cell": 5
+            },
+            {
+              "ms": 76.5,
+              "cell": 6
+            },
+            {
+              "ms": 212.7,
+              "cell": 7
+            },
+            {
+              "ms": 324.8,
+              "cell": 8
+            },
+            {
+              "ms": 520.4,
+              "cell": 9
+            },
+            {
+              "ms": 624.2,
+              "cell": 10
+            }
+          ],
+          "samples": [
+            {
+              "ms": 42.9,
+              "left": 33
+            },
+            {
+              "ms": 76.5,
+              "left": 33
+            },
+            {
+              "ms": 137.0,
+              "left": 33
+            },
+            {
+              "ms": 176.0,
+              "left": 33
+            },
+            {
+              "ms": 212.7,
+              "left": 45
+            },
+            {
+              "ms": 247.9,
+              "left": 45
+            },
+            {
+              "ms": 284.9,
+              "left": 49
+            },
+            {
+              "ms": 324.8,
+              "left": 49
+            },
+            {
+              "ms": 362.4,
+              "left": 53
+            },
+            {
+              "ms": 401.2,
+              "left": 53
+            },
+            {
+              "ms": 441.9,
+              "left": 57
+            },
+            {
+              "ms": 483.7,
+              "left": 57
+            },
+            {
+              "ms": 520.4,
+              "left": 57
+            },
+            {
+              "ms": 553.4,
+              "left": 62
+            },
+            {
+              "ms": 589.2,
+              "left": 65
+            },
+            {
+              "ms": 624.2,
+              "left": 65
+            },
+            {
+              "ms": 659.9,
+              "left": 67
+            },
+            {
+              "ms": 696.4,
+              "left": 67
+            },
+            {
+              "ms": 732.7,
+              "left": 73
+            },
+            {
+              "ms": 767.8,
+              "left": 73
+            },
+            {
+              "ms": 803.8,
+              "left": 74
+            },
+            {
+              "ms": 838.5,
+              "left": 74
+            },
+            {
+              "ms": 873.8,
+              "left": 81
+            },
+            {
+              "ms": 908.8,
+              "left": 81
+            },
+            {
+              "ms": 943.2,
+              "left": 81
+            },
+            {
+              "ms": 976.9,
+              "left": 81
+            },
+            {
+              "ms": 1012.1,
+              "left": 81
+            },
+            {
+              "ms": 1049.8,
+              "left": 81
+            },
+            {
+              "ms": 1086.0,
+              "left": 81
+            },
+            {
+              "ms": 1124.3,
+              "left": 81
+            },
+            {
+              "ms": 1160.1,
+              "left": 81
+            },
+            {
+              "ms": 1195.4,
+              "left": 81
+            },
+            {
+              "ms": 1231.7,
+              "left": 81
+            },
+            {
+              "ms": 1268.3,
+              "left": 81
+            },
+            {
+              "ms": 1305.6,
+              "left": 81
+            }
+          ],
+          "distinct_positions": 11,
+          "largest_sample_gap_pixels": 12,
+          "stopped_left": 81
+        },
+        "movement_results": [],
+        "death_results": [],
+        "round_results": [],
+        "latency_results": {},
+        "recovery_results": {},
+        "reconcile_results": {},
+        "applied_moves": [],
+        "rom_sha256": "e3cf67484343a4baeb44f8be8e6a41bffdfd4c52cf9ad5ff32017150a8f83a21",
+        "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+        "received": {
+          "0x43": 1,
+          "0x45": 5,
+          "0x59": 19,
+          "0x41": 21
+        },
+        "acknowledged": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "checks": [
+          "brick removal",
+          "bottom feet",
+          "border texture",
+          "fire input",
+          "movement input",
+          "diagnostics restoration",
+          "new round"
+        ],
+        "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+      }
+    }
+  },
+  "rom": {
+    "bytes": 43252,
+    "sha256": "e3cf67484343a4baeb44f8be8e6a41bffdfd4c52cf9ad5ff32017150a8f83a21",
+    "endpoint": "fujinet.online:5025",
+    "stack_bytes": 2048,
+    "unallocated_before_stack": 27
+  },
+  "limits": [
+    "No claim hardware electrical loss is fixed",
+    "No Atari client update needed; old server fallback lacks history protection",
+    "No firmware modified or built",
+    "Hardware improvement confirmed by user and captured zero-correction session; serial receive errors remain."
+  ],
+  "hardware_acceptance": {
+    "photo": "ref/screenshots/IMG_20261013_075132.jpg",
+    "user_report": "Server deployed and latest ROM installed on real hardware; movement much better; acceptable checkpoint to commit.",
+    "input_history": 1,
+    "mode_field_explanation": "Middle-row M0001 confirms history. Reported M0002/M0004 is bottom-row W, the adaptive movement window, whose tiny glyph resembles M.",
+    "trace_hex": {
+      "P": "0000",
+      "S": "0000",
+      "E": "0000",
+      "R": "0000",
+      "A": "0000",
+      "J": "0007",
+      "K": "0000"
+    },
+    "live_state": {
+      "window": 4,
+      "ack_delay_ticks": 20,
+      "pending": 0,
+      "corrections": 0,
+      "input_retries": 4,
+      "quiet_vbl_samples": 79,
+      "window_stall_vbl_samples": 20,
+      "diagnostic_frame_ticks": 10
+    },
+    "receive_errors": {
+      "bad_frames": 65,
+      "crc_failures": 8,
+      "serial_status_changes": 4,
+      "sticky_raw_status_hex": "9C",
+      "client_ring_overflows": 0
+    },
+    "limits": "No corrections recorded in the captured session; receive errors remain and B does not pause counters. This does not prove all future snaps or electrical faults are eliminated."
+  }
+}

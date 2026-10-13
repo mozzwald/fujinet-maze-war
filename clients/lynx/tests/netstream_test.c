@@ -67,7 +67,10 @@ int main(void)
     setup(); rd=0;
     frame_encode(clear,sizeof(clear),rx,sizeof(rx)); used=5;
     game_sample_input(2,0,0); netstream_service(); assert(!sent);
+    assert(link_stats.quiet_ticks==1);
+    netstream_service(); assert(link_stats.quiet_ticks==1); /* same VBL */
     game_input_tick(1); netstream_service(); assert(!sent);
+    assert(link_stats.quiet_ticks==2);
     game_input_tick(2); netstream_service();
     assert(sent==9 && link_stats.last_frame_error==FRAME_ERROR_TRUNCATED);
     setup();
@@ -99,6 +102,27 @@ int main(void)
     link_stats.rx_bytes=0; /* A wrapped diagnostic counter is not bus quiet. */
     netstream_service(); assert(!sent);
     game_input_tick(2); netstream_service(); assert(sent==9);
+    /* Negotiation retries without changing the legacy DELTA path. A single
+       history CRC then covers all pending inputs, oldest first. */
+    setup(); game_input_tick(60); netstream_service();
+    assert(sent==15 && !game.input_history); /* offer(6) + neutral(9) */
+    static const uint8_t mode[]={0x59,1};
+    rd=0; used=frame_encode(mode,sizeof(mode),rx,sizeof(rx));
+    netstream_poll(); assert(game.input_history);
+    sent=0; game_sample_input(2,0,62); netstream_service();
+    game_sample_input(1,0,63); netstream_service();
+    frame_reset(&parser); uint8_t histories=0;
+    for(i=0;i<sent;++i) {
+        int result=frame_feed(&parser,tx[i],out,sizeof(out),&len);
+        assert(result>=0);
+        if(result) {
+            assert(out[0]==0x58 && out[1]==1);
+            assert(out[2]==++histories+1 && len==3+2*out[2]);
+            assert(out[4]==15 && out[6]==7);
+            if(histories==2) assert(out[8]==14);
+        }
+    }
+    assert(histories==2 && game.pending_count==3 && !reads_during_frame);
     puts("netstream tests passed: contiguous enqueue, complete/partial burst quiet handoff, timeout, bounded busy retry, valid CRC and fragment delimiter");
     return 0;
 }

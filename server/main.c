@@ -36,7 +36,9 @@ enum {
   PKT_MATCH_END = 0x54,
   PKT_ROUND_START = 0x55,
   PKT_LEAVE_ROOM = 0x56,
-  PKT_LEAVE_ACK = 0x57
+  PKT_LEAVE_ACK = 0x57,
+  PKT_INPUT_HISTORY = 0x58,
+  PKT_INPUT_MODE = 0x59
 };
 
 enum { MAX_PLAYERS = 4, MAX_ROOMS = 64, MAX_DEPARTING = MAX_PLAYERS };
@@ -295,6 +297,7 @@ struct room {
   uint64_t last_seat_ms;
   uint8_t last_seat_mask;
   int name_rotate;
+  uint8_t repair_rotate;
   uint8_t round_id;
   uint8_t round_state;
   uint8_t historical_zombie_mask;
@@ -1081,7 +1084,9 @@ static void broadcast_next_name(struct room *room, int debug) {
     }
     send_checked(&clients[t], pkt, sizeof(pkt));
   }
-  broadcast_reliable_event(clients, pkt, sizeof(pkt), seq, now_ms(), debug);
+  /* This is an unchanged periodic repair. Actual NAME submissions remain
+     direct + reliable; repeating them reliably here adds ACK turnarounds. */
+  (void)debug;
 }
 
 /* Every frame carries a CRC-16/CCITT-FALSE trailer.
@@ -1400,6 +1405,34 @@ static void handle_client_packet(struct room *room, int slot,
   /* Once leave begins, later frames on the same socket cannot mutate this
      seat. Duplicate LEAVE_ROOM was handled above and merely repeats the ACK. */
   if (client->leave_requested) return;
+
+  if (len == 2 && pkt[0] == PKT_INPUT_MODE && pkt[1] == 1) {
+    send_checked(client, pkt, len);
+    return;
+  }
+  if (len >= 3 && pkt[0] == PKT_INPUT_HISTORY) {
+    /* Validate the whole CRC-framed prefix before admitting any action.
+       Sequence gaps are allowed: ACKs/names share the sender's counter. */
+    unsigned count = pkt[2];
+    if (pkt[1] != room->round_id || count == 0 || count > 8 ||
+        len != 3 + 2 * count) return;
+    for (unsigned i = 0; i < count; ++i) {
+      uint8_t joy;
+      if (!sanitize_client_joy(pkt[4+2*i], &joy) ||
+          (i && (uint8_t)(pkt[3+2*i]-pkt[1+2*i]) == 0) ||
+          (i && (uint8_t)(pkt[3+2*i]-pkt[1+2*i]) >= 128)) return;
+    }
+    for (unsigned i = 0; i < count; ++i) {
+      uint8_t delta[DELTA_LEN] = {PKT_DELTA, pkt[3+2*i], (uint8_t)slot,
+                                 pkt[4+2*i], room->round_id};
+      if (!delta_seq_is_fresh(client, delta[1])) continue;
+      handle_client_packet(room, slot, delta, sizeof(delta), debug, now);
+      /* Queue pressure may accept only a prefix. Never skip a rejected
+         predecessor to admit a newer command; the next history repairs it. */
+      if (delta_seq_is_fresh(client, delta[1])) break;
+    }
+    return;
+  }
 
   if (len == 4 && pkt[0] == PKT_RELIABLE_ACK) {
     uint16_t ack = (uint16_t)pkt[2] | ((uint16_t)pkt[3] << 8);
@@ -2004,6 +2037,10 @@ static void step_shots(struct room *room, int debug,
   struct client_slot *clients = room->clients;
   uint8_t *seq = &room->seq;
   uint64_t now = now_ms();
+  uint8_t active_at_entry = 0;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (shots[i].active) active_at_entry |= (uint8_t)(1u << i);
+  }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (!shots[i].active) {
       continue;
@@ -2012,7 +2049,7 @@ static void step_shots(struct room *room, int debug,
     int ny = (int)shots[i].y + shots[i].dy;
     if (nx < 0 || nx > 19 || ny < 0 || ny > 18) {
       shots[i].active = 0;
-      shots[i].clear_burst = 3;
+      shots[i].clear_burst = 2;
       uint8_t pkt[SHOT_LEN];
       build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, pkt,
                  sizeof(pkt));
@@ -2059,7 +2096,7 @@ static void step_shots(struct room *room, int debug,
         }
       }
       shots[i].active = 0;
-      shots[i].clear_burst = 3;
+      shots[i].clear_burst = 2;
       uint8_t spkt[SHOT_LEN];
       build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, spkt,
                  sizeof(spkt));
@@ -2085,7 +2122,7 @@ static void step_shots(struct room *room, int debug,
         }
       }
       shots[i].active = 0;
-      shots[i].clear_burst = 3;
+      shots[i].clear_burst = 2;
       uint8_t spkt[SHOT_LEN];
       build_shot((*seq)++, (uint8_t)i, 0, 0, 0, room->round_id, spkt,
                  sizeof(spkt));
@@ -2113,7 +2150,7 @@ static void step_shots(struct room *room, int debug,
   // Re-send shot clear a few ticks after a shot ends to heal over UDP loss
   // without flooding the link with full shot state every frame.
   for (int i = 0; i < MAX_PLAYERS; i++) {
-    if (shots[i].clear_burst == 0) {
+    if (shots[i].clear_burst == 0 || (active_at_entry & (1u << i))) {
       continue;
     }
     shots[i].clear_burst--;
@@ -2948,8 +2985,20 @@ static void service_room_timers(struct room *room, int debug, uint64_t now) {
 static void tick_room(struct room *room, int debug, uint64_t now) {
   uint64_t tick_deadline = room->next_tick;
   if (room->round_state == ROUND_PLAYING) {
-    flush_brick_echo(room, debug);
-    flush_respawn_echo(room, debug);
+    /* Keep both repair counts, but share one tick's repair budget. Prefer
+       alternating classes so a brick burst cannot starve respawn repair. */
+    int have_brick = 0, have_respawn = 0;
+    for (int i = 0; i < BRICK_ECHO_MAX; i++)
+      have_brick |= room->brick_echo[i].left != 0;
+    for (int i = 0; i < MAX_PLAYERS; i++)
+      have_respawn |= room->respawn_echo[i].left != 0;
+    if (have_respawn && (!have_brick || room->repair_rotate)) {
+      flush_respawn_echo(room, debug);
+      room->repair_rotate = 0;
+    } else if (have_brick) {
+      flush_brick_echo(room, debug);
+      room->repair_rotate = 1;
+    }
     apply_queued_input(room, debug, now);
     step_players(room, debug);
   }

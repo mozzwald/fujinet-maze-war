@@ -1,5 +1,6 @@
 #include "setup.h"
 #include "command.h"
+#include "phase_scratch.h"
 #include <string.h>
 #ifndef SERVER_HOST
 #define SERVER_HOST "127.0.0.1"
@@ -24,8 +25,8 @@ typedef char host_fits_setup[(sizeof(SERVER_HOST) <= 63) ? 1 : -1];
 typedef char rooms_fit_menu[(ROOM_COUNT > 0 && ROOM_COUNT <= 4) ? 1 : -1];
 
 struct client_setup client_setup;
-static uint8_t response[256];
-static uint8_t record[189];
+#define response phase_scratch.setup.response
+#define record phase_scratch.setup.record
 
 void setup_defaults(void)
 {

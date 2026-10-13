@@ -1,0 +1,1097 @@
+{
+  "date": "2026-10-13",
+  "status": "Reproduced two correction mechanisms; duplicate respawn fixed; instrumented ROM awaits hardware trace",
+  "rom_sha256": "0c1b909be7efe7da8f86afd34d03864662643b73f23eba8473352bba6544b0a2",
+  "rom_bytes": 42804,
+  "differential_tests": [
+    "same delayed corner without loss: zero corrections",
+    "lost Right, admitted Up: P0406 S0505 E0406 R0505",
+    "respawn duplicate preserves moved actor and pending corner",
+    "old reliable hide ignored; new death accepted",
+    "clock/sequence wrap",
+    "remote occupancy changes pending replay"
+  ],
+  "negative_control": "Removing new RESPawn stamp handling reproduces moved-player/pending-corner assertion failure",
+  "runs": {
+    "dropped_corner": {
+      "artifacts": "/tmp/maze-suzy-game-sl6_u9xl",
+      "results": {
+        "endpoint": "fujinet.online",
+        "port": 5025,
+        "input_lag_ms": 300.0,
+        "snapshot_burst": 1,
+        "remote_results": {},
+        "movement_results": [],
+        "death_results": [],
+        "round_results": [],
+        "latency_results": {},
+        "recovery_results": {},
+        "reconcile_results": {
+          "quiet_vbl_samples": 70,
+          "window_stall_vbl_samples": 0,
+          "window": 4,
+          "ack_age_ticks": 28,
+          "pending": 0,
+          "diagnostic_frame_ticks": 8,
+          "corrections": 1,
+          "retries": 0,
+          "reconcile": {
+            "before": 4102,
+            "server": 4357,
+            "expected": 4102,
+            "replayed": 4357,
+            "ack_pending": 265,
+            "respawn_ignored": 1
+          }
+        },
+        "applied_moves": [
+          {
+            "seq": 3,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2828913.162080331
+          },
+          {
+            "seq": 4,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2828914.079734577
+          },
+          {
+            "seq": 5,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2828915.340697769
+          },
+          {
+            "seq": 7,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2828916.149800242
+          },
+          {
+            "seq": 9,
+            "joy": 14,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2828917.229508473
+          },
+          {
+            "seq": 10,
+            "joy": 15,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2828917.331747186
+          },
+          {
+            "seq": 11,
+            "joy": 15,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2828918.249577258
+          },
+          {
+            "seq": 12,
+            "joy": 31,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2828919.159010868
+          },
+          {
+            "seq": 13,
+            "joy": 15,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2828919.570720757
+          },
+          {
+            "seq": 14,
+            "joy": 7,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828919.985039682
+          },
+          {
+            "seq": 15,
+            "joy": 7,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828920.189131989
+          },
+          {
+            "seq": 16,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828920.391898298
+          },
+          {
+            "seq": 17,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828921.310885706
+          },
+          {
+            "seq": 18,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828922.737618484
+          },
+          {
+            "seq": 19,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828923.654075973
+          },
+          {
+            "seq": 20,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828925.557803525
+          },
+          {
+            "seq": 22,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828925.659429849
+          },
+          {
+            "seq": 24,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828925.962872774
+          },
+          {
+            "seq": 25,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828926.978819073
+          }
+        ],
+        "rom_sha256": "0c1b909be7efe7da8f86afd34d03864662643b73f23eba8473352bba6544b0a2",
+        "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+        "received": {
+          "0x43": 1,
+          "0x45": 5,
+          "0x41": 20
+        },
+        "acknowledged": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "checks": [
+          "brick removal",
+          "bottom feet",
+          "border texture",
+          "fire input",
+          "movement input",
+          "diagnostics restoration",
+          "new round"
+        ],
+        "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+      }
+    },
+    "burst_delayed_taps": {
+      "artifacts": "/tmp/maze-suzy-game-8c9oh630",
+      "results": {
+        "endpoint": "fujinet.online",
+        "port": 5025,
+        "input_lag_ms": 300.0,
+        "snapshot_burst": 3,
+        "remote_results": {},
+        "movement_results": [
+          {
+            "tap_ms": 60,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              4,
+              17
+            ]
+          },
+          {
+            "tap_ms": 120,
+            "before": [
+              4,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ]
+          },
+          {
+            "tap_ms": 160,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ]
+          },
+          {
+            "turn": "Up then Right while Up held",
+            "after": [
+              7,
+              15
+            ]
+          }
+        ],
+        "death_results": [],
+        "round_results": [],
+        "latency_results": {},
+        "recovery_results": {},
+        "applied_moves": [
+          {
+            "seq": 3,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2828724.11484829
+          },
+          {
+            "seq": 4,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2828725.033680138
+          },
+          {
+            "seq": 6,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2828726.085313576
+          },
+          {
+            "seq": 7,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2828727.108174712
+          },
+          {
+            "seq": 8,
+            "joy": 7,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              4,
+              17
+            ],
+            "at": 2828727.522261715
+          },
+          {
+            "seq": 9,
+            "joy": 15,
+            "before": [
+              4,
+              17
+            ],
+            "after": [
+              4,
+              17
+            ],
+            "at": 2828727.626924477
+          },
+          {
+            "seq": 10,
+            "joy": 15,
+            "before": [
+              4,
+              17
+            ],
+            "after": [
+              4,
+              17
+            ],
+            "at": 2828728.544221311
+          },
+          {
+            "seq": 11,
+            "joy": 7,
+            "before": [
+              4,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2828729.258778872
+          },
+          {
+            "seq": 12,
+            "joy": 15,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2828729.359907409
+          },
+          {
+            "seq": 13,
+            "joy": 15,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2828730.391162877
+          },
+          {
+            "seq": 14,
+            "joy": 7,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828731.117967866
+          },
+          {
+            "seq": 15,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828731.219784544
+          },
+          {
+            "seq": 16,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2828732.242548446
+          },
+          {
+            "seq": 17,
+            "joy": 14,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              16
+            ],
+            "at": 2828733.055988114
+          },
+          {
+            "seq": 18,
+            "joy": 15,
+            "before": [
+              6,
+              16
+            ],
+            "after": [
+              6,
+              16
+            ],
+            "at": 2828733.157678456
+          },
+          {
+            "seq": 19,
+            "joy": 15,
+            "before": [
+              6,
+              16
+            ],
+            "after": [
+              6,
+              16
+            ],
+            "at": 2828734.085477448
+          },
+          {
+            "seq": 20,
+            "joy": 14,
+            "before": [
+              6,
+              16
+            ],
+            "after": [
+              6,
+              15
+            ],
+            "at": 2828734.397679109
+          },
+          {
+            "seq": 21,
+            "joy": 7,
+            "before": [
+              6,
+              15
+            ],
+            "after": [
+              7,
+              15
+            ],
+            "at": 2828734.498848154
+          },
+          {
+            "seq": 22,
+            "joy": 15,
+            "before": [
+              7,
+              15
+            ],
+            "after": [
+              7,
+              15
+            ],
+            "at": 2828734.600853673
+          },
+          {
+            "seq": 23,
+            "joy": 15,
+            "before": [
+              7,
+              15
+            ],
+            "after": [
+              7,
+              15
+            ],
+            "at": 2828735.620735496
+          },
+          {
+            "seq": 24,
+            "joy": 31,
+            "before": [
+              7,
+              15
+            ],
+            "after": [
+              7,
+              15
+            ],
+            "at": 2828736.136537376
+          },
+          {
+            "seq": 25,
+            "joy": 15,
+            "before": [
+              7,
+              15
+            ],
+            "after": [
+              7,
+              15
+            ],
+            "at": 2828736.549103533
+          },
+          {
+            "seq": 26,
+            "joy": 7,
+            "before": [
+              7,
+              15
+            ],
+            "after": [
+              8,
+              15
+            ],
+            "at": 2828736.962264613
+          },
+          {
+            "seq": 27,
+            "joy": 7,
+            "before": [
+              8,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828737.164228121
+          },
+          {
+            "seq": 28,
+            "joy": 15,
+            "before": [
+              9,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828737.265342735
+          },
+          {
+            "seq": 29,
+            "joy": 15,
+            "before": [
+              9,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828738.283022021
+          },
+          {
+            "seq": 30,
+            "joy": 15,
+            "before": [
+              9,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828739.30342982
+          },
+          {
+            "seq": 31,
+            "joy": 15,
+            "before": [
+              9,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828740.326376212
+          },
+          {
+            "seq": 32,
+            "joy": 15,
+            "before": [
+              9,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828741.238443807
+          },
+          {
+            "seq": 34,
+            "joy": 15,
+            "before": [
+              9,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828742.530400147
+          },
+          {
+            "seq": 36,
+            "joy": 15,
+            "before": [
+              9,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828742.946295856
+          },
+          {
+            "seq": 37,
+            "joy": 15,
+            "before": [
+              9,
+              15
+            ],
+            "after": [
+              9,
+              15
+            ],
+            "at": 2828743.969023486
+          }
+        ],
+        "rom_sha256": "0c1b909be7efe7da8f86afd34d03864662643b73f23eba8473352bba6544b0a2",
+        "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+        "received": {
+          "0x43": 1,
+          "0x45": 5,
+          "0x41": 34
+        },
+        "acknowledged": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "checks": [
+          "brick removal",
+          "bottom feet",
+          "border texture",
+          "fire input",
+          "movement input",
+          "diagnostics restoration",
+          "new round"
+        ],
+        "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+      }
+    },
+    "actual_server": {
+      "artifacts": "/tmp/maze-handy-server-v5jl53fv",
+      "results": {
+        "rom_sha256": "0c1b909be7efe7da8f86afd34d03864662643b73f23eba8473352bba6544b0a2",
+        "server_sha256": "fcf37123819d7bd36b6ade03882127dd0a6b487e6c655d4cb6d27b9789cc0933",
+        "counts": {
+          "up": {
+            "0x46": 1,
+            "0x45": 16,
+            "0x43": 1,
+            "0x41": 46
+          },
+          "down": {
+            "0x47": 1,
+            "0x53": 16,
+            "reliable_0x55": 1,
+            "0x52": 9,
+            "0x44": 14,
+            "reliable_0x50": 1,
+            "0x43": 14,
+            "0x40": 132,
+            "reliable_0x52": 3,
+            "reliable_0x43": 1,
+            "0x51": 30,
+            "reliable_0x51": 10,
+            "0x50": 4,
+            "0x42": 33
+          }
+        },
+        "diagnostics": {
+          "quiet_vbl_samples": 136,
+          "window_stall_vbl_samples": 0,
+          "window": 2,
+          "ack_age_ticks": 8,
+          "pending": 0,
+          "diagnostic_frame_ticks": 7,
+          "corrections": 0,
+          "retries": 0
+        },
+        "checks": [
+          "actual server two-zombie session",
+          "handshake/name/map/reliable ACKs",
+          "movement/stop/turn/directional fire",
+          "applied input ACKs",
+          "periodic names direct only",
+          "diagnostics/maze return"
+        ]
+      }
+    },
+    "startup": {
+      "artifacts": "/tmp/maze-lynx-startup-hvtpe2f_",
+      "results": {
+        "firmware": false,
+        "ack_noise": true,
+        "new_name": false,
+        "failed_save": false,
+        "http404": false,
+        "edit_checks": false,
+        "reload": false,
+        "name": "ACE LYNX",
+        "commands": [
+          {
+            "device": 112,
+            "payload": [
+              220,
+              34,
+              48,
+              3,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "device": 112,
+            "payload": [
+              221
+            ]
+          },
+          {
+            "device": 112,
+            "payload": [
+              219
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              79,
+              4,
+              0,
+              78,
+              49,
+              58,
+              104,
+              116,
+              116,
+              112,
+              115,
+              58,
+              47,
+              47,
+              108,
+              111,
+              98,
+              98,
+              121,
+              46,
+              102,
+              117,
+              106,
+              105,
+              110,
+              101,
+              116,
+              46,
+              111,
+              110,
+              108,
+              105,
+              110,
+              101,
+              47,
+              118,
+              105,
+              101,
+              119,
+              63,
+              98,
+              105,
+              110,
+              61,
+              49,
+              38,
+              112,
+              108,
+              97,
+              116,
+              102,
+              111,
+              114,
+              109,
+              61,
+              97,
+              116,
+              97,
+              114,
+              105,
+              38,
+              97,
+              112,
+              112,
+              107,
+              101,
+              121,
+              61,
+              51,
+              38,
+              112,
+              97,
+              103,
+              101,
+              115,
+              105,
+              122,
+              101,
+              61,
+              52,
+              38,
+              112,
+              97,
+              103,
+              101,
+              61,
+              48,
+              0
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              83
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              82
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              83
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              82
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              83
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              82
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              83
+            ]
+          },
+          {
+            "device": 113,
+            "payload": [
+              67
+            ]
+          },
+          {
+            "device": 112,
+            "payload": [
+              240,
+              161,
+              19,
+              102,
+              117,
+              106,
+              105,
+              110,
+              101,
+              116,
+              46,
+              111,
+              110,
+              108,
+              105,
+              110,
+              101,
+              0,
+              1
+            ]
+          }
+        ],
+        "http_requests": [
+          "N1:https://lobby.fujinet.online/view?bin=1&platform=atari&appkey=3&pagesize=4&page=0"
+        ],
+        "rom_sha256": "0c1b909be7efe7da8f86afd34d03864662643b73f23eba8473352bba6544b0a2",
+        "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+        "checks": [
+          "name resolved before HTTP",
+          "Lobby waits for selection",
+          "selected endpoint",
+          "HELLO/WELCOME",
+          "NAME survives WELCOME"
+        ]
+      }
+    }
+  },
+  "host_suite": "passed",
+  "memory": {
+    "free_before_stack": 27,
+    "stack_reserved": 2048
+  },
+  "limits": [
+    "Hardware cause not yet attributed",
+    "Cumulative ACK cannot recover older input once newer admitted",
+    "Respawn dedup horizon one second; no generation ID",
+    "No firmware changes or new server deployment required"
+  ]
+}

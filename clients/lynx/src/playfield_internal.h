@@ -6,48 +6,8 @@ struct overlay_position {
 };
 
 static struct overlay_position visual[GAME_PLAYERS];
-static struct overlay_position authoritative[GAME_PLAYERS];
 static struct overlay_position old_players[2][GAME_PLAYERS];
 static struct overlay_position old_shots[2][GAME_PLAYERS];
-
-/* The full 20x19 maze uses 8x5 cells. The remaining seven rows are HUD. */
-static const uint8_t floor_tile[20] = {
-    0x11, 0x11, 0x11, 0x11,
-    0x11, 0x11, 0x11, 0x11,
-    0x11, 0x11, 0x11, 0x11,
-    0x11, 0x11, 0x11, 0x11,
-    0x11, 0x11, 0x11, 0x11
-};
-static const uint8_t wall_even[20] = {
-    0x99, 0x99, 0x99, 0x99,
-    0x77, 0x17, 0x77, 0x17,
-    0x78, 0x81, 0x78, 0x87,
-    0x77, 0x17, 0x77, 0x17,
-    0x66, 0x66, 0x66, 0x66
-};
-static const uint8_t wall_odd[20] = {
-    0x99, 0x99, 0x99, 0x99,
-    0x77, 0x71, 0x77, 0x71,
-    0x77, 0x87, 0x78, 0x81,
-    0x77, 0x71, 0x77, 0x71,
-    0x66, 0x66, 0x66, 0x66
-};
-static const uint8_t border_tile[20] = {
-    0xDD, 0xDE, 0xDD, 0xDE,
-    0xDE, 0xDD, 0xDE, 0xDD,
-    0xDD, 0xED, 0xDD, 0xED,
-    0xDE, 0xDD, 0xDE, 0xDD,
-    0xDD, 0xDD, 0xDD, 0xDD
-};
-
-/* The five-pixel silhouette fits a single open maze row. */
-static const char *const wizard[5] = {
-    "..CC....",
-    ".CCCCCC.",
-    "..PPWC..",
-    "..CCCCC.",
-    ".CSSSSC."
-};
 
 static uint8_t wall_at(const uint8_t *bricks, uint8_t x, uint8_t y)
 {
@@ -55,7 +15,7 @@ static uint8_t wall_at(const uint8_t *bricks, uint8_t x, uint8_t y)
     return (bricks[index >> 3] >> (index & 7)) & 1;
 }
 
-static uint8_t visual_cell_clear(const struct game_state *state, uint8_t slot,
+static uint8_t visual_cell_clear(const struct game_view *state, uint8_t slot,
                                  uint8_t x, uint8_t y)
 {
     uint8_t i;
@@ -71,7 +31,7 @@ static uint8_t visual_cell_clear(const struct game_state *state, uint8_t slot,
     return 1;
 }
 
-static uint8_t visual_footprint_clear(const struct game_state *state,
+static uint8_t visual_footprint_clear(const struct game_view *state,
                                       uint8_t slot, uint8_t px, uint8_t py)
 {
     uint8_t x0 = px / 8;
@@ -103,7 +63,75 @@ static uint8_t single_leg(uint8_t x, uint8_t y, uint8_t tx, uint8_t ty)
            (x == tx && (y > ty ? y-ty : ty-y) <= 5);
 }
 
-static void move_visual(uint8_t i, const struct game_state *state)
+#ifndef LYNX_RENDER_HOST
+/* These helpers finish before any serial callback; none can reenter. */
+#pragma static-locals (push, on)
+#endif
+static uint8_t interpolate(uint8_t from, uint8_t to, uint8_t elapsed, uint8_t ticks)
+{
+    uint8_t distance = from > to ? from-to : to-from;
+    distance = distance * elapsed / ticks;
+    return from > to ? from-distance : from+distance;
+}
+
+/* Set up the same interpolation engine from two buffered observations. */
+static void remote_segment(uint8_t slot, const struct game_view *state)
+{
+    const struct game_motion *path = &state->motion[slot];
+    struct visual_motion *m = &motion[slot];
+    uint16_t view = state->input_clock - GAME_REMOTE_DELAY;
+    uint16_t span;
+    uint8_t count, n, a, b, tx, ty;
+    count = path->serial > GAME_MOTION_POINTS ? GAME_MOTION_POINTS : (uint8_t)path->serial;
+    m->progress = 0;
+    m->next = state->players[slot].x * 8 | ((uint16_t)(state->players[slot].y * 5) << 8);
+    if (!count) return;
+    a = (path->serial - count) % GAME_MOTION_POINTS;
+    b = a;
+    for (n = 0; n < count; ++n) {
+        b = (path->serial - count + n) % GAME_MOTION_POINTS;
+        if ((uint16_t)(view - path->at[b]) >= 0x8000u) break;
+        a = b;
+    }
+    m->from_x = path->x[a] * 8; m->from_y = path->y[a] * 5;
+    tx = path->x[b] * 8; ty = path->y[b] * 5;
+    m->next = m->from_x | ((uint16_t)m->from_y << 8);
+    span = (uint16_t)(path->at[b] - path->at[a]);
+    if (span && span <= 18 &&
+        ((m->from_y == ty && (m->from_x > tx ? m->from_x-tx : tx-m->from_x) <= 16) ||
+         (m->from_x == tx && (m->from_y > ty ? m->from_y-ty : ty-m->from_y) <= 10)) &&
+        visual_footprint_clear(state,slot,(m->from_x+tx)/2,(m->from_y+ty)/2)) {
+        m->next = tx | ((uint16_t)ty << 8);
+        m->tick = path->at[a] + GAME_REMOTE_DELAY;
+        m->progress = (uint8_t)span;
+    }
+}
+
+static void shot_visual(const struct game_view *state,
+                        const struct game_shot *shot, uint8_t *px, uint8_t *py)
+{
+    uint16_t span = (uint16_t)(shot->at - shot->previous_at);
+    uint16_t elapsed = (uint16_t)(state->input_clock - GAME_SHOT_DELAY - shot->previous_at);
+    uint8_t x = shot->x * 8 + 3, y = shot->y * 5 + 2;
+    uint8_t ax = shot->previous_x * 8 + 3, ay = shot->previous_y * 5 + 2;
+    if (shot->segment && span && span <= 18 &&
+        ((shot->direction == 0 && ay == y && ax < x && x-ax <= 16) ||
+         (shot->direction == 1 && ax == x && ay < y && y-ay <= 10) ||
+         (shot->direction == 2 && ay == y && ax > x && ax-x <= 16) ||
+         (shot->direction == 3 && ax == x && ay > y && ay-y <= 10))) {
+        if (elapsed >= 0x8000u) elapsed = 0;
+        if (elapsed < span) {
+            x = interpolate(ax,x,(uint8_t)elapsed,(uint8_t)span);
+            y = interpolate(ay,y,(uint8_t)elapsed,(uint8_t)span);
+        }
+    }
+    *px = x; *py = y;
+}
+
+#ifndef LYNX_RENDER_HOST
+#pragma static-locals (pop)
+#endif
+static void move_visual(uint8_t i, const struct game_view *state)
 {
     const struct game_player *player = &state->players[i];
     const struct game_motion *path = &state->motion[i];
@@ -113,6 +141,11 @@ static void move_visual(uint8_t i, const struct game_state *state)
     uint8_t x, y, index, ticks;
     uint16_t target = tx | ((uint16_t)ty << 8);
     uint16_t elapsed;
+    if (i != state->local_pid && !state->phase) {
+        remote_segment(i,state);
+        tx = (uint8_t)m->next; ty = (uint8_t)(m->next >> 8);
+        goto animate;
+    }
     if (!position->valid ||
 #if defined(LYNX_LOCAL_CELL_TEST) && LYNX_LOCAL_CELL_TEST
         i == state->local_pid ||
@@ -158,19 +191,29 @@ static void move_visual(uint8_t i, const struct game_state *state)
         m->progress = ticks ? ticks : GAME_MOVE_TICKS;
         m->next = target; m->epoch = path->epoch;
     }
-    if (!m->progress) return;
+animate:
+    if (!m->progress) goto place;
     elapsed = (uint16_t)(state->input_clock - m->tick);
-    if (elapsed >= 0x8000u) return;
+    if (elapsed >= 0x8000u) {
+        if (!visual_footprint_clear(state,i,m->from_x,m->from_y)) goto place;
+        position->x = m->from_x; position->y = m->from_y;
+        position->valid = 1;
+        return;
+    }
     if (elapsed >= m->progress) goto place;
     ticks = (uint8_t)elapsed;
-    x = tx >= m->from_x ? m->from_x + (tx-m->from_x)*ticks/m->progress :
-                          m->from_x - (m->from_x-tx)*ticks/m->progress;
-    y = ty >= m->from_y ? m->from_y + (ty-m->from_y)*ticks/m->progress :
-                          m->from_y - (m->from_y-ty)*ticks/m->progress;
+    x = interpolate(m->from_x,tx,ticks,m->progress);
+    y = interpolate(m->from_y,ty,ticks,m->progress);
     if (!visual_footprint_clear(state,i,x,y)) goto place;
     position->x = x; position->y = y;
+    /* A remote can start inside a buffered segment before ever reaching
+       place:. Both page caches must remember and erase this first draw. */
+    position->valid = 1;
     return;
 place:
+    if (i != state->local_pid && !visual_footprint_clear(state,i,tx,ty)) {
+        tx = player->x * 8; ty = player->y * 5;
+    }
     position->x = tx; position->y = ty; position->valid = 1;
     m->next = target; m->epoch = path->epoch; m->progress = 0;
 }

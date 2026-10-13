@@ -308,6 +308,42 @@ and `I` (same-sequence input retries). `D` and `F` are in 60 Hz VBL ticks. Frame
 repeat-stall/intent-overflow counters are also available in debugger state.
 `game.input_retries` counts same-sequence retry transmissions.
 The earlier `F` field remains the serial frame-error code.
+The small `P/S/E/R/A/J/K` row latches the last prediction/server disagreement:
+before, server, expected ACK endpoint, replayed endpoint, packed pending/ACK
+sequence, ignored respawn-copy count and prediction result/input joy. Cells use hexadecimal `$YYXX`.
+After a snap, hold B and photograph the full screen. See
+[RECONCILIATION-RESULTS.md](tests/RECONCILIATION-RESULTS.md) for decoding,
+reproductions, the duplicate-respawn fix and limits.
+The `U/S/M` row adds `U` (distinct VBLs sampled waiting for serial quiet)
+and `S` (distinct VBLs sampled with a due repeat blocked by its input window).
+`M0001` means the server confirmed input-history support; `M0000` means the
+client is still using legacy DELTAs. The Lynx offers mode 1 once per second
+until confirmed, then sends all pending input sequence/joy pairs in one
+CRC-framed packet, oldest first. A lost older move can be recovered before a
+newer turn is admitted. Deploy the updated `build/maze-war-server` to enable
+this protection; existing Atari clients need no update. Old servers ignore
+the offer and remain usable, without the new recovery guarantee.
+These are session counters, not elapsed durations or collision counts. `U`
+includes idle receive traffic. Holding B changes rendering load; diagnostic
+`F` must not be interpreted as the gameplay frame interval.
+
+### Buffered remote players and projectiles
+
+Remote players use four timestamped observations and render about 100 ms behind
+their arrivals. Only short, clear cardinal segments interpolate; ambiguous
+corners/teleports rejoin observed cells. Missing data holds the last observation.
+Projectiles interpolate observed forward travel with a 50 ms display delay.
+Clear, hit, death and respawn messages still take effect immediately. Local
+prediction and stopping bounds are unchanged; smoothing never predicts combat.
+
+The immutable render snapshot now copies only the shared `game_view` prefix;
+a compile-time layout check protects that copy. Existing maze/player artwork
+is preencoded by `tools/generate_maze_sprites.py` from `src/maze_art.h`, preserving
+counted tile packets and literal guard bytes. These changes fit the observation
+buffers while retaining the full 2 KB stack and graphics placement checks.
+
+Measurements, combined actual-server Handy testing and deployment notes are in
+[OPTIMIZATION-RESULTS.md](tests/OPTIMIZATION-RESULTS.md).
 
 ### ComLynx processing and transmit scheduling
 
@@ -496,8 +532,9 @@ stop/reconnect requirement remains a gate before a complete client.
 
 ### Hardware startup regression diagnostics
 
-The user confirms the current ROM works on real hardware without the previous
-black/corrupted frozen menu.
+The user confirms checkpoint `067c92e` works on real hardware without the previous
+black/corrupted frozen menu. The subsequent optimization ROM retains that graphics
+fix and layout checks; its hardware verification is pending.
 [BOOT-RESULTS.md](tests/BOOT-RESULTS.md) records the previous working ROM,
 the separate startup diagnostic, checkpoint meanings, checks and limitations.
 

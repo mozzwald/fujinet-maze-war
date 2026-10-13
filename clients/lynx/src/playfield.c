@@ -1,6 +1,10 @@
 #include "playfield.h"
 #include "colors.h"
+#include "phase_scratch.h"
 #include <string.h>
+#include <stddef.h>
+
+typedef char view_prefix_must_match[(offsetof(struct game_state,names) == sizeof(struct game_view)) ? 1 : -1];
 #ifdef LYNX_RENDER_HOST
 #include "suzy_host.h"
 #else
@@ -16,7 +20,7 @@ static uint8_t cached_bricks[2][GAME_BRICK_BYTES];
 static uint8_t cached_valid[2];
 static uint8_t cached_round[2];
 static uint8_t cached_ready[2];
-static uint8_t dirty[GAME_BRICK_BYTES];
+#define dirty phase_scratch.play.dirty
 #ifdef LYNX_RENDER_HOST
 static SCB_REHV_PAL scbs[8];
 #else
@@ -33,11 +37,10 @@ static uint8_t queued;
 #define WIZARD_BYTES (5 * WIZARD_ROW + 1)
 #define DEATH_ROW 8
 #define DEATH_BYTES (9 * DEATH_ROW + 1)
-static uint8_t tile_sprites[4][36];
-static uint8_t wizard_sprites[8][WIZARD_BYTES];
+#include "maze_sprites.h"
 static const uint8_t shot_sprite[] = {3,0x9f,0,3,0x90,0,0};
 static uint8_t sprites_ready;
-static struct game_state frame_state;
+#define frame_state phase_scratch.play.frame
 static uint8_t clipped_wizards[GAME_PLAYERS][WIZARD_BYTES];
 static uint8_t fire_sprites[GAME_PLAYERS][4];
 static uint8_t clipped_deaths[GAME_PLAYERS][DEATH_BYTES];
@@ -46,81 +49,16 @@ static uint8_t have_round;
 static uint8_t visual_round;
 static void (*serial_pump)(void);
 
-/* Alternate raised arms, feet and facing without leaving the walking cell. */
-static const char *const dance[4][5] = {
-    {"..CC....", ".CCCCCC.", "C.PPWC.C", "..CCCCC.", ".CSS.C.."},
-    {"....CC..", ".CCCCCC.", ".CWPP.C.", "CCCCCC.C", "..C.SSC."},
-    {"..CC....", ".CCCCCC.", ".CPPWC..", "C.CCCCC.", "..C.SSC."},
-    {"....CC..", ".CCCCCC.", "C.CWPP.C", ".CCCCC..", "..CSS.C."}
-};
-
-static const uint8_t *cell_tile(const struct game_state *state,
-                               uint8_t x, uint8_t y)
+static uint8_t cell_tile(const struct game_view *state, uint8_t x, uint8_t y)
 {
-    if (!state->map_ready || !wall_at(state->bricks, x, y)) return floor_tile;
-    if (x == 0 || x == 19 || y == 0 || y == 18) return border_tile;
-    return (y & 1) ? wall_odd : wall_even;
+    if (!state->map_ready || !wall_at(state->bricks, x, y)) return 0;
+    if (x == 0 || x == 19 || y == 0 || y == 18) return 3;
+    return (y & 1) ? 2 : 1;
 }
 
 static void make_sprites(void)
 {
-    uint8_t i, y, x, pen, source_x;
-    const uint8_t *tiles[4];
-    uint8_t *out;
-    tiles[0] = floor_tile; tiles[1] = wall_even;
-    tiles[2] = wall_odd; tiles[3] = border_tile;
-    for (i = 0; i < 4; ++i) {
-        out = tile_sprites[i];
-        for (y = 0; y < 5; ++y) {
-            const uint8_t *row = tiles[i] + y * 4;
-            /* Literal packet: 1 + count-minus-one (0111) + eight 4-bit
-               pens + 00000 end marker + padding. Exactly eight pixels. */
-            *out++ = 7;
-            *out++ = 0xb8 | (row[0] >> 5);
-            *out++ = (row[0] << 3) | (row[1] >> 5);
-            *out++ = (row[1] << 3) | (row[2] >> 5);
-            *out++ = (row[2] << 3) | (row[3] >> 5);
-            *out++ = row[3] << 3;
-            *out++ = 0;
-        }
-        *out = 0;
-        memset(wizard_sprites[i], 0, WIZARD_BYTES);
-        for (y = 0; y < 5; ++y) {
-            out = wizard_sprites[i] + y * WIZARD_ROW;
-            *out++ = WIZARD_ROW;
-            for (x = 0; x < 8; ++x) {
-                source_x = (i & 1) ? 7 - x : x;
-                switch (wizard[y][source_x]) {
-                case 'C': pen = 1; break;
-                case 'P': pen = 2; break;
-                case 'W': pen = 3; break;
-                case 'S': pen = 4; break;
-                default: pen = 0;
-                }
-                if ((i & 2) && x == 0 && y == 2) pen = 3;
-                if (x & 1) out[x >> 1] |= pen;
-                else out[x >> 1] = (uint8_t)(pen << 4);
-            }
-        }
-    }
-    for (i = 0; i < 4; ++i) {
-        memset(wizard_sprites[4+i], 0, WIZARD_BYTES);
-        for (y = 0; y < 5; ++y) {
-            out = wizard_sprites[4+i] + y*WIZARD_ROW;
-            *out++ = WIZARD_ROW;
-            for (x = 0; x < 8; ++x) {
-                switch (dance[i][y][x]) {
-                case 'C': pen = 1; break;
-                case 'P': pen = 2; break;
-                case 'W': pen = 3; break;
-                case 'S': pen = 4; break;
-                default: pen = 0;
-                }
-                if (x & 1) out[x >> 1] |= pen;
-                else out[x >> 1] = pen << 4;
-            }
-        }
-    }
+    uint8_t i, x;
     for (i = 0; i < 8; ++i) {
         scbs[i].sprctl1 = LITERAL | REHV;
         scbs[i].sprcoll = NO_COLLIDE;
@@ -141,11 +79,11 @@ static void flush(void)
     if (serial_pump) serial_pump();
 }
 
-static void queue(uint8_t *data, uint8_t x, uint8_t y,
+static void queue(const uint8_t *data, uint8_t x, uint8_t y,
                   uint8_t transparent, uint8_t wizard_color)
 {
     SCB_REHV_PAL *scb = &scbs[queued];
-    scb->data = data;
+    scb->data = (uint8_t *)data;
     scb->hpos = x; scb->vpos = y;
     scb->sprctl0 = BPP_4 | (transparent ? TYPE_NONCOLL : TYPE_BACKNONCOLL);
     scb->sprctl1 = REHV | (transparent ? LITERAL : 0);
@@ -180,21 +118,19 @@ static void mark_rect(uint8_t x, uint8_t y, uint8_t w, uint8_t h)
         }
 }
 
-static void queue_tile(const struct game_state *state, uint8_t x, uint8_t y)
+static void queue_tile(const struct game_view *state, uint8_t x, uint8_t y)
 {
-    const uint8_t *tile = cell_tile(state, x, y);
-    uint8_t id = tile == floor_tile ? 0 : tile == wall_even ? 1 :
-                 tile == wall_odd ? 2 : 3;
+    uint8_t id = cell_tile(state, x, y);
     queue(tile_sprites[id], x * 8, y * 5, 0, 0);
 }
 
-static uint8_t actor_clear(const struct game_state *state, uint8_t x, uint8_t y)
+static uint8_t actor_clear(const struct game_view *state, uint8_t x, uint8_t y)
 {
     return x < PLAYFIELD_W && y < PLAYFIELD_H &&
         (!state->map_ready || !wall_at(state->bricks, x / 8, y / 5));
 }
 
-static uint8_t *wizard_image(const struct game_state *state, uint8_t slot,
+static const uint8_t *wizard_image(const struct game_view *state, uint8_t slot,
                               uint8_t image, uint8_t x, uint8_t y)
 {
     uint8_t row, col;
@@ -216,7 +152,7 @@ static uint8_t *wizard_image(const struct game_state *state, uint8_t slot,
     return data;
 }
 
-static void queue_fire(const struct game_state *state, uint8_t slot,
+static void queue_fire(const struct game_view *state, uint8_t slot,
                         uint8_t x, uint8_t y)
 {
     uint8_t facing = state->input_joy & 15;
@@ -234,7 +170,7 @@ static void queue_fire(const struct game_state *state, uint8_t slot,
     queue(fire_sprites[slot], px, py, 1, 0);
 }
 
-static void draw_deaths(uint8_t page_index, const struct game_state *state)
+static void draw_deaths(uint8_t page_index, const struct game_view *state)
 {
     uint8_t i, x, y, row, col, image, cy, cx, previous_cx, clear;
     uint16_t elapsed;
@@ -282,22 +218,23 @@ static void draw_deaths(uint8_t page_index, const struct game_state *state)
 }
 
 uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
-                       const struct game_state *state, void (*pump)(void))
+                       const struct game_state *source, void (*pump)(void))
 {
     uint8_t i, bit, mask, x, y, facing, image, repaint, round_stage;
     uint16_t cell;
+    const struct game_view *state;
     const struct game_player *player;
     struct overlay_position *position;
     const struct game_shot *shot;
-    if (!page || !state || page_index > 1) return 0;
+    if (!page || !source || page_index > 1) return 0;
 #ifdef LYNX_RENDER_HOST
     suzy_test_target(page);
 #endif
     /* Poll callbacks apply live packets. Keep every cell and actor in this
        frame on one immutable revision while those callbacks run. */
-    memcpy(&frame_state, state, sizeof(frame_state));
+    memcpy(&frame_state, source, sizeof(frame_state));
     state = &frame_state;
-    round_stage = game_round_stage(state);
+    round_stage = game_round_stage(source);
     if (round_stage) {
         /* Presentation belongs to this immutable frame, never occupancy. */
         memset(frame_state.deaths, 0, sizeof(frame_state.deaths));
@@ -320,7 +257,6 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
     serial_pump = pump;
     if (!have_round || visual_round != state->round_id) {
         memset(visual, 0, sizeof(visual));
-        memset(authoritative, 0, sizeof(authoritative));
         visual_round = state->round_id;
         have_round = 1;
     }
@@ -372,7 +308,10 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
             shot = &state->shots[i];
             old_shots[page_index][i].valid = 0;
             if (!shot->active || shot->x >= 20 || shot->y >= 18) continue;
-            x = shot->x * 8 + 3; y = shot->y * 5 + 2;
+            shot_visual(state,shot,&x,&y);
+            /* New wall data must never paint a delayed projectile in brick. */
+            if (!actor_clear(state,x,y) || !actor_clear(state,x+1,y) ||
+                !actor_clear(state,x,y+1) || !actor_clear(state,x+1,y+1)) continue;
             queue((uint8_t *)shot_sprite, x, y, 1, 0);
             old_shots[page_index][i].x = x;
             old_shots[page_index][i].y = y;
@@ -401,7 +340,6 @@ uint8_t playfield_draw(uint8_t *page, uint8_t page_index,
         }
     } else {
         memset(visual, 0, sizeof(visual));
-        memset(authoritative, 0, sizeof(authoritative));
         memset(old_players[page_index], 0, sizeof(old_players[page_index]));
         memset(old_shots[page_index], 0, sizeof(old_shots[page_index]));
         memset(old_deaths[page_index], 0, sizeof(old_deaths[page_index]));
@@ -416,7 +354,6 @@ void playfield_invalidate(void)
 {
     memset(cached_valid, 0, sizeof(cached_valid));
     memset(visual, 0, sizeof(visual));
-    memset(authoritative, 0, sizeof(authoritative));
     memset(old_players, 0, sizeof(old_players));
     memset(old_shots, 0, sizeof(old_shots));
     memset(old_deaths, 0, sizeof(old_deaths));
@@ -432,5 +369,10 @@ void playfield_invalidate_page(uint8_t page_index)
 void playfield_visual_position(uint8_t slot, uint8_t *x, uint8_t *y)
 {
     *x = visual[slot].x; *y = visual[slot].y;
+}
+uint8_t playfield_shot_position(uint8_t page, uint8_t slot, uint8_t *x, uint8_t *y)
+{
+    *x = old_shots[page][slot].x; *y = old_shots[page][slot].y;
+    return old_shots[page][slot].valid;
 }
 #endif

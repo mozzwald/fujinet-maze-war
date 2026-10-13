@@ -110,6 +110,11 @@ STRLEN          := tmp4
 
 .bss
 
+; 8 rows with (one offset-byte plus 20 character bytes plus one fill-byte) plus one 0-offset-byte.
+; Retain a background fill-byte on every row for Suzy's last-pixel workaround.
+        .align 256
+text_bitmap:    .res    8*(1+20+1)+1
+
 ERROR:          .res    1       ; Error code
 
 DRAWINDEX:      .res    1       ; Pen to use for drawing
@@ -127,11 +132,6 @@ BGINDEX:        .res    1       ; Pen to use for text background
 ; Double buffer IRQ stuff
 DRAWPAGE:       .res    1
 SWAPREQUEST:    .res    1
-
-; 8 rows with (one offset-byte plus 20 character bytes plus one fill-byte) plus one 0-offset-byte.
-; Retain a background fill-byte on every row for Suzy's last-pixel workaround.
-        .align 256
-text_bitmap:    .res    8*(1+20+1)+1
 
 ; Constants and tables
 

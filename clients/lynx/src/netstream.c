@@ -19,7 +19,9 @@
 #define HELLO_RETRY_FRAMES 6
 #define HELLO_DEADLINE_FRAMES 600
 #define RX_FRAME_WAIT_TICKS 2 /* Longest wire frame is under 12 ms at 62500. */
+#ifndef RX_QUIET_TICKS
 #define RX_QUIET_TICKS 2 /* At least one whole VBL without received bytes. */
+#endif
 /* lynx-comlynx.ser returns raw Mikey bits plus software RX overflow, not
    the generic serial.h status layout. Include RX break, exclude PARBIT. */
 #define SERIAL_ERROR_MASK 0x9e
@@ -36,6 +38,7 @@ static uint16_t handshake_frames;
 static uint8_t hello_cooldown;
 static uint16_t last_rx_at;
 static uint8_t rx_seen;
+static uint16_t quiet_counted;
 
 static uint8_t enable_raw_tcp(const char *host, uint16_t port)
 {
@@ -59,6 +62,7 @@ static void handle_frame(const uint8_t *payload, uint8_t len)
         link_stats.round_phase = payload[3];
         link_stats.kill_limit = payload[4];
         link_state = LINK_WELCOME;
+        handshake_frames = command_clock(); /* Reuse as capability retry time. */
     } else if (len == 3 && payload[0] == 0x48) {
         link_stats.reject_reason = payload[2];
         link_state = LINK_REJECT;
@@ -185,6 +189,7 @@ uint8_t netstream_start(const char *host, uint16_t port)
     handshake_frames = 0;
     last_rx_at = 0;
     rx_seen = 0;
+    quiet_counted = command_clock() - 1;
     hello_cooldown = 0;
     link_state = LINK_STARTING;
     if (!host || !port) {
@@ -218,17 +223,24 @@ uint8_t netstream_start(const char *host, uint16_t port)
 
 void netstream_service(void)
 {
-    uint8_t payload[11];
+    uint8_t payload[3 + 2 * GAME_PENDING_INPUTS];
     uint8_t len;
     uint8_t i;
+    uint8_t n;
+    uint16_t now;
     netstream_poll();
     if (link_state != LINK_WELCOME) return;
     for (i = 0; i < 2; ++i) {
         /* A COBS boundary is not the end of FujiNet's serial burst. RX is
            disabled during TX: wait for quiet even after a complete frame. */
-        if (rx_seen &&
-            (uint16_t)(command_clock() - last_rx_at) < RX_QUIET_TICKS)
+        now = command_clock();
+        if (rx_seen && (uint16_t)(now - last_rx_at) < RX_QUIET_TICKS) {
+            if (quiet_counted != now) {
+                ++link_stats.quiet_ticks;
+                quiet_counted = now;
+            }
             return;
+        }
         if (frame_rx.used || frame_rx.discarding) {
             /* Recheck after every send: its RX poll can start another frame.
                A truncated frame cannot prevent recovery indefinitely. */
@@ -238,12 +250,26 @@ void netstream_service(void)
             ++link_stats.bad_frames;
             link_stats.last_frame_error = FRAME_ERROR_TRUNCATED;
         }
-        len = game_next_outbound(payload, sizeof(payload));
+        if (!game.input_history && (uint16_t)(now-handshake_frames) >= 60) {
+            payload[0] = 0x59; payload[1] = 1; len = 2;
+            handshake_frames = now;
+        } else len = game_next_outbound(payload, sizeof(payload));
         if (!len) break;
+        if (game.input_history && payload[0] == 0x41 && game.pending_count) {
+            /* One CRC covers the entire ordered prefix. Losing a frame
+               cannot admit its newest action without its predecessors. */
+            payload[0] = 0x58; payload[1] = game.round_id;
+            payload[2] = game.pending_count; len = 3;
+            for (n = 0; n < game.pending_count; ++n) {
+                payload[len++] = game.pending_seq[n];
+                payload[len++] = game.pending_joy[n];
+            }
+        }
         if (!send_payload(payload, len)) {
             link_state = LINK_TX_ERROR;
             break;
         }
+
     }
 }
 

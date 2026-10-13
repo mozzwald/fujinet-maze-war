@@ -9,6 +9,7 @@
 #include "colors.h"
 #include "command.h"
 
+
 extern SCB_REHV_PAL maze_text_scb;
 struct render_timing render_timing;
 static uint16_t last_render_at;
@@ -67,6 +68,10 @@ static const char *link_message(void)
 static void draw_diagnostics(void)
 {
     char latency[36] = "W0000 D0000 Q0000 F0000 C0000 I0000";
+    char waits[18] = "U0000 S0000 M0000";
+    char state[36];
+    static const char labels[] = "PSERAJK";
+    uint8_t field;
     tgi_setcolor(COLOR_YELLOW);
     tgi_outtextxy(4, 2, "MAZE WAR LYNX");
     tgi_setcolor(link_state == LINK_WELCOME ? COLOR_LIGHTGREEN : COLOR_WHITE);
@@ -82,9 +87,15 @@ static void draw_diagnostics(void)
     diagnostic_field(84, 64, 'S', link_stats.serial_status);
     diagnostic_field(4, 76, 'F', link_stats.last_frame_error);
     diagnostic_field(84, 76, 'C', link_stats.crc_errors);
-    diagnostic_field(4, 88, 'A', game.reliable_rev);
-    diagnostic_field(84, 88, 'G', (uint16_t)((game.round_authorized << 2) |
-                         (game.map_ready << 1) | game.snapshot_ready));
+    for (field=0; field<TRACE_WORDS; ++field) {
+        state[field*5] = labels[field];
+        hex_word(state+field*5+1,reconcile_trace[field]);
+    }
+    render_small_text(4,88,state);
+    hex_word(waits+1,link_stats.quiet_ticks); waits[5]=' ';
+    hex_word(waits+7,game.repeat_stalls); waits[11]=' ';
+    hex_word(waits+13,game.input_history);
+    render_small_text(4,93,waits);
     if (link_state == LINK_COMMAND_ERROR)
         render_small_text(4,98,command_error_text());
     else {

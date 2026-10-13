@@ -135,7 +135,7 @@ int main(void)
     /* Old-round events advance the stream without changing the new map. */
     reliable(5, old_brick, sizeof(old_brick));
     ack(5);
-    assert(game.bricks[10] == 0x10);
+    assert(game.bricks[10] == 0xff); /* Unknown new map, old-round delta ignored. */
     brick[51] = 2;
     assert(game_receive(brick, sizeof(brick)) == 1);
     assert(!game.map_ready); /* direct repair does not authorize a round */

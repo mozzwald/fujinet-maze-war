@@ -13,10 +13,14 @@
 #define GAME_REPEAT_PENDING 2
 #define GAME_REPEAT_MAX 4 /* Leave server queue room for turns and release. */
 #ifndef GAME_MOTION_POINTS
-#define GAME_MOTION_POINTS 8
+#define GAME_MOTION_POINTS 4 /* 400 ms observation history; local uses last two. */
 #endif
+typedef char motion_ring_must_be_power_of_two[(GAME_MOTION_POINTS >= 2 &&
+    GAME_MOTION_POINTS <= 8 && !(GAME_MOTION_POINTS & (GAME_MOTION_POINTS-1))) ? 1 : -1];
 #define GAME_MOVE_TICKS 6
 #define GAME_PRESS_TICKS 3 /* Fast initial tap/turn; held steps stay 100 ms. */
+#define GAME_REMOTE_DELAY 6 /* One observed 10 Hz interval; never extrapolate. */
+#define GAME_SHOT_DELAY 3 /* Shorter delay; clears/hits remain immediate. */
 #define GAME_RETRY_MIN 30 /* 500 ms; at most two retry frames/second. */
 #define GAME_RETRY_MAX 120 /* Cap recovery timeout at two seconds. */
 struct game_motion {
@@ -50,6 +54,8 @@ struct game_shot {
     uint8_t y;
     uint8_t active;
     uint8_t direction;
+    uint8_t previous_x, previous_y, segment;
+    uint16_t at, previous_at;
 };
 
 /* Presentation only: this location never participates in occupancy. */
@@ -58,13 +64,35 @@ struct game_death {
     uint8_t x, y, active;
 };
 
+/* Shared prefix lets rendering snapshot only the fields it reads. */
+#define GAME_VIEW_FIELDS \
+    struct game_player players[GAME_PLAYERS]; \
+    struct game_shot shots[GAME_PLAYERS]; \
+    struct game_death deaths[GAME_PLAYERS]; \
+    uint8_t bricks[GAME_BRICK_BYTES]; \
+    struct game_motion motion[GAME_PLAYERS]; \
+    uint8_t seat_mask; \
+    uint8_t zombie_mask; \
+    uint8_t local_pid; \
+    uint8_t round_id; \
+    uint8_t phase; \
+    uint8_t map_ready; \
+    uint8_t snapshot_ready; \
+    uint8_t input_joy; \
+    uint8_t fire_cue_frames; \
+    uint8_t winner_pid; \
+    uint8_t result_valid; \
+    uint16_t input_clock; \
+    uint16_t result_started;
+
+struct game_view {
+    GAME_VIEW_FIELDS
+};
+
 struct game_state {
-    struct game_player players[GAME_PLAYERS];
-    struct game_shot shots[GAME_PLAYERS];
-    struct game_death deaths[GAME_PLAYERS];
+    GAME_VIEW_FIELDS
     uint8_t names[GAME_PLAYERS][GAME_NAME_LEN];
     uint8_t local_name[GAME_NAME_LEN];
-    uint8_t bricks[GAME_BRICK_BYTES];
     uint8_t pending_snapshot[21];
     uint16_t reliable_rev;
     uint16_t packets_applied;
@@ -72,21 +100,11 @@ struct game_state {
     uint16_t snapshots;
     uint16_t ack_sent;
     uint8_t have_welcome;
-    uint8_t round_id;
-    uint8_t phase;
     uint8_t kill_limit;
-    uint8_t local_pid;
-    uint8_t seat_mask;
-    uint8_t zombie_mask;
-    uint8_t winner_pid;
-    uint8_t result_valid;
     uint8_t result_zombie_history;
-    uint16_t result_started;
     uint8_t sound_events[GAME_PLAYERS];
     uint8_t sound_brick;
     uint8_t round_authorized;
-    uint8_t map_ready;
-    uint8_t snapshot_ready;
     uint8_t pending_snapshot_valid;
     uint8_t ack_pending;
     uint8_t delta_due;
@@ -94,7 +112,6 @@ struct game_state {
     uint8_t name_age;
     uint8_t heartbeat_age;
     uint8_t tx_seq;
-    uint8_t input_joy;
     uint8_t leave_seq;
     uint8_t leave_requested;
     uint8_t leave_acked;
@@ -107,9 +124,6 @@ struct game_state {
     uint16_t retry_at, input_retries;
     uint16_t local_corrections;
     uint8_t repeat_window, pending_highwater;
-    struct game_motion motion[GAME_PLAYERS];
-    uint8_t fire_cue_frames;
-    uint16_t input_clock;
     uint16_t repeat_at;
     uint16_t last_input_at;
     uint8_t sent_joy;
@@ -117,9 +131,15 @@ struct game_state {
     uint8_t intent_count;
     uint8_t intents[GAME_INPUT_INTENTS];
     uint8_t direction_mask;
+    uint8_t input_history;
 };
+#undef GAME_VIEW_FIELDS
 
 extern struct game_state game;
+/* Last model disagreement; packed positions are $YYXX, ACK is $pending/seq. */
+enum { TRACE_BEFORE, TRACE_SERVER, TRACE_EXPECTED, TRACE_REPLAYED, TRACE_ACK,
+       TRACE_RESPAWN_IGNORED, TRACE_DETAIL, TRACE_WORDS };
+extern uint16_t reconcile_trace[TRACE_WORDS];
 
 void game_reset(void);
 void game_set_name(const char *name);

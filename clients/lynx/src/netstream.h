@@ -29,6 +29,7 @@ struct link_stats {
     uint8_t round_phase;
     uint8_t kill_limit;
     uint8_t reject_reason;
+    uint16_t quiet_ticks;
 };
 
 extern struct link_stats link_stats;

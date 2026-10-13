@@ -1,0 +1,539 @@
+{
+  "date": "2026-10-13",
+  "hardware_screenshots": {
+    "remnants": "ref/screenshots/IMG_20261013_063729.jpg",
+    "trace": "ref/screenshots/IMG_20261013_063814.jpg"
+  },
+  "decoded_trace_hex": {
+    "P": "1112",
+    "S": "1012",
+    "E": "1112",
+    "R": "1012",
+    "A": "010E",
+    "J": "0047"
+  },
+  "received_errors": {
+    "bad_frames": 56,
+    "crc_failures": 4,
+    "serial_status_changes": 3,
+    "sticky_raw_status_hex": "1C",
+    "software_ring_overflows": 0
+  },
+  "live_state": {
+    "window": 4,
+    "ack_delay_ticks": 28,
+    "pending": 0,
+    "corrections": 13,
+    "input_retries": 2
+  },
+  "interpretation": "Applied endpoint differs from client forecast; receive-path damage recorded. Upstream loss versus stale collision state remains unresolved; new K records direction/result. B does not pause.",
+  "regression": "first buffered remote interpolation omitted valid flag; old sprite positions not restored on both pages",
+  "negative_control": "new pixel cleanup assertion failed before valid-flag fix",
+  "tests": {
+    "remote_cleanup_jitter": {
+      "artifacts": "/tmp/maze-suzy-game-ttbmd9vj",
+      "results": {
+        "endpoint": "fujinet.online",
+        "port": 5025,
+        "input_lag_ms": 0,
+        "snapshot_burst": 1,
+        "remote_results": {
+          "destinations": [
+            {
+              "ms": 0.0,
+              "cell": 5
+            },
+            {
+              "ms": 76.3,
+              "cell": 6
+            },
+            {
+              "ms": 209.1,
+              "cell": 7
+            },
+            {
+              "ms": 329.2,
+              "cell": 8
+            },
+            {
+              "ms": 547.1,
+              "cell": 9
+            },
+            {
+              "ms": 640.3,
+              "cell": 10
+            }
+          ],
+          "samples": [
+            {
+              "ms": 34.1,
+              "left": 33
+            },
+            {
+              "ms": 76.3,
+              "left": 33
+            },
+            {
+              "ms": 109.7,
+              "left": 33
+            },
+            {
+              "ms": 158.6,
+              "left": 33
+            },
+            {
+              "ms": 209.1,
+              "left": 34
+            },
+            {
+              "ms": 243.4,
+              "left": 49
+            },
+            {
+              "ms": 295.4,
+              "left": 49
+            },
+            {
+              "ms": 329.2,
+              "left": 49
+            },
+            {
+              "ms": 362.8,
+              "left": 54
+            },
+            {
+              "ms": 404.5,
+              "left": 54
+            },
+            {
+              "ms": 457.5,
+              "left": 59
+            },
+            {
+              "ms": 493.1,
+              "left": 59
+            },
+            {
+              "ms": 547.1,
+              "left": 65
+            },
+            {
+              "ms": 596.8,
+              "left": 65
+            },
+            {
+              "ms": 640.3,
+              "left": 65
+            },
+            {
+              "ms": 711.3,
+              "left": 65
+            },
+            {
+              "ms": 757.3,
+              "left": 73
+            },
+            {
+              "ms": 812.7,
+              "left": 74
+            },
+            {
+              "ms": 873.2,
+              "left": 74
+            },
+            {
+              "ms": 912.1,
+              "left": 81
+            },
+            {
+              "ms": 975.3,
+              "left": 81
+            },
+            {
+              "ms": 1018.7,
+              "left": 81
+            },
+            {
+              "ms": 1068.3,
+              "left": 81
+            },
+            {
+              "ms": 1109.7,
+              "left": 81
+            },
+            {
+              "ms": 1155.4,
+              "left": 81
+            },
+            {
+              "ms": 1197.8,
+              "left": 81
+            },
+            {
+              "ms": 1231.5,
+              "left": 81
+            },
+            {
+              "ms": 1265.4,
+              "left": 81
+            },
+            {
+              "ms": 1299.4,
+              "left": 81
+            },
+            {
+              "ms": 1335.1,
+              "left": 81
+            }
+          ],
+          "distinct_positions": 9,
+          "largest_sample_gap_pixels": 15,
+          "stopped_left": 81
+        },
+        "movement_results": [],
+        "death_results": [],
+        "round_results": [],
+        "latency_results": {},
+        "recovery_results": {},
+        "reconcile_results": {},
+        "applied_moves": [],
+        "rom_sha256": "a603d9cb63b105a8f539fc3d9f77aa85747d739cfc1e79fc477d8cd935f7371d",
+        "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+        "received": {
+          "0x43": 1,
+          "0x45": 5,
+          "0x41": 22
+        },
+        "acknowledged": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "checks": [
+          "brick removal",
+          "bottom feet",
+          "border texture",
+          "fire input",
+          "movement input",
+          "diagnostics restoration",
+          "new round"
+        ],
+        "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+      }
+    },
+    "known_lost_input_K_trace": {
+      "artifacts": "/tmp/maze-suzy-game-pqxfdkxy",
+      "results": {
+        "endpoint": "fujinet.online",
+        "port": 5025,
+        "input_lag_ms": 300.0,
+        "snapshot_burst": 1,
+        "remote_results": {},
+        "movement_results": [],
+        "death_results": [],
+        "round_results": [],
+        "latency_results": {},
+        "recovery_results": {},
+        "reconcile_results": {
+          "quiet_vbl_samples": 79,
+          "window_stall_vbl_samples": 0,
+          "window": 4,
+          "ack_age_ticks": 26,
+          "pending": 1,
+          "diagnostic_frame_ticks": 8,
+          "corrections": 1,
+          "retries": 0,
+          "reconcile": {
+            "before": 4102,
+            "server": 4357,
+            "expected": 4102,
+            "replayed": 4357,
+            "ack_pending": 265,
+            "respawn_ignored": 1,
+            "prediction_detail": 14
+          }
+        },
+        "applied_moves": [
+          {
+            "seq": 3,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2830482.948951123
+          },
+          {
+            "seq": 4,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2830483.969341712
+          },
+          {
+            "seq": 5,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2830485.123241752
+          },
+          {
+            "seq": 7,
+            "joy": 15,
+            "before": [
+              3,
+              17
+            ],
+            "after": [
+              3,
+              17
+            ],
+            "at": 2830485.93153685
+          },
+          {
+            "seq": 9,
+            "joy": 14,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2830487.070569416
+          },
+          {
+            "seq": 10,
+            "joy": 15,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2830487.171923497
+          },
+          {
+            "seq": 11,
+            "joy": 15,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2830488.19719442
+          },
+          {
+            "seq": 12,
+            "joy": 31,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2830489.01195086
+          },
+          {
+            "seq": 13,
+            "joy": 15,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              5,
+              17
+            ],
+            "at": 2830489.42349529
+          },
+          {
+            "seq": 14,
+            "joy": 7,
+            "before": [
+              5,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830489.836022379
+          },
+          {
+            "seq": 15,
+            "joy": 7,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830490.038352069
+          },
+          {
+            "seq": 16,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830490.240413505
+          },
+          {
+            "seq": 17,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830491.256155204
+          },
+          {
+            "seq": 18,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830492.590953431
+          },
+          {
+            "seq": 19,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830493.510250308
+          },
+          {
+            "seq": 20,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830495.426354481
+          },
+          {
+            "seq": 22,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830495.527511018
+          },
+          {
+            "seq": 24,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830495.934162853
+          },
+          {
+            "seq": 25,
+            "joy": 15,
+            "before": [
+              6,
+              17
+            ],
+            "after": [
+              6,
+              17
+            ],
+            "at": 2830496.944427041
+          }
+        ],
+        "rom_sha256": "a603d9cb63b105a8f539fc3d9f77aa85747d739cfc1e79fc477d8cd935f7371d",
+        "handy_sha256": "a45da99f5d879692eee9861f1f21a0fedd66e11b876c6f45770c2874e2f1840e",
+        "received": {
+          "0x43": 1,
+          "0x45": 5,
+          "0x41": 20
+        },
+        "acknowledged": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "checks": [
+          "brick removal",
+          "bottom feet",
+          "border texture",
+          "fire input",
+          "movement input",
+          "diagnostics restoration",
+          "new round"
+        ],
+        "method": "Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN"
+      }
+    }
+  },
+  "rom_sha256": "a603d9cb63b105a8f539fc3d9f77aa85747d739cfc1e79fc477d8cd935f7371d",
+  "rom_bytes": 42932,
+  "hardware_status": "awaiting new ROM confirmation and K trace",
+  "host_suite": "passed including both-page first-draw cleanup",
+  "differential_suite": "passed including K060E stale-wall and K0707 stale-player predictions"
+}

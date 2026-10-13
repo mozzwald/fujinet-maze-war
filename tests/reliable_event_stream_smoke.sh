@@ -101,10 +101,10 @@ with socket.create_connection(("127.0.0.1", port), timeout=1.0) as sock:
     if elapsed >= 0.25:
         fail(f"fast retransmit took {elapsed:.3f}s")
 
-    # ACKing revision 4 should advance to revision 5. The server may have
-    # queued later name-rotation events by now, but stop-and-wait must send only
-    # the next oldest reliable event, not a whole pending window.
+    # Periodic NAME repair is now direct-only. Enqueue a genuine rename for
+    # revision 5; stop-and-wait must not retransmit beyond that unacked event.
     send_frame(sock, bytes([PKT_RELIABLE_ACK, 3, rev & 0xff, rev >> 8]))
+    send_frame(sock, bytes([PKT_NAME, 4, 0]) + b"RENAMED ")
     second = wait_reliable(sock)
     rev2 = second[2] | (second[3] << 8)
     if rev2 != 5:

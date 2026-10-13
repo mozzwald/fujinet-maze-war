@@ -18,6 +18,18 @@
 #define PKT_LEAVE_ACK 0x57
 
 struct game_state game;
+uint16_t reconcile_trace[TRACE_WORDS];
+static uint16_t pending_position[GAME_PENDING_INPUTS];
+static uint8_t pending_cause[GAME_PENDING_INPUTS];
+static uint16_t acknowledged_detail;
+struct respawn_stamp { uint16_t at, cell; uint8_t seq, flags; };
+static struct respawn_stamp respawn_stamp[GAME_PLAYERS];
+static uint8_t respawn_stamped;
+
+static uint16_t local_position(void)
+{
+    return game.players[game.local_pid].x | ((uint16_t)game.players[game.local_pid].y << 8);
+}
 
 static uint8_t coordinate_ok(uint8_t x, uint8_t y)
 {
@@ -81,6 +93,8 @@ static uint8_t packet_valid(const uint8_t *p, uint8_t len, uint8_t reliable)
         return reliable && len == 3 && p[2] > 0 && p[2] <= 10;
     case PKT_LEAVE_ACK:
         return !reliable && len == 2;
+    case 0x59: /* Opt-in input-history support; old servers ignore the offer. */
+        return !reliable && len == 2 && p[1] == 1;
     default:
         return 0;
     }
@@ -104,8 +118,10 @@ static void motion_append(uint8_t id, uint8_t x, uint8_t y, uint8_t ticks)
     m->x[n] = x; m->y[n] = y; m->at[n] = game.input_clock;
     m->ticks[n] = ticks;
     ++m->serial;
+    /* Power-of-two rings retain their indexing when the counter wraps. */
+    if (!m->serial) m->serial = GAME_MOTION_POINTS;
 }
-static void predict_input(uint8_t joy)
+static uint8_t predict_input(uint8_t joy)
 {
     struct game_player *local;
     uint8_t stick = joy & 15;
@@ -113,45 +129,53 @@ static void predict_input(uint8_t joy)
     uint8_t y;
     uint8_t i;
     uint16_t cell;
-    if (!game_ready() || game.local_pid >= GAME_PLAYERS) return;
+    if (!game_ready() || game.local_pid >= GAME_PLAYERS) return 1;
     local = &game.players[game.local_pid];
     local->joy = joy;
-    if (local->respawning || local->x >= 20 || local->y >= 19 ||
-        (joy & 0x10) || stick == 15) return;
+    if (local->respawning || local->x >= 20 || local->y >= 19) return 2;
+    if (joy & 0x10) return 3;
+    if (stick == 15) return 4;
     x = local->x;
     y = local->y;
     if (stick == 14) --y;
     else if (stick == 7) ++x;
     else if (stick == 13) ++y;
     else if (stick == 11) --x;
-    if (x >= 20 || y >= 19) return;
+    if (x >= 20 || y >= 19) return 5;
     cell = (uint16_t)y * 20 + x;
-    if (game.bricks[cell >> 3] & (1u << (cell & 7))) return;
+    if (game.bricks[cell >> 3] & (1u << (cell & 7))) return 6;
     for (i = 0; i < GAME_PLAYERS; ++i) {
         if (i != game.local_pid &&
             ((game.seat_mask | game.zombie_mask) & (1u << i)) &&
             !game.players[i].respawning &&
-            game.players[i].x == x && game.players[i].y == y) return;
+            game.players[i].x == x && game.players[i].y == y) return 7;
     }
     local->x = x;
     local->y = y;
+    return 0;
 }
 
 static void replay_pending(void)
 {
     uint8_t i;
-    for (i = 0; i < game.pending_count; ++i)
-        predict_input(game.pending_joy[i]);
+    for (i = 0; i < game.pending_count; ++i) {
+        pending_cause[i] = predict_input(game.pending_joy[i]);
+        pending_position[i] = local_position();
+    }
 }
 
-static void discard_applied(uint8_t ack_seq)
+static uint16_t discard_applied(uint8_t ack_seq)
 {
     uint8_t n = 0;
     uint16_t sample;
+    uint16_t expected;
     while (n < game.pending_count &&
            (uint8_t)(ack_seq - game.pending_seq[n]) < 128)
         ++n;
-    if (!n) return;
+    acknowledged_detail = 65535u;
+    if (!n) return 65535u;
+    acknowledged_detail = game.pending_joy[n-1] | ((uint16_t)pending_cause[n-1] << 8);
+    expected = game.pending_seq[n-1] == ack_seq ? pending_position[n-1] : 65535u;
     /* Sample the newest applied input, avoiding an old input's queue time
        when a snapshot acknowledges several entries at once. This measures
        the whole feedback loop, including server tick phase, not just RTT. */
@@ -169,6 +193,9 @@ static void discard_applied(uint8_t ack_seq)
     memmove(game.pending_seq, game.pending_seq + n, game.pending_count);
     memmove(game.pending_joy, game.pending_joy + n, game.pending_count);
     memmove(game.pending_at, game.pending_at + n, game.pending_count * sizeof(uint16_t));
+    memmove(pending_position, pending_position+n, game.pending_count * sizeof(uint16_t));
+    memmove(pending_cause, pending_cause+n, game.pending_count);
+    return expected;
 }
 
 static void start_death(uint8_t id)
@@ -200,6 +227,7 @@ static void snapshot_apply(const uint8_t *p)
 {
     uint8_t i;
     uint8_t old_x[GAME_PLAYERS], old_y[GAME_PLAYERS];
+    uint16_t expected = 65535u;
     for (i=0; i<GAME_PLAYERS; ++i) {
         old_x[i] = game.players[i].x; old_y[i] = game.players[i].y;
     }
@@ -222,26 +250,29 @@ static void snapshot_apply(const uint8_t *p)
         game.players[i].joy = p[11 + i];
         game.players[i].score = p[15 + i];
     }
-    if (p[2] & 0x80) discard_applied(p[19]);
+    if (p[2] & 0x80) expected = discard_applied(p[19]);
     replay_pending();
     for (i=0; i<GAME_PLAYERS; ++i) {
-        if (old_x[i] == game.players[i].x && old_y[i] == game.players[i].y) continue;
-        if (i == game.local_pid && game.snapshot_ready && old_x[i] < 20 &&
-            old_y[i] < 19 && !game.players[i].respawning)
-            ++game.local_corrections;
-        if (i == game.local_pid || !game.snapshot_ready ||
-            game.players[i].respawning || old_x[i] >= 20 || old_y[i] >= 19 ||
-            (old_x[i] != game.players[i].x && old_y[i] != game.players[i].y))
-            motion_reset(i); /* correction/teleport: never invent a corner */
-        else {
-            while (old_x[i] != game.players[i].x || old_y[i] != game.players[i].y) {
-                if (old_x[i] < game.players[i].x) ++old_x[i];
-                else if (old_x[i] > game.players[i].x) --old_x[i];
-                else if (old_y[i] < game.players[i].y) ++old_y[i];
-                else --old_y[i];
-                motion_append(i,old_x[i],old_y[i],GAME_MOVE_TICKS);
-            }
+        if (i != game.local_pid) {
+            /* Retain actual observations, including stationary snapshots. */
+            if (!game.snapshot_ready || game.players[i].respawning ||
+                old_x[i] >= 20 || old_y[i] >= 19) motion_reset(i);
+            if (!game.players[i].respawning)
+                motion_append(i,game.players[i].x,game.players[i].y,GAME_MOVE_TICKS);
+            continue;
         }
+        if (old_x[i] == game.players[i].x && old_y[i] == game.players[i].y) continue;
+        if (game.snapshot_ready && old_x[i] < 20 && old_y[i] < 19 &&
+            !game.players[i].respawning) {
+            ++game.local_corrections;
+            reconcile_trace[TRACE_BEFORE] = old_x[i] | ((uint16_t)old_y[i] << 8);
+            reconcile_trace[TRACE_SERVER] = p[3+2*i] | ((uint16_t)p[4+2*i] << 8);
+            reconcile_trace[TRACE_EXPECTED] = expected;
+            reconcile_trace[TRACE_DETAIL] = expected == 65535u ? 65535u : acknowledged_detail;
+            reconcile_trace[TRACE_REPLAYED] = local_position();
+            reconcile_trace[TRACE_ACK] = p[19] | ((uint16_t)game.pending_count << 8);
+        }
+        motion_reset(i); /* local correction never invents a corner */
     }
     if (memcmp(game.names[game.local_pid], game.local_name, GAME_NAME_LEN) == 0)
         game.name_echoed = 1;
@@ -255,6 +286,7 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
     uint8_t id;
     uint8_t i;
     uint16_t index;
+    struct respawn_stamp *stamp;
     (void)len;
     switch (p[0]) {
     case PKT_ROUND_START:
@@ -267,8 +299,12 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
                 for (i = 0; i < GAME_PLAYERS; ++i)
                     game.players[i].respawning = 0;
                 game.map_ready = 0;
+                /* Unknown cells stay blocked until the initial full map.
+                   Deltas received first must survive that map too. */
+                memset(game.bricks, 255, sizeof(game.bricks));
                 game.snapshot_ready = 0;
                 game.pending_count = 0;
+                respawn_stamped = 0;
                 game.fire_cue_frames = 0;
                 game.intent_count = 0;
                 game.input_sent = 0;
@@ -312,9 +348,14 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
         break;
     case PKT_BRICK_FULL:
         if (p[51] == game.round_id) {
-            memcpy(game.bricks, p + 3, GAME_BRICK_BYTES);
+            /* Within a round bricks only disappear. A delayed reliable map
+               must not resurrect a wall cleared by a newer direct event. */
+            for (i = 0; i < GAME_BRICK_BYTES; ++i) game.bricks[i] &= p[3+i];
             if (reliable) game.map_ready = 1;
         }
+        break;
+    case 0x59:
+        game.input_history = 1;
         break;
     case PKT_BRICK_DELTA:
         if (p[4] == game.round_id && game.phase == 0) {
@@ -326,6 +367,23 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
     case PKT_RESPAWN:
         if (p[6] != game.round_id || game.phase != 0) break;
         id = p[2];
+        stamp = &respawn_stamp[id];
+        index = p[3] | ((uint16_t)p[4] << 8);
+        /* Direct, reliable and re-stamped repair copies are one transition.
+           Do not teleport a player who already walked away, or let a delayed
+           reliable hide undo a newer final placement. Limit sequence ordering
+           to a short repair horizon: global 8-bit sequence wraps frequently. */
+        if ((respawn_stamped & (1u << id)) &&
+            (uint16_t)(game.input_clock - stamp->at) < 60 &&
+            (((uint8_t)(p[1]-stamp->seq) >= 128) ||
+             (stamp->flags == p[5] && stamp->cell == index))) {
+            ++reconcile_trace[TRACE_RESPAWN_IGNORED];
+            if ((uint8_t)(p[1]-stamp->seq) < 128) stamp->seq = p[1];
+            break;
+        }
+        stamp->at = game.input_clock; stamp->cell = index;
+        stamp->seq = p[1]; stamp->flags = p[5];
+        respawn_stamped |= 1u << id;
         if ((p[5] & 1) && !(p[5] & 2)) {
             start_death(id);
         } else if (p[5] & 2) {
@@ -358,6 +416,18 @@ static void apply(const uint8_t *p, uint8_t len, uint8_t reliable)
     case PKT_SHOT:
         if (p[6] != game.round_id || game.phase != 0) break;
         id = p[2];
+        if (!(p[5] & 1)) game.shots[id].segment = 0;
+        else if (!game.shots[id].active ||
+                 game.shots[id].direction != ((p[5] >> 1) & 3)) {
+            game.shots[id].segment = 0;
+            game.shots[id].at = game.input_clock;
+        } else if (game.shots[id].x != p[3] || game.shots[id].y != p[4]) {
+            game.shots[id].previous_x = game.shots[id].x;
+            game.shots[id].previous_y = game.shots[id].y;
+            game.shots[id].previous_at = game.shots[id].at;
+            game.shots[id].at = game.input_clock;
+            game.shots[id].segment = 1;
+        }
         if ((p[5] & 1) && !game.shots[id].active)
             game.sound_events[id] |= GAME_SOUND_SHOT;
         if (!(p[5] & 1) && game.shots[id].active)
@@ -399,6 +469,8 @@ void game_set_name(const char *name)
 void game_reset(void)
 {
     memset(&game, 0, sizeof(game));
+    memset(&reconcile_trace, 0, sizeof(reconcile_trace));
+    respawn_stamped = 0;
     game.repeat_window = GAME_REPEAT_PENDING;
     game.local_pid = 255;
     game.input_joy = game.sent_joy = 15;
@@ -625,7 +697,8 @@ uint8_t game_next_outbound(uint8_t *out, uint8_t cap)
         if (game.pending_count > game.pending_highwater) game.pending_highwater = game.pending_count;
         old_x = game.players[game.local_pid].x;
         old_y = game.players[game.local_pid].y;
-        predict_input(joy);
+        pending_cause[game.pending_count-1] = predict_input(joy);
+        pending_position[game.pending_count-1] = local_position();
         if (old_x != game.players[game.local_pid].x || old_y != game.players[game.local_pid].y) {
             motion_append(game.local_pid,game.players[game.local_pid].x,game.players[game.local_pid].y,
                           explicit_intent ? GAME_PRESS_TICKS : GAME_MOVE_TICKS);

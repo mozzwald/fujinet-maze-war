@@ -14,7 +14,7 @@ LOCAL_CELL_TEST ?= 0
 BOOT_GUARD ?= 0
 TARGET := build/maze-war-lynx.lnx
 MAP := build/maze-war-lynx.map
-SOURCES := src/main.c src/command.c src/setup.c src/startup.c src/netstream.c src/frame.c src/protocol.c src/render.c src/playfield.c src/sound.c src/lynx_tgi.s src/graphics_buffers.s
+SOURCES := src/main.c src/command.c src/setup.c src/startup.c src/netstream.c src/frame.c src/protocol.c src/render.c src/playfield.c src/phase_scratch.c src/sound.c src/lynx_tgi.s src/graphics_buffers.s
 GUARD_FLAGS :=
 ifeq ($(BOOT_GUARD),1)
 SOURCES += src/boot_guard.s
@@ -30,7 +30,7 @@ build:
 	mkdir -p build
 
 # Endpoint changes must relink even if the C sources are unchanged.
-$(TARGET): $(SOURCES) src/netstream.h src/frame.h src/protocol.h src/render.h src/playfield.h src/colors.h src/playfield_internal.h src/death_art.h src/death_sprites.h src/command.h src/setup.h src/startup.h src/sound.h src/boot_guard.h src/lynx.cfg tools/seal_boot_guard.py tools/check_graphics_layout.py Makefile FORCE | build
+$(TARGET): $(SOURCES) src/netstream.h src/frame.h src/protocol.h src/render.h src/playfield.h src/colors.h src/playfield_internal.h src/death_art.h src/death_sprites.h src/maze_art.h src/maze_sprites.h src/command.h src/setup.h src/phase_scratch.h src/startup.h src/sound.h src/boot_guard.h src/lynx.cfg tools/seal_boot_guard.py tools/check_graphics_layout.py Makefile FORCE | build
 	$(CL65) -t lynx -O -I src -I $(CC65_ROOT)/include \
 		--asm-include-dir $(CC65_ROOT)/asminc -L $(CC65_ROOT)/lib \
 		-C src/lynx.cfg -vm -m $(MAP) \
@@ -47,9 +47,10 @@ endif
 
 test: | build
 	python3 tools/generate_death_sprites.py --check
+	python3 tools/generate_maze_sprites.py --check
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_COMMAND_HOST -I src \
 		-D 'SERVER_HOST="fujinet.online"' -D SERVER_PORT=5025 \
-		-o build/setup_test tests/setup_test.c src/setup.c src/command.c
+		-o build/setup_test tests/setup_test.c src/setup.c src/command.c src/phase_scratch.c
 	./build/setup_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -I src \
 		-o build/frame_test tests/frame_test.c src/frame.c
@@ -67,21 +68,24 @@ test: | build
 		-o build/retry_test tests/retry_test.c src/protocol.c
 	./build/retry_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
-		-o build/motion_test tests/motion_test.c tests/suzy_host.c src/playfield.c src/protocol.c
+		-o build/motion_test tests/motion_test.c tests/suzy_host.c src/playfield.c src/phase_scratch.c src/protocol.c
 	./build/motion_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
-		-o build/playfield_test tests/playfield_test.c tests/suzy_host.c src/playfield.c src/protocol.c
+		-o build/observation_test tests/observation_test.c tests/suzy_host.c src/playfield.c src/phase_scratch.c src/protocol.c
+	./build/observation_test
+	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
+		-o build/playfield_test tests/playfield_test.c tests/suzy_host.c src/playfield.c src/phase_scratch.c src/protocol.c
 	./build/playfield_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
 		-o build/cache_test tests/cache_test.c tests/suzy_host.c \
-		tests/reference_playfield.c src/playfield.c src/protocol.c
+		tests/reference_playfield.c src/playfield.c src/phase_scratch.c src/protocol.c
 	./build/cache_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
 		-o build/death_test tests/death_test.c tests/suzy_host.c \
-		tests/reference_playfield.c src/protocol.c src/playfield.c
+		tests/reference_playfield.c src/protocol.c src/playfield.c src/phase_scratch.c
 	./build/death_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_RENDER_HOST -I src -I tests \
-		-o build/round_test tests/round_test.c tests/suzy_host.c src/protocol.c src/playfield.c
+		-o build/round_test tests/round_test.c tests/suzy_host.c src/protocol.c src/playfield.c src/phase_scratch.c
 	./build/round_test
 	$(CC) -std=c99 -Wall -Wextra -Werror -DLYNX_SOUND_HOST -I src -I tests \
 		-o build/sound_test tests/sound_test.c src/protocol.c src/sound.c

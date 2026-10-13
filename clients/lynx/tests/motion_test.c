@@ -111,23 +111,29 @@ int main(void)
     draw(133,&x,&y); assert(x==52 && y==50);
     draw(136,&x,&y); assert(x==56 && y==50);
     draw(200,&x,&y); assert(x==56 && y==50);
-    /* A remote destination arriving midway through interpolation must not
-       first jump to the old destination. Ease the whole clear gap instead. */
+    /* Remote rendering samples one interval behind real observations; a
+       new destination never restarts an in-flight animation deadline. */
     game_reset(); playfield_invalidate();
     game.local_pid=1; game.seat_mask=1; game.snapshot_ready=game.map_ready=1;
     game.players[0].x=game.players[0].y=5;
+    game.motion[0].serial=1; game.motion[0].x[0]=5; game.motion[0].y[0]=5;
+    game.motion[0].at[0]=100;
     draw(100,&x,&y); assert(x==40 && y==25);
-    game.motion[0].serial=1; game.motion[0].x[0]=6; game.motion[0].y[0]=5;
-    game.motion[0].at[0]=100; game.motion[0].ticks[0]=6;
-    game.players[0].x=6;
-    draw(100,&x,&y); assert(x==40);
-    draw(103,&x,&y); assert(x==44);
-    game.motion[0].serial=2; game.motion[0].x[1]=7; game.motion[0].y[1]=5;
-    game.motion[0].at[1]=103; game.motion[0].ticks[1]=6;
-    game.players[0].x=7;
-    draw(103,&x,&y); assert(x==44 && y==25); /* no boundary jump */
-    draw(106,&x,&y); assert(x==50 && y==25);
-    draw(109,&x,&y); assert(x==56 && y==25);
+    game.motion[0].serial=2; game.motion[0].x[1]=6; game.motion[0].y[1]=5;
+    game.motion[0].at[1]=106; game.players[0].x=6;
+    draw(106,&x,&y); assert(x==40);
+    draw(109,&x,&y); assert(x==44);
+    game.motion[0].serial=3; game.motion[0].x[2]=7; game.motion[0].y[2]=5;
+    game.motion[0].at[2]=112; game.players[0].x=7;
+    draw(112,&x,&y); assert(x==48 && y==25);
+    draw(115,&x,&y); assert(x==52);
+    draw(118,&x,&y); assert(x==56);
+    draw(200,&x,&y); assert(x==56); /* never extrapolate without a sample */
+    /* A diagonal observation cannot invent a path around an unknown corner. */
+    game.motion[0].serial=4; game.motion[0].x[3]=8; game.motion[0].y[3]=4;
+    game.motion[0].at[3]=206; game.players[0].x=8; game.players[0].y=4;
+    draw(208,&x,&y); assert(x==56 && y==25);
+    draw(212,&x,&y); assert(x==64 && y==20);
     /* A two-cell local correction has a fixed 50 ms deadline, not two cell
        intervals. An intervening wall must prevent this smoothing path. */
     game_reset(); playfield_invalidate();
