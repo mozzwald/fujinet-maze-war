@@ -148,9 +148,26 @@ record:
   "status": "online",
   "maxplayers": 4,
   "curplayers": 1,
-  "clients": [{"platform": "atari", "url": "fujinet://maze-war"}]
+  "clients": [
+    {"platform": "atari", "url": "fujinet://maze-war"},
+    {"platform": "lynx", "url": "tnfs://tnfs.fujinet.online/LYNX/maze-war.lnx"}
+  ]
 }
 ```
+
+The Lobby accepts platform strings rather than a fixed platform enumeration;
+its `clients` list associates each platform with a downloadable client URL.
+Every enabled Maze War publisher now includes both `atari` and `lynx` in the
+same room record, including occupancy updates, periodic refresh and offline
+notifications. `--lobby-client-url` still sets the Atari URL. The Lynx URL
+defaults to `tnfs://tnfs.fujinet.online/LYNX/maze-war.lnx`; override it with
+`--lobby-lynx-client-url URL` (printable, at most 64 characters, with `://`).
+Existing server startup arguments continue to work: deploy/restart the updated
+binary to publish the added platform. Publication is still opt-in through
+`--lobby-enabled`. No Lobby server changes or separate room registrations are
+needed. The current Lynx ROM still queries `platform=atari` for compatible room
+discovery; adding this advertisement requires no ROM change. A Lynx-specific
+Lobby browser can query `platform=lynx` to obtain the Lynx ROM URL.
 
 The official `POST /server` schema has no creator-ID field. Maze War retains
 the configured creator ID for its application identity and logs it at startup;

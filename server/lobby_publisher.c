@@ -101,6 +101,9 @@ static int make_request(const struct lobby_publisher *publisher, int room_index,
   if (written < 0 || (size_t)written >= json_len - used) return -1;
   used += (size_t)written;
   if (json_append(json, json_len, &used, config->client_url) != 0) return -1;
+  if (json_field(json, json_len, &used,
+                 "\"},{\"platform\":\"lynx\",\"url\":\"",
+                 config->lynx_client_url) != 0) return -1;
   if (used + strlen("\"}]}" ) >= json_len) return -1;
   memcpy(json + used, "\"}]}", 5);
   return 0;

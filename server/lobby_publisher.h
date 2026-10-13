@@ -25,6 +25,7 @@ struct lobby_config {
   char public_host[LOBBY_HOST_MAX + 1];
   char game[LOBBY_GAME_MAX + 1];
   char client_url[LOBBY_CLIENT_URL_MAX + 1];
+  char lynx_client_url[LOBBY_CLIENT_URL_MAX + 1];
   char region[LOBBY_REGION_MAX + 1];
   char room_names[LOBBY_MAX_ROOMS][LOBBY_ROOM_NAME_MAX + 1];
 };

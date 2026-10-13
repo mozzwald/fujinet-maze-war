@@ -2706,6 +2706,7 @@ static void usage(const char *argv0) {
           "          [--lobby-enabled --lobby-base URL --lobby-creator-id N]\n"
           "          [--lobby-app-id N]\n"
           "          [--lobby-client-url URL --lobby-public-host HOST]\n"
+          "          [--lobby-lynx-client-url URL]\n"
           "          [--lobby-game NAME --lobby-region CC]\n"
           "          [--lobby-room-names NAME[,NAME...] --lobby-refresh-ms N]\n"
           "          [--lobby-timeout-ms N --lobby-shutdown-ms N]\n"
@@ -3072,6 +3073,7 @@ int main(int argc, char **argv) {
   const char *room_zombies_arg = NULL;
   const char *lobby_base_arg = NULL;
   const char *lobby_client_url_arg = NULL;
+  const char *lobby_lynx_client_url_arg = "tnfs://tnfs.fujinet.online/LYNX/maze-war.lnx";
   const char *lobby_public_host_arg = NULL;
   const char *lobby_game_arg = "Maze War";
   const char *lobby_region_arg = "us";
@@ -3135,6 +3137,9 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--lobby-client-url") == 0 && i + 1 < argc) {
       lobby_options_seen = 1;
       lobby_client_url_arg = argv[++i];
+    } else if (strcmp(argv[i], "--lobby-lynx-client-url") == 0 && i + 1 < argc) {
+      lobby_options_seen = 1;
+      lobby_lynx_client_url_arg = argv[++i];
     } else if (strcmp(argv[i], "--lobby-public-host") == 0 && i + 1 < argc) {
       lobby_options_seen = 1;
       lobby_public_host_arg = argv[++i];
@@ -3190,6 +3195,7 @@ int main(int argc, char **argv) {
         !valid_lobby_base(lobby_base_arg) ||
         !valid_lobby_host(lobby_public_host_arg) ||
         strstr(lobby_client_url_arg, "://") == NULL ||
+        strstr(lobby_lynx_client_url_arg, "://") == NULL ||
         copy_printable(lobby_config.base_url, sizeof(lobby_config.base_url),
                        lobby_base_arg, 8) != 0 ||
         copy_printable(lobby_config.public_host,
@@ -3197,6 +3203,9 @@ int main(int argc, char **argv) {
                        1) != 0 ||
         copy_printable(lobby_config.client_url,
                        sizeof(lobby_config.client_url), lobby_client_url_arg,
+                       1) != 0 ||
+        copy_printable(lobby_config.lynx_client_url,
+                       sizeof(lobby_config.lynx_client_url), lobby_lynx_client_url_arg,
                        1) != 0 ||
         copy_printable(lobby_config.game, sizeof(lobby_config.game),
                        lobby_game_arg, 2) != 0 ||

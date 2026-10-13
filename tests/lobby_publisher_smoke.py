@@ -102,6 +102,8 @@ def lobby_args(fake, port, **extra):
             str(extra.get("shutdown", 300))]
     if extra.get("rooms", 1) == 2:
         args += ["--lobby-room-names", "North,South"]
+    if "lynx_url" in extra:
+        args += ["--lobby-lynx-client-url", extra["lynx_url"]]
     return args
 
 
@@ -149,6 +151,9 @@ def test_register_update_refresh_shutdown():
             assert body["game"] == "Maze War" and body["appkey"] == 42
             assert body["maxplayers"] == 4 and body["curplayers"] == 0
             assert body["status"] == "online"
+            assert body["clients"] == [
+                {"platform":"atari", "url":"fujinet://maze-war"},
+                {"platform":"lynx", "url":"tnfs://tnfs.fujinet.online/LYNX/maze-war.lnx"}]
 
         sock = socket.create_connection(("127.0.0.1", port), timeout=1)
         sock.settimeout(0.5)
@@ -175,6 +180,8 @@ def test_register_update_refresh_shutdown():
         wait_for(lambda: len([body for body in fake.snapshot()
                               if body.get("status") == "offline"]) == 2,
                  2, "shutdown did not publish offline state for both rooms")
+        assert all(body["clients"] == initial[0]["clients"] for body in fake.snapshot()), \
+            "update/refresh/offline lost a platform advertisement"
     finally:
         if process.poll() is None:
             stop(process)
@@ -223,11 +230,29 @@ def test_stalled_publisher_does_not_block_game_or_shutdown():
         fake.stop()
 
 
+def test_lynx_url_override():
+    fake = FakeLobby()
+    fake.start()
+    url = 'tnfs://example.test/LYNX/maze-"war.lnx'
+    process = launch(lobby_args(fake, free_port(), lynx_url=url))
+    try:
+        wait_for(lambda: fake.snapshot(), 2, "override was not published")
+        assert fake.snapshot()[0]["clients"] == [
+            {"platform":"atari", "url":"fujinet://maze-war"},
+            {"platform":"lynx", "url":url}]
+        stop(process)
+    finally:
+        if process.poll() is None:
+            stop(process)
+        fake.stop()
+
+
 def main():
     subprocess.run(["make", "-C", ROOT, "build/maze-war-server"], check=True,
                    stdout=subprocess.DEVNULL)
     test_default_off()
     test_register_update_refresh_shutdown()
+    test_lynx_url_override()
     test_error_and_malformed_reply_retry()
     test_stalled_publisher_does_not_block_game_or_shutdown()
     print("lobby publisher smoke passed")
