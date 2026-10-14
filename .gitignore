@@ -21,3 +21,4 @@ clients/lynx/config.mk
 clients/lynx/bench/__pycache__/
 clients/lynx/tests/__pycache__/
 clients/lynx/tools/__pycache__/
+clients/lynx/tests/memory/__pycache__/

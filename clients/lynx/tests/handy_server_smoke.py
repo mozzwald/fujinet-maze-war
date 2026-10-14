@@ -29,6 +29,7 @@ parser.add_argument('--drop-history',action='store_true',help='drop one moving h
 parser.add_argument('--connection-checks',action='store_true',help='inject snapshot gaps, one-way loss/lost WELCOME and server restart; auto-reconnect bridge like unchanged FujiNet')
 args=parser.parse_args()
 pc = Path.home() / 'lynx-pc'
+handy_binary=Path(os.environ.get('MAZE_HANDY_BINARY',str(pc/'handy_sdl')))
 output = Path(tempfile.mkdtemp(prefix='maze-handy-server-'))
 rom = output/'cartridge.lnx'
 shutil.copyfile(repo/'clients/lynx/build/maze-war-lynx.lnx', rom)
@@ -62,7 +63,7 @@ try:
     env=dict(os.environ,DISPLAY=':'+xvfb.stdout.readline().strip(),
              SDL_AUDIODRIVER='dummy',XDG_CONFIG_HOME=str(output/'config'))
     with (output/'handy.log').open('w') as log:
-        handy=subprocess.Popen([str(pc/'handy_sdl'),str(rom),'-nosound','-nofullscreen',
+        handy=subprocess.Popen([str(handy_binary),str(rom),'-nosound','-nofullscreen',
                                 '-noautoskip','-frameskip','0','-throttle','-comlynx',
                                 f'connect:127.0.0.1:{listener.getsockname()[1]}'],
                                cwd=output,env=env,stdout=log,stderr=log)

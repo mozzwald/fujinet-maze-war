@@ -84,6 +84,7 @@ def main():
         parser.error('--expect-stall requires --recovery-checks')
     rom = args.rom.resolve()
     pc = Path.home() / 'lynx-pc'
+    handy_binary = Path(os.environ.get('MAZE_HANDY_BINARY', str(pc/'handy_sdl')))
     output = Path(tempfile.mkdtemp(prefix='maze-suzy-game-'))
     # Measure an immutable cartridge even if another terminal rebuilds it.
     shutil.copyfile(rom, output / 'cartridge.lnx')
@@ -141,7 +142,7 @@ def main():
             env['LD_PRELOAD'] = str(capture_lib)
             env['HANDY_AUDIO_CAPTURE'] = str(output / 'audio.bin')
         with (output / 'handy.log').open('w') as log:
-            handy = subprocess.Popen([str(pc / 'handy_sdl'), str(rom), '-sound' if args.sound_checks else '-nosound', '-nofullscreen', '-noautoskip', '-frameskip', '0', '-throttle', '-comlynx', f'connect:127.0.0.1:{listener.getsockname()[1]}'], cwd=output, env=env, stdout=log, stderr=log)
+            handy = subprocess.Popen([str(handy_binary), str(rom), '-sound' if args.sound_checks else '-nosound', '-nofullscreen', '-noautoskip', '-frameskip', '0', '-throttle', '-comlynx', f'connect:127.0.0.1:{listener.getsockname()[1]}'], cwd=output, env=env, stdout=log, stderr=log)
         processes.append(handy)
         peer, _ = listener.accept()
         peer.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -642,7 +643,7 @@ def main():
         assert restarted.getpixel((80,50)) == before.getpixel((80,50)), 'new round did not restore brick'
         result = dict(endpoint=endpoint, port=endpoint_port, input_lag_ms=args.input_lag_ms, snapshot_burst=args.snapshot_burst, remote_results=remote_results,
                       movement_results=movement_results, death_results=death_results, round_results=round_results, latency_results=latency_results, recovery_results=recovery_results, reconcile_results=reconcile_results, applied_moves=applied_moves, rom_sha256=hashlib.sha256(rom.read_bytes()).hexdigest(),
-                      handy_sha256=hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),
+                      handy_sha256=hashlib.sha256(handy_binary.read_bytes()).hexdigest(),
                       received=dict(received), acknowledged=sorted(acked),
                       checks=['brick removal','bottom feet','border texture','fire input','movement input','diagnostics restoration','new round'],
                       method='Production ROM; controlled direct ComLynx peer, 10 Hz snapshots; no firmware/WAN')

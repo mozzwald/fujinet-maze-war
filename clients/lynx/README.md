@@ -661,3 +661,14 @@ The build gate checks APPZP does not overlap runtime storage or extend past
 $FF, keeps SCBs/text hardware-aligned, and preserves the full 2 KB stack.
 The connection-recovery build uses $2B..$7F for APPZP and leaves 27 bytes
 before the reserved stack; that margin is separate from stack capacity.
+
+### Measured stack headroom
+
+The unchanged connection-recovery ROM passed instruction-level memory validation
+in a separate diagnostic Handy build. Startup/name editing, command failures,
+Suzy/HUD/round drawing and actual-server outage/retry paths used at most 312 bytes
+conservatively of the 2 KB software stack and 45 bytes of the 256-byte hardware
+stack. No protected-padding, unused-zero-page or CODE/RODATA corruption was
+detected. Six injected faults verified the observer. See
+[measurements, limits and reproduction](tests/MEMORY-VALIDATION.md). The separate
+27-byte code/data layout margin remains; the full stack reservation is retained.

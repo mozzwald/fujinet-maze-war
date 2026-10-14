@@ -54,7 +54,9 @@ def main():
     assert not (args.firmware and args.ack_noise),'ACK noise uses the controlled command peer'
     assert not (args.firmware and args.boot_guard_fault),'fault injection uses a private ROM and controlled peer'
     root=Path(tempfile.mkdtemp(prefix='maze-lynx-startup-'))
-    pc=Path.home()/'lynx-pc'; repo=Path(__file__).resolve().parents[3]
+    pc=Path.home()/'lynx-pc'
+    handy_binary=Path(os.environ.get('MAZE_HANDY_BINARY',str(pc/'handy_sdl')))
+    repo=Path(__file__).resolve().parents[3]
     rom=(args.rom or repo/'clients/lynx/build/maze-war-lynx.lnx').resolve()
     if args.boot_guard_fault:
         seal_spec=importlib.util.spec_from_file_location('seal',repo/'clients/lynx/tools/seal_boot_guard.py')
@@ -209,7 +211,7 @@ def main():
         processes.append(xvfb); assert select.select([xvfb.stdout],[],[],10)[0]
         env['DISPLAY']=':'+xvfb.stdout.readline().strip()
         log=(root/'handy.log').open('w')
-        processes.append(subprocess.Popen([str(pc/'handy_sdl'),str(rom),'-nosound','-nofullscreen','-noautoskip','-frameskip','0','-throttle','-comlynxtrace','-comlynx',f'connect:127.0.0.1:{boip}'],cwd=root,env=env,stdout=log,stderr=log)); log.close()
+        processes.append(subprocess.Popen([str(handy_binary),str(rom),'-nosound','-nofullscreen','-noautoskip','-frameskip','0','-throttle','-comlynxtrace','-comlynx',f'connect:127.0.0.1:{boip}'],cwd=root,env=env,stdout=log,stderr=log)); log.close()
         time.sleep(5); d=display.Display(env['DISPLAY'])
         def windows(w):
             yield w
@@ -273,7 +275,7 @@ def main():
         result={'firmware':args.firmware,'ack_noise':args.ack_noise,'new_name':args.new_name,'failed_save':args.fail_save,'http404':args.http404,'edit_checks':args.edit_checks,'reload':bool(args.sd_from),
                 'name':expected.decode(),'commands':commands,'http_requests':urls,
                 'rom_sha256':hashlib.sha256(rom.read_bytes()).hexdigest(),
-                'handy_sha256':hashlib.sha256((pc/'handy_sdl').read_bytes()).hexdigest(),
+                'handy_sha256':hashlib.sha256(handy_binary.read_bytes()).hexdigest(),
                 'checks':['name resolved before HTTP','Lobby waits for selection','selected endpoint','HELLO/WELCOME','NAME survives WELCOME']}
         if args.firmware: result['firmware_sha256']=hashlib.sha256((pc/'fujinet/fujinet').read_bytes()).hexdigest()
         (root/'results.json').write_text(json.dumps(result,indent=2)+'\n')
