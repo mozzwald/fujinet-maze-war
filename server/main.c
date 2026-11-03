@@ -3021,7 +3021,7 @@ int main(int argc, char **argv) {
   const char *lobby_room_names_arg = NULL;
   int lobby_enabled = 0;
   int lobby_creator_id = 0x3022;
-  int lobby_app_id = 0x03;
+  int lobby_app_id = 0x0F;
   int lobby_refresh_ms = 240000;
   int lobby_timeout_ms = 1500;
   int lobby_shutdown_ms = 2000;

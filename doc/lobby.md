@@ -128,7 +128,7 @@ session.
 The game server does not contact a Lobby unless `--lobby-enabled` is supplied.
 That flag also requires all of `--lobby-base`, `--lobby-client-url`, and
 `--lobby-public-host`; it defaults Maze War's identity to creator `$3022` and
-application `$03`. `--lobby-creator-id 0x3022` and `--lobby-app-id 0x03`
+application `$0F`. `--lobby-creator-id 0x3022` and `--lobby-app-id 0x0F`
 make that identity explicit. `--lobby-appkey` remains a compatible alias for
 `--lobby-app-id`. Incomplete values make the
 server reject its command line before it opens any game listener. This keeps
@@ -141,7 +141,7 @@ record:
 ```json
 {
   "game": "Maze War",
-  "appkey": 3,
+  "appkey": 15,
   "server": "Maze War Room 1",
   "region": "us",
   "serverurl": "tcp://public.example:9000",
@@ -154,7 +154,7 @@ record:
 
 The official `POST /server` schema has no creator-ID field. Maze War retains
 the configured creator ID for its application identity and logs it at startup;
-the published `appkey` is its application ID (`3`). `serverurl` is built from
+the published `appkey` is its application ID (`15`). `serverurl` is built from
 `--lobby-public-host` and that room's own listener
 port. `--lobby-room-names` may provide one comma-separated printable name per
 room; otherwise the server supplies `Maze War Room N`. `curplayers` counts
